@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { loadOrSeedProcessList } from '@/lib/processMap'
 
 interface Batch {
@@ -39,38 +39,39 @@ const EXTRA_TAIL = ['QA', 'Packing', 'Dispatch', 'FinalDispatch']
 const dateToStr = (date: Date | null): string => {
   if (!date) return ''
   const d = date instanceof Date ? date : new Date(date)
-  const day = String(d.getDate()).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year = d.getFullYear()
-  return `${year}-${month}-${day}`
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
 const dateToDisplayStr = (date: Date | null): string => {
   if (!date) return ''
   const d = date instanceof Date ? date : new Date(date)
-  const day = String(d.getDate()).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year = d.getFullYear()
-  return `${day}/${month}/${year}`
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`
 }
 
 const normalizeDate = (val: any): Date | null => {
   if (!val) return null
   if (typeof val === 'string' && val.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
     const [day, month, year] = val.split('/')
-    const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
-    if (isNaN(d.getTime())) return null
-    return d
+    const d = new Date(parseInt(year), parseInt(month)-1, parseInt(day))
+    return isNaN(d.getTime()) ? null : d
   }
   const d = new Date(val)
-  if (isNaN(d.getTime())) return null
-  return d
+  return isNaN(d.getTime()) ? null : d
+}
+
+const buildHolidaySet = (holidays: any[]): Set<string> => {
+  const set = new Set<string>()
+  for (const h of holidays) {
+    const d = normalizeDate(h.date)
+    if (d) set.add(dateToStr(d))
+  }
+  return set
 }
 
 const addDaysSkippingHolidays = (
-  date: Date, days: number, holidaySet: Set<string>, forward: boolean = true
+  date: Date, days: number, holidaySet: Set<string>, forward = true
 ): Date => {
-  let d = new Date(date.getTime())
+  const d = new Date(date.getTime())
   let remaining = Math.abs(days)
   const step = forward ? 1 : -1
   let safety = 0
@@ -87,28 +88,27 @@ const getProcessName = (code: string): string => {
   if (!_processNameCache) {
     _processNameCache = {}
     if (typeof window !== 'undefined') {
-      try {
-        const list = loadOrSeedProcessList()
-        list.forEach(p => { _processNameCache![p.code] = p.name })
-      } catch {}
+      try { loadOrSeedProcessList().forEach(p => { _processNameCache![p.code] = p.name }) } catch {}
     }
   }
-  if (_processNameCache[code]) return _processNameCache[code]
-  const codeToName: Record<string, string> = {
-    'C': 'CBR', 'S': 'SCQ', 'H': 'Heat-Set', 'D': 'Dyeing', 'S2': 'SCQ2',
-    'Rx': 'Relax', 'O': 'Opener', 'G': 'Ghanti', 'F': 'Finish',
-    'Co': 'Compactor', 'Tu': 'Tubler', 'Add': 'Addition', 'Level': 'Levelling',
-    'Rc': 'RC', 'Fix': 'Fixing', 'Wash': 'Washing', 'Dry': 'Dry',
-    'B': 'Brushing', 'R': 'Raising', 'K': 'Kundi',
-    'QA': 'QA', 'Packing': 'Packing', 'Dispatch': 'Dispatch', 'FinalDispatch': 'Final Dispatch'
+  const fallback: Record<string, string> = {
+    'C':'CBR','S':'SCQ','H':'Heat-Set','D':'Dyeing','S2':'SCQ2','Rx':'Relax','O':'Opener',
+    'G':'Ghanti','F':'Finish','Co':'Compactor','Tu':'Tubler','Add':'Addition','Level':'Levelling',
+    'Rc':'RC','Fix':'Fixing','Wash':'Washing','Dry':'Dry','B':'Brushing','R':'Raising','K':'Kundi',
+    'QA':'QA','Packing':'Packing','Dispatch':'Dispatch','FinalDispatch':'Final Dispatch'
   }
-  return codeToName[code] || code
+  return _processNameCache![code] || fallback[code] || code
 }
 
+const ALL_PROCESS_CODES = [
+  'C','S','H','D','S2','Rx','O','G','F','Co','Tu',
+  'Add','Level','Rc','Fix','Wash','Dry','B','R','K',
+  'QA','Packing','Dispatch','FinalDispatch'
+]
+
 export default function DateCalculatorPage() {
-  const [orders, setOrders] = useState<Order[]>([])
   const [rows, setRows] = useState<any[]>([])
-  const [allProcesses, setAllProcesses] = useState<string[]>([])
+  const [allProcesses] = useState<string[]>(ALL_PROCESS_CODES)
   const [processDurations, setProcessDurations] = useState<ProcessDuration[]>([])
   const [showProcessDaysModal, setShowProcessDaysModal] = useState(false)
   const [tempDurations, setTempDurations] = useState<Record<string, { days: number, capacity: string }>>({})
@@ -121,70 +121,58 @@ export default function DateCalculatorPage() {
     const stored = localStorage.getItem('dyeflow_db')
     if (!stored) return
     const db = JSON.parse(stored)
-
-    const allProcessCodes = [
-      'C', 'S', 'H', 'D', 'S2', 'Rx', 'O', 'G', 'F', 'Co', 'Tu',
-      'Add', 'Level', 'Rc', 'Fix', 'Wash', 'Dry', 'B', 'R', 'K',
-      'QA', 'Packing', 'Dispatch', 'FinalDispatch'
-    ]
-    setAllProcesses(allProcessCodes)
     setProcessDurations(db.processDurations || [])
 
-    const splittedOrders = (db.orders || []).filter((o: Order) =>
-      Array.isArray(o.splits) && o.splits.length > 0
-    )
-
+    const splittedOrders = (db.orders || []).filter((o: Order) => Array.isArray(o.splits) && o.splits.length > 0)
     const batchRows: any[] = []
+
     splittedOrders.forEach((order: Order) => {
       ;(order.splits || []).forEach((batch: Batch) => {
         if (!batch.dateCalcPlan) batch.dateCalcPlan = {}
-
+        const plan = batch.dateCalcPlan
         const processMachines = order.processMachines || {}
-        Object.keys(processMachines).forEach(processCode => {
-          // Use typed local variable — TypeScript loses narrowing inside forEach closures
-          const safePlan: Record<string, string> = batch.dateCalcPlan as Record<string, string>
-          if (batch.plannedDate && !safePlan[processCode]) {
-            const dateStr = batch.plannedDate
-            if (dateStr.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-              safePlan[processCode] = dateStr
-            } else if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-              const [year, month, day] = dateStr.split('-')
-              safePlan[processCode] = `${day}/${month}/${year}`
+
+        Object.keys(processMachines).forEach(pc => {
+          if (batch.plannedDate && !plan[pc]) {
+            const ds = batch.plannedDate
+            if (ds.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+              plan[pc] = ds
+            } else if (ds.match(/^\d{4}-\d{2}-\d{2}$/)) {
+              const [y, m, d] = ds.split('-')
+              plan[pc] = `${d}/${m}/${y}`
             } else {
-              const d = normalizeDate(dateStr)
-              safePlan[processCode] = d ? dateToDisplayStr(d) : dateStr
+              const parsed = normalizeDate(ds)
+              plan[pc] = parsed ? dateToDisplayStr(parsed) : ds
             }
           }
         })
-
         batchRows.push({ order, batch })
       })
     })
 
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setOrders(splittedOrders)
     setRows(batchRows)
   }
 
-  const pendingDateChanges = useRef<Record<string, NodeJS.Timeout>>({})
+  const pendingDateChanges = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
-  const handleDateChange = (orderId: string, batchId: string, processCode: string, value: string) => {
+  const handleDateChange = (orderId: string, batchId: string, pc: string, value: string) => {
     setRows(prev => prev.map(r => {
       if (r.order.id !== orderId || r.batch.batchId !== batchId) return r
-      return { ...r, batch: { ...r.batch, dateCalcPlan: { ...(r.batch.dateCalcPlan || {}), [processCode]: value } } }
+      return { ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan, [pc]: value } } }
     }))
-    const key = `${orderId}-${batchId}-${processCode}`
+    const key = `${orderId}-${batchId}-${pc}`
     if (pendingDateChanges.current[key]) clearTimeout(pendingDateChanges.current[key])
     pendingDateChanges.current[key] = setTimeout(() => {
       const stored = localStorage.getItem('dyeflow_db')
       if (!stored) return
       const db = JSON.parse(stored)
-      const order = (db.orders || []).find((o: Order) => o.id === orderId)
+      const order = (db.orders || []).find((o: any) => o.id === orderId)
       if (!order) return
-      const batch = (order.splits || []).find((b: Batch) => b.batchId === batchId)
+      const batch = (order.splits || []).find((b: any) => b.batchId === batchId)
       if (!batch) return
       if (!batch.dateCalcPlan) batch.dateCalcPlan = {}
-      batch.dateCalcPlan[processCode] = value
+      batch.dateCalcPlan[pc] = value
       localStorage.setItem('dyeflow_db', JSON.stringify(db))
       delete pendingDateChanges.current[key]
     }, 400)
@@ -194,9 +182,8 @@ export default function DateCalculatorPage() {
     const stored = localStorage.getItem('dyeflow_db')
     if (!stored) return
     const db = JSON.parse(stored)
-    const order = (db.orders || []).find((o: Order) => o.id === orderId)
-    if (!order) return
-    const batch = (order.splits || []).find((b: Batch) => b.batchId === batchId)
+    const order = (db.orders || []).find((o: any) => o.id === orderId)
+    const batch = order && (order.splits || []).find((b: any) => b.batchId === batchId)
     if (!batch) return
     batch.dcRegenerate = checked
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
@@ -205,33 +192,32 @@ export default function DateCalculatorPage() {
 
   const handleBatchSelection = (batchId: string, checked: boolean) => {
     setSelectedBatches(prev => {
-      const newSet = new Set(prev)
-      if (checked) newSet.add(batchId)
-      else newSet.delete(batchId)
-      return newSet
+      const s = new Set(prev)
+      checked ? s.add(batchId) : s.delete(batchId)
+      return s
     })
   }
 
   const handleClearSelected = () => {
-    if (selectedBatches.size === 0) { alert('Please select batches to clear'); return }
+    if (!selectedBatches.size) { alert('Please select batches to clear'); return }
     if (!confirm(`Clear generated dates for ${selectedBatches.size} selected batch(es)?`)) return
     const stored = localStorage.getItem('dyeflow_db')
     if (!stored) return
     const db = JSON.parse(stored)
-    let clearedCount = 0
+    let cleared = 0
     selectedBatches.forEach(batchId => {
       for (const order of db.orders || []) {
-        const batch = (order.splits || []).find((b: Batch) => b.batchId === batchId)
+        const batch = (order.splits || []).find((b: any) => b.batchId === batchId)
         if (batch) {
-          const machineProcesses = Object.keys(order.processMachines || {})
+          const machinePcs = Object.keys(order.processMachines || {})
           if (batch.dateCalcPlan) {
-            Object.keys(batch.dateCalcPlan).forEach(pc => {
-              if (!machineProcesses.includes(pc)) delete batch.dateCalcPlan![pc]
-            })
+            for (const pc of Object.keys(batch.dateCalcPlan)) {
+              if (!machinePcs.includes(pc)) delete batch.dateCalcPlan[pc]
+            }
           }
           batch.dcGeneratedOnce = false
           batch.dcRegenerate = false
-          clearedCount++
+          cleared++
           break
         }
       }
@@ -239,25 +225,10 @@ export default function DateCalculatorPage() {
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
     setSelectedBatches(new Set())
     loadData()
-    alert(`✓ Dates cleared for ${clearedCount} batch(es)`)
+    alert(`✓ Dates cleared for ${cleared} batch(es)`)
   }
 
-  const generateDates = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-    const db = JSON.parse(stored)
-    setTimeout(() => {
-      const result = dcPlanAllRowsFromLatestMachineDate(db)
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      loadData()
-      savePlannedDatesToOrders(false)
-      setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 3000)
-      alert(`✓ Date Generation Complete!\n\nGenerated: ${result.generated} batch(es)\nRe-generated: ${result.regenerated} batch(es)\nSkipped: ${result.skipped} batch(es)\n\nPlanned dates automatically saved to all orders.`)
-    }, 0)
-  }
-
-  const dcPlanAllRowsFromLatestMachineDate = (db: any) => {
+  const dcPlanAllRows = (db: any) => {
     const dayMap: Record<string, number> = {}
     const capacityMap: Record<string, number> = {}
     const loadMap: Record<string, Record<string, number>> = {}
@@ -265,94 +236,89 @@ export default function DateCalculatorPage() {
     ;(db.processDurations || []).forEach((d: ProcessDuration) => {
       const code = String(d.code || '').trim()
       if (!code) return
-      dayMap[code] = Number.isFinite(d.days) && d.days > 0 ? d.days : 1
-      if (d.capacity && Number.isFinite(d.capacity) && d.capacity > 0) capacityMap[code] = d.capacity
+      dayMap[code] = d.days > 0 ? d.days : 1
+      if (d.capacity && d.capacity > 0) capacityMap[code] = d.capacity
     })
-    allProcesses.forEach(code => { if (!dayMap[code]) dayMap[code] = 1 })
+    allProcesses.forEach(c => { if (!dayMap[c]) dayMap[c] = 1 })
 
-    const holidaySet = new Set(
-      (db.holidays || []).map((h: any) => dateToStr(normalizeDate(h.date) || new Date())).filter(Boolean)
-    )
+    const holidaySet = buildHolidaySet(db.holidays || [])
     const today = normalizeDate(new Date())
     const result = { generated: 0, regenerated: 0, skipped: 0 }
 
-    const getBatchQtyKg = (order: Order, batch: Batch): number => {
-      const q = parseFloat(String(batch?.kg || 0))
-      if (Number.isFinite(q) && q > 0) return q
-      const oq = parseFloat(String(order?.qtyKg || 0))
-      if (Number.isFinite(oq) && oq > 0) return oq
-      return 0
+    const getQty = (o: Order, b: Batch): number => {
+      const q = parseFloat(String(b?.kg || 0))
+      if (q > 0) return q
+      const oq = parseFloat(String(o?.qtyKg || 0))
+      return oq > 0 ? oq : 0
     }
 
-    const addProcessDayLoad = (code: string, ds: string, qty: number) => {
+    const addLoad = (code: string, ds: string, qty: number) => {
       if (!capacityMap[code] || !ds || !qty) return
       if (!loadMap[code]) loadMap[code] = {}
       loadMap[code][ds] = (loadMap[code][ds] || 0) + qty
     }
 
-    const fitDateByCapacity = (code: string, candidateDateStr: string, qty: number): string => {
-      const base = normalizeDate(candidateDateStr)
+    const fitDate = (code: string, candidate: string, qty: number): string => {
+      const base = normalizeDate(candidate)
       if (!base) return ''
       const cap = capacityMap[code]
-      const dsBase = dateToStr(base)
-      if (!cap || !qty) return dsBase
+      if (!cap || !qty) return dateToStr(base)
       let cur = new Date(base.getTime())
-      let safety = 0
-      while (safety < 365) {
+      for (let i = 0; i < 365; i++) {
         const ds = dateToStr(cur)
-        const used = loadMap[code]?.[ds] || 0
-        if (used + qty <= cap + 1e-9) { addProcessDayLoad(code, ds, qty); return ds }
+        if ((loadMap[code]?.[ds] || 0) + qty <= cap + 1e-9) { addLoad(code, ds, qty); return ds }
         cur = addDaysSkippingHolidays(cur, 1, holidaySet, true)
-        safety++
       }
-      return dsBase
+      return dateToStr(base)
     }
 
-    const tasks: any[] = []
-    for (const o of (db.orders || [])) {
-      for (const b of (o.splits || [])) {
-        const allowRegenerate = !!b.dcRegenerate
-        const alreadyGenerated = !!b.dcGeneratedOnce
-        const shouldProcess = !(alreadyGenerated && !allowRegenerate)
-        tasks.push({ order: o, batch: b, allowRegenerate, alreadyGenerated, shouldProcess })
-      }
+    const toDisplay = (ymd: string): string => {
+      const p = ymd.split('-')
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : ymd
     }
 
+    const tasks = (db.orders || []).flatMap((o: any) =>
+      (o.splits || []).map((b: any) => ({
+        o, b,
+        regen: !!b.dcRegenerate,
+        done: !!b.dcGeneratedOnce,
+        go: !(!!b.dcGeneratedOnce && !b.dcRegenerate)
+      }))
+    )
+
+    // Seed locked rows into capacity map
     for (const t of tasks) {
-      if (t.shouldProcess) continue
-      const plan = t.batch?.dateCalcPlan || {}
-      const qty = getBatchQtyKg(t.order, t.batch)
-      if (!qty) continue
+      if (t.go) continue
+      const plan = t.b?.dateCalcPlan || {}
+      const qty = getQty(t.o, t.b)
       for (const code of Object.keys(capacityMap)) {
-        const ds = dateToStr(normalizeDate(plan[code])!)
-        if (ds) addProcessDayLoad(code, ds, qty)
+        const ds = dateToStr(normalizeDate(plan[code]) || new Date(0))
+        if (ds) addLoad(code, ds, qty)
       }
       result.skipped++
     }
 
     for (const t of tasks) {
-      const o = t.order
-      const b = t.batch
-      if (!t.shouldProcess) continue
+      if (!t.go) continue
+      const { o, b } = t
       if (!b.dateCalcPlan) b.dateCalcPlan = {}
       const plan = b.dateCalcPlan
 
-      const routeSeq = Array.isArray(o.processRoute) ? o.processRoute.filter(Boolean) : []
-      const seq = [...new Set([...routeSeq, ...EXTRA_TAIL])].filter((code: string) => allProcesses.includes(code))
+      const routeSeq: string[] = Array.isArray(o.processRoute) ? o.processRoute.filter(Boolean) : []
+      const seq = [...new Set([...routeSeq, ...EXTRA_TAIL])].filter((c: string) => allProcesses.includes(c))
       if (!seq.length) continue
 
       let anchorCode = ''
       let anchorDate: Date | null = null
-      for (const code of seq) {
-        if (!MACHINE_REQUIRED.includes(code)) continue
-        const d = normalizeDate(plan[code])
-        if (!d) continue
-        if (!anchorDate || d > anchorDate) { anchorDate = d; anchorCode = code }
+      for (const c of seq) {
+        if (!MACHINE_REQUIRED.includes(c)) continue
+        const d = normalizeDate(plan[c])
+        if (d && (!anchorDate || d > anchorDate)) { anchorDate = d; anchorCode = c }
       }
       if (!anchorDate) {
-        for (const code of seq) {
-          const d = normalizeDate(plan[code])
-          if (d) { anchorDate = d; anchorCode = code; break }
+        for (const c of seq) {
+          const d = normalizeDate(plan[c])
+          if (d) { anchorDate = d; anchorCode = c; break }
         }
       }
       if (!anchorDate || !anchorCode) continue
@@ -360,28 +326,25 @@ export default function DateCalculatorPage() {
       const anchorIdx = seq.indexOf(anchorCode)
       if (anchorIdx < 0) continue
 
-      const planned: Record<string, string> = {}
-      planned[anchorCode] = dateToStr(anchorDate)
+      const planned: Record<string, string> = { [anchorCode]: dateToStr(anchorDate) }
 
-      let backCur = new Date(anchorDate.getTime())
+      let back = new Date(anchorDate.getTime())
       for (let i = anchorIdx - 1; i >= 0; i--) {
-        const code = seq[i]
-        backCur = addDaysSkippingHolidays(backCur, Math.max(1, dayMap[code] || 1), holidaySet, false)
-        planned[code] = dateToStr(backCur)
+        back = addDaysSkippingHolidays(back, Math.max(1, dayMap[seq[i]] || 1), holidaySet, false)
+        planned[seq[i]] = dateToStr(back)
       }
 
-      let fwdCur = new Date(anchorDate.getTime())
+      let fwd = new Date(anchorDate.getTime())
       for (let i = anchorIdx + 1; i < seq.length; i++) {
-        fwdCur = addDaysSkippingHolidays(fwdCur, Math.max(1, dayMap[seq[i-1]] || 1), holidaySet, true)
-        planned[seq[i]] = dateToStr(fwdCur)
+        fwd = addDaysSkippingHolidays(fwd, Math.max(1, dayMap[seq[i-1]] || 1), holidaySet, true)
+        planned[seq[i]] = dateToStr(fwd)
       }
 
       const firstCode = seq[0]
       const firstDt = normalizeDate(planned[firstCode])
-      let useCurrentDaysForwardRule = false
-
+      let useFwdRule = false
       if (firstDt && today && firstDt < today) {
-        useCurrentDaysForwardRule = true
+        useFwdRule = true
         const start = addDaysSkippingHolidays(today, Math.max(1, dayMap[firstCode] || 1), holidaySet, true)
         planned[firstCode] = dateToStr(start)
         let cur = new Date(start.getTime())
@@ -391,48 +354,48 @@ export default function DateCalculatorPage() {
         }
       }
 
-      // Convert YYYY-MM-DD → DD/MM/YYYY
-      seq.forEach((code: string) => {
-        const dateYMD = planned[code] || ''
-        if (dateYMD) {
-          const parts = dateYMD.split('-')
-          plan[code] = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dateYMD
-        } else {
-          plan[code] = ''
-        }
-      })
+      // Store as DD/MM/YYYY
+      seq.forEach((c: string) => { plan[c] = planned[c] ? toDisplay(planned[c]) : '' })
 
-      const qtyKg = getBatchQtyKg(o, b)
-      const firstAssigned = normalizeDate(plan[firstCode])
-      if (firstAssigned) {
-        const firstFinal = fitDateByCapacity(firstCode, dateToStr(firstAssigned), qtyKg)
-        if (firstFinal) {
-          const parts = firstFinal.split('-')
-          plan[firstCode] = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : firstFinal
-        }
-        let prevAssigned = normalizeDate(plan[firstCode]) || firstAssigned
+      // Capacity-aware pass
+      const qty = getQty(o, b)
+      const fa = normalizeDate(plan[firstCode])
+      if (fa) {
+        const ff = fitDate(firstCode, dateToStr(fa), qty)
+        if (ff) plan[firstCode] = toDisplay(ff)
+        let prev = normalizeDate(plan[firstCode]) || fa
         for (let i = 1; i < seq.length; i++) {
-          const code = seq[i]
-          const prevCode = seq[i - 1]
-          const days = Math.max(1, dayMap[useCurrentDaysForwardRule ? code : prevCode] || 1)
-          const candidate = addDaysSkippingHolidays(prevAssigned, days, holidaySet, true)
-          const finalDs = fitDateByCapacity(code, dateToStr(candidate), qtyKg)
-          if (finalDs) {
-            const parts = finalDs.split('-')
-            plan[code] = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : finalDs
-            prevAssigned = normalizeDate(finalDs) || candidate
-          } else {
-            prevAssigned = candidate
-          }
+          const c = seq[i]
+          const pc = seq[i-1]
+          const days = Math.max(1, dayMap[useFwdRule ? c : pc] || 1)
+          const cand = addDaysSkippingHolidays(prev, days, holidaySet, true)
+          const finalDs = fitDate(c, dateToStr(cand), qty)
+          if (finalDs) { plan[c] = toDisplay(finalDs); prev = normalizeDate(finalDs) || cand }
+          else prev = cand
         }
       }
 
-      if (t.alreadyGenerated && t.allowRegenerate) result.regenerated++
+      if (t.done && t.regen) result.regenerated++
       else result.generated++
       b.dcGeneratedOnce = true
       if (b.dcRegenerate) b.dcRegenerate = false
     }
     return result
+  }
+
+  const generateDates = () => {
+    const stored = localStorage.getItem('dyeflow_db')
+    if (!stored) return
+    const db = JSON.parse(stored)
+    setTimeout(() => {
+      const result = dcPlanAllRows(db)
+      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+      loadData()
+      savePlannedDatesToOrders(false)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+      alert(`✓ Date Generation Complete!\n\nGenerated: ${result.generated}\nRe-generated: ${result.regenerated}\nSkipped: ${result.skipped}\n\nDates auto-saved to orders.`)
+    }, 0)
   }
 
   const savePlannedDatesToOrders = (showAlert = true) => {
@@ -441,48 +404,41 @@ export default function DateCalculatorPage() {
     const db = JSON.parse(stored)
     let updatedOrders = 0, updatedBatches = 0
 
-    for (const order of (db.orders || [])) {
-      if (!Array.isArray(order.splits) || order.splits.length === 0) continue
-      if (!order.plannedDates || typeof order.plannedDates !== 'object') order.plannedDates = {}
-      let orderTouched = false
+    const toISO = (ddmmyyyy: string): string => {
+      if (!ddmmyyyy) return ''
+      if (ddmmyyyy.match(/^\d{2}\/\d{2}\/\d{4}$/)) { const [d,m,y] = ddmmyyyy.split('/'); return `${y}-${m}-${d}` }
+      if (ddmmyyyy.match(/^\d{4}-\d{2}-\d{2}$/)) return ddmmyyyy
+      const p = new Date(ddmmyyyy)
+      return isNaN(p.getTime()) ? '' : dateToStr(p)
+    }
 
+    for (const order of (db.orders || [])) {
+      if (!Array.isArray(order.splits) || !order.splits.length) continue
+      if (!order.plannedDates) order.plannedDates = {}
+      let touched = false
       for (const batch of order.splits) {
         const plan: Record<string, string> = batch.dateCalcPlan || {}
-        if (Object.keys(plan).length === 0) continue
-
-        const toISO = (ddmmyyyy: string): string => {
-          if (!ddmmyyyy) return ''
-          if (ddmmyyyy.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-            const [d, m, y] = ddmmyyyy.split('/')
-            return `${y}-${m}-${d}`
-          }
-          if (ddmmyyyy.match(/^\d{4}-\d{2}-\d{2}$/)) return ddmmyyyy
-          const parsed = new Date(ddmmyyyy)
-          return isNaN(parsed.getTime()) ? '' : dateToStr(parsed)
-        }
-
+        if (!Object.keys(plan).length) continue
         let lastDate = ''
-        Object.entries(plan).forEach(([code, dateStr]) => {
+        for (const [code, dateStr] of Object.entries(plan)) {
           const iso = toISO(dateStr)
-          if (!iso) return
+          if (!iso) continue
           order.plannedDates[code] = iso
           if (!lastDate || iso > lastDate) lastDate = iso
-        })
-
+        }
         if (lastDate && !order.plannedDates['Dispatch']) order.plannedDates['Dispatch'] = lastDate
         if (plan['Dispatch']) order.plannedDates['Dispatch'] = toISO(plan['Dispatch'])
         if (plan['FinalDispatch']) order.plannedDates['Dispatch'] = toISO(plan['FinalDispatch'])
         if (order.plannedDates['Dispatch']) batch.plannedDate = order.plannedDates['Dispatch']
-
         updatedBatches++
-        orderTouched = true
+        touched = true
       }
-      if (orderTouched) updatedOrders++
+      if (touched) updatedOrders++
     }
 
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
     window.dispatchEvent(new Event('dyeflow-db-updated'))
-    if (showAlert) alert(`✅ Planned dates saved to ${updatedOrders} order${updatedOrders !== 1 ? 's' : ''}\nacross ${updatedBatches} batch${updatedBatches !== 1 ? 'es' : ''}.\n\nDelay Predictor, Reports, and AI Assistant will now use these dates.`)
+    if (showAlert) alert(`✅ Planned dates saved to ${updatedOrders} orders across ${updatedBatches} batches.`)
     return { updatedOrders, updatedBatches }
   }
 
@@ -490,7 +446,7 @@ export default function DateCalculatorPage() {
     const stored = localStorage.getItem('dyeflow_db')
     const db = stored ? JSON.parse(stored) : {}
     const processList = loadOrSeedProcessList()
-    const savedDurations: Record<string, { days: number }> = {}
+    const savedDurations: Record<string, any> = {}
     ;(db.processDurations || []).forEach((d: any) => { if (d.code) savedDurations[d.code] = d })
     const temp: Record<string, { days: number, capacity: string }> = {}
     allProcesses.forEach(code => {
@@ -498,7 +454,7 @@ export default function DateCalculatorPage() {
       const fromMaster = processList.find(p => p.code === code)
       temp[code] = {
         days: saved?.days ?? fromMaster?.defaultDays ?? 1,
-        capacity: (processDurations.find(d => d.code === code)?.capacity?.toString()) || ''
+        capacity: processDurations.find(d => d.code === code)?.capacity?.toString() || ''
       }
     })
     setTempDurations(temp)
@@ -511,49 +467,44 @@ export default function DateCalculatorPage() {
     const db = JSON.parse(stored)
     if (!Array.isArray(db.processDurations)) db.processDurations = []
     const byCode: Record<string, number> = {}
-    db.processDurations.forEach((d: ProcessDuration, i: number) => { if (d.code && byCode[d.code] === undefined) byCode[d.code] = i })
+    db.processDurations.forEach((d: any, i: number) => { if (d.code && byCode[d.code] === undefined) byCode[d.code] = i })
     allProcesses.forEach(code => {
-      const temp = tempDurations[code]
-      if (!temp) return
-      const days = Math.max(1, temp.days)
-      const capacity = temp.capacity ? parseFloat(temp.capacity) : undefined
+      const t = tempDurations[code]
+      if (!t) return
+      const days = Math.max(1, t.days)
+      const capacity = t.capacity ? parseFloat(t.capacity) : undefined
       const idx = byCode[code]
       if (idx === undefined) db.processDurations.push({ code, name: getProcessName(code), days, capacity: capacity || '' })
       else { db.processDurations[idx].days = days; db.processDurations[idx].capacity = capacity || '' }
     })
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
     setShowProcessDaysModal(false)
-    alert('✓ Process days saved successfully!')
+    alert('✓ Process days saved!')
     loadData()
   }
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return ''
-    try { const d = normalizeDate(dateStr); return d ? dateToDisplayStr(d) : '' } catch { return dateStr }
+  const formatDate = (ds: string) => {
+    try { const d = normalizeDate(ds); return d ? dateToDisplayStr(d) : '' } catch { return ds }
   }
 
   const getMachinePlannedDates = (order: Order, batch: any): string => {
-    const machineProcesses = Object.keys(order.processMachines || {})
-    if (machineProcesses.length === 0) return '-'
-    const dateEntries: { process: string, date: string }[] = []
-    machineProcesses.forEach(pc => {
-      const dateStr = batch.dateCalcPlan?.[pc]
-      if (dateStr) dateEntries.push({ process: pc, date: dateStr })
-    })
-    if (dateEntries.length === 0 && batch.plannedDate) return formatDate(batch.plannedDate)
-    return dateEntries.map(e => `${e.process}: ${e.date}`).join(' / ')
+    const machinePcs = Object.keys(order.processMachines || {})
+    if (!machinePcs.length) return '-'
+    const entries = machinePcs
+      .map(pc => ({ pc, date: batch.dateCalcPlan?.[pc] }))
+      .filter(e => e.date)
+    if (!entries.length && batch.plannedDate) return formatDate(batch.plannedDate)
+    return entries.map(e => `${e.pc}: ${e.date}`).join(' / ')
   }
 
-  if (rows.length === 0) {
-    return (
-      <div className="content">
-        <div className="card">
-          <div className="card-header"><span className="card-title">Date Calculator Sheet</span></div>
-          <div className="empty-state" style={{ padding: '30px' }}>No split batches found. Split orders first.</div>
-        </div>
+  if (!rows.length) return (
+    <div className="content">
+      <div className="card">
+        <div className="card-header"><span className="card-title">Date Calculator Sheet</span></div>
+        <div className="empty-state" style={{ padding: '30px' }}>No split batches found. Split orders first.</div>
       </div>
-    )
-  }
+    </div>
+  )
 
   return (
     <div className="content">
@@ -561,7 +512,6 @@ export default function DateCalculatorPage() {
         <div className="card-header">
           <span className="card-title">Date Calculator Sheet</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Excel row/column format - all processes</span>
             <button className="small success" onClick={generateDates}>⚙ Generate Dates</button>
             <button className="small" onClick={() => savePlannedDatesToOrders(true)}
               style={{ background: saveStatus === 'saved' ? '#1D9E75' : 'var(--accent)', color: '#fff', border: 'none', fontWeight: 600 }}>
@@ -574,36 +524,34 @@ export default function DateCalculatorPage() {
             </button>
           </div>
         </div>
-
         <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 20px', marginBottom: '12px' }}>
-          Dates generated only on <strong>Generate Dates</strong>. Locked after first generation unless <strong>Re-Generate</strong> is checked.
+          Dates locked after first generation unless <strong>Re-Generate</strong> is checked.
           Click <strong>⬇ Save to Orders</strong> to push dates to Delay Predictor, Reports, and AI.
         </div>
-
         <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 200px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
               <tr style={{ background: '#F9FAFB', position: 'sticky', top: 0, zIndex: 10 }}>
                 <th style={thStyle}>SELECT</th>
                 <th style={thStyle}>COLOUR</th>
-                <th style={thStyle}>BATCH NUMBER</th>
+                <th style={thStyle}>BATCH</th>
                 <th style={thStyle}>QTY(KG)</th>
-                <th style={thStyle}>PROCESS ROUTE</th>
+                <th style={thStyle}>ROUTE</th>
                 <th style={thStyle}>MACHINE</th>
                 <th style={thStyle}>DATE</th>
                 {allProcesses.map(pc => <th key={pc} style={thStyle}>{pc}</th>)}
-                <th style={thStyle}>RE-GENERATE</th>
+                <th style={thStyle}>RE-GEN</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(({ order, batch }) => {
                 const route = (order.processRoute || []).map((c: string) => getProcessName(c)).join('/')
-                const plan = batch.dateCalcPlan || {}
+                const plan: Record<string, string> = batch.dateCalcPlan || {}
                 return (
                   <tr key={`${order.id}-${batch.batchId}`} style={{ borderBottom: '1px solid #E5E7EB' }}>
                     <td style={{ ...tdStyle, textAlign: 'center' }}>
                       <input type="checkbox" checked={selectedBatches.has(batch.batchId)}
-                        onChange={(e) => handleBatchSelection(batch.batchId, e.target.checked)} style={{ cursor: 'pointer' }} />
+                        onChange={e => handleBatchSelection(batch.batchId, e.target.checked)} style={{ cursor: 'pointer' }} />
                     </td>
                     <td style={tdStyle}>{order.color || '-'}</td>
                     <td style={{ ...tdStyle, fontWeight: 700, color: '#2563EB' }}>{batch.batchId || '-'}</td>
@@ -614,24 +562,24 @@ export default function DateCalculatorPage() {
                     {allProcesses.map(pc => (
                       <td key={pc} style={{ padding: 0, borderRight: '1px solid #E5E7EB' }}>
                         <input type="text" value={plan[pc] || ''}
-                          onChange={(e) => handleDateChange(order.id, batch.batchId, pc, e.target.value)}
-                          onDoubleClick={(e) => {
-                            const input = e.target as HTMLInputElement
-                            input.type = 'date'
-                            input.focus()
+                          onChange={e => handleDateChange(order.id, batch.batchId, pc, e.target.value)}
+                          onDoubleClick={e => {
+                            const inp = e.target as HTMLInputElement
+                            inp.type = 'date'
+                            inp.focus()
                             const cv = plan[pc] || ''
                             if (cv.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-                              const [day, month, year] = cv.split('/')
-                              input.value = `${year}-${month}-${day}`
+                              const [d, m, y] = cv.split('/')
+                              inp.value = `${y}-${m}-${d}`
                             }
                           }}
-                          onBlur={(e) => {
-                            const input = e.target as HTMLInputElement
-                            if (input.type === 'date' && input.value) {
-                              const [year, month, day] = input.value.split('-')
-                              handleDateChange(order.id, batch.batchId, pc, `${day}/${month}/${year}`)
+                          onBlur={e => {
+                            const inp = e.target as HTMLInputElement
+                            if (inp.type === 'date' && inp.value) {
+                              const [y, m, d] = inp.value.split('-')
+                              handleDateChange(order.id, batch.batchId, pc, `${d}/${m}/${y}`)
                             }
-                            input.type = 'text'
+                            inp.type = 'text'
                           }}
                           style={{ width: '100%', minWidth: '110px', height: '36px', border: 0, background: 'transparent', padding: '4px 8px', fontSize: '12px', textAlign: 'center', outline: 'none' }}
                         />
@@ -639,7 +587,7 @@ export default function DateCalculatorPage() {
                     ))}
                     <td style={{ ...tdStyle, textAlign: 'center' }}>
                       <input type="checkbox" checked={batch.dcRegenerate || false}
-                        onChange={(e) => handleRegenerateToggle(order.id, batch.batchId, e.target.checked)} style={{ cursor: 'pointer' }} />
+                        onChange={e => handleRegenerateToggle(order.id, batch.batchId, e.target.checked)} style={{ cursor: 'pointer' }} />
                     </td>
                   </tr>
                 )
@@ -650,25 +598,21 @@ export default function DateCalculatorPage() {
       </div>
 
       {showProcessDaysModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
           onClick={() => setShowProcessDaysModal(false)}>
           <div style={{ background: 'white', borderRadius: '8px', padding: '24px', maxWidth: '600px', width: '90%', maxHeight: '80vh', overflow: 'auto' }}
-            onClick={(e) => e.stopPropagation()}>
+            onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Process Days Setup</h3>
               <button onClick={() => setShowProcessDaysModal(false)} style={{ border: 'none', background: 'none', fontSize: '20px', cursor: 'pointer' }}>✕</button>
             </div>
-            <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '16px' }}>
-              Set number of days for each process. Defaults from <strong>Setup → Process Master</strong>.
-            </p>
             <div style={{ maxHeight: '50vh', overflow: 'auto', marginBottom: '16px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
-                    <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>PROCESS</th>
-                    <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>NAME</th>
-                    <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>DAYS</th>
-                    <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>CAPACITY (KG/DAY)</th>
+                    {['PROCESS','NAME','DAYS','CAPACITY (KG/DAY)'].map(h => (
+                      <th key={h} style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>{h}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -678,12 +622,12 @@ export default function DateCalculatorPage() {
                       <td style={{ padding: '10px' }}>{getProcessName(code)}</td>
                       <td style={{ padding: '10px' }}>
                         <input type="number" min="1" step="1" value={tempDurations[code]?.days || 1}
-                          onChange={(e) => setTempDurations(prev => ({ ...prev, [code]: { ...prev[code], days: parseInt(e.target.value) || 1 } }))}
+                          onChange={e => setTempDurations(prev => ({ ...prev, [code]: { ...prev[code], days: parseInt(e.target.value) || 1 } }))}
                           style={{ width: '80px', padding: '6px', border: '1px solid #D1D5DB', borderRadius: '4px' }} />
                       </td>
                       <td style={{ padding: '10px' }}>
                         <input type="number" min="0" step="0.01" value={tempDurations[code]?.capacity || ''}
-                          onChange={(e) => setTempDurations(prev => ({ ...prev, [code]: { ...prev[code], capacity: e.target.value } }))}
+                          onChange={e => setTempDurations(prev => ({ ...prev, [code]: { ...prev[code], capacity: e.target.value } }))}
                           style={{ width: '100px', padding: '6px', border: '1px solid #D1D5DB', borderRadius: '4px' }} placeholder="Optional" />
                       </td>
                     </tr>
@@ -703,12 +647,10 @@ export default function DateCalculatorPage() {
 }
 
 const thStyle: React.CSSProperties = {
-  padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: 700,
-  color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px',
-  borderBottom: '2px solid #E5E7EB', borderRight: '1px solid #E5E7EB',
-  whiteSpace: 'nowrap', background: '#F9FAFB'
+  padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: 700, color: '#6B7280',
+  textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '2px solid #E5E7EB',
+  borderRight: '1px solid #E5E7EB', whiteSpace: 'nowrap', background: '#F9FAFB'
 }
-
 const tdStyle: React.CSSProperties = {
   padding: '10px 14px', fontSize: '12px', borderRight: '1px solid #E5E7EB', whiteSpace: 'nowrap'
 }
