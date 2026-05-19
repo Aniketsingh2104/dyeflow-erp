@@ -8,7 +8,7 @@ interface Batch {
   batchNumber: number
   kg: number
   date?: string
-  dateCalcPlan?: Record<string, string>
+  dateCalcPlan: Record<string, string>
   dcRegenerate?: boolean
   dcGeneratedOnce?: boolean
   plannedDate?: string
