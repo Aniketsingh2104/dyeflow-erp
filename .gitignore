@@ -1,0 +1,26 @@
+# .gitignore — DyeFlow ERP
+
+# env files — NEVER commit these (contains API keys)
+.env.local
+.env*.local
+
+# Next.js build output
+.next/
+out/
+
+# Node modules
+node_modules/
+
+# Data files — stays on server only
+data/
+*.json.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+.trash/
+
+VERCEL-ENV-VARS.txt
