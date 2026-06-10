@@ -116,14 +116,19 @@ export default function Navigation() {
         { name: 'Splitted Orders', path: '/splitted-orders' },
         { name: 'Date Calculator', path: '/date-calculator' },
         { name: 'Supervisors Overview', path: '/supervisor' },
-        { name: 'Machine Sheets', path: '/machines' },
-        { name: '📌 Production Kanban', path: '/production' },
-        { name: '📅 Order Timeline', path: '/timeline' },
-        { name: '⏰ Shift Management', path: '/shifts' },
         { name: 'Batch Tracking', path: '/batches' },
         { name: '🔍 Batch Trace', path: '/batches/search' },
         { name: 'Import Orders (Excel)', path: '/import' },
         { name: 'Repairing Order', path: '/repairing-order' },
+      ]
+    },
+    {
+      label: 'Others',
+      items: [
+        { name: 'Machine Sheets', path: '/machines' },
+        { name: '📌 Production Kanban', path: '/production' },
+        { name: '📅 Order Timeline', path: '/timeline' },
+        { name: '⏰ Shift Management', path: '/shifts' },
       ]
     },
     {
