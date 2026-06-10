@@ -97,6 +97,7 @@ function PasswordInput({ value, onChange, placeholder, required }: {
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder || 'Enter password'}
         required={required}
+        autoComplete="new-password"
         style={{ paddingRight: 38 }}
       />
       <button type="button" onClick={() => setShow(s => !s)}
@@ -479,7 +480,7 @@ export default function UserManagementPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
                       <label>Username *</label>
-                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.m" autoFocus />
+                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.m" autoFocus autoComplete="off" />
                       <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, display: 'block' }}>Stored lowercase. Used to log in.</span>
                     </div>
                     <div className="form-group">
@@ -534,12 +535,12 @@ export default function UserManagementPage() {
                     <div className="form-group">
                       <label>Unit</label>
                       <input value={formData.unit} onChange={e => setFormData(f => ({ ...f, unit: e.target.value }))}
-                        placeholder="Unit name" disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
+                        placeholder="Unit name" autoComplete="off" disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
                     </div>
                     <div className="form-group">
                       <label>Party</label>
                       <input value={formData.party} onChange={e => setFormData(f => ({ ...f, party: e.target.value }))}
-                        placeholder="Party name" list="party-list"
+                        placeholder="Party name" list="party-list" autoComplete="off"
                         disabled={formData.scopeMode === 'all' || formData.scopeMode === 'unit'} />
                       <datalist id="party-list">{availableParties.map(p => <option key={p} value={p} />)}</datalist>
                     </div>
@@ -547,7 +548,7 @@ export default function UserManagementPage() {
 
                   <div className="form-group" style={{ marginBottom: 14 }}>
                     <label>Notes</label>
-                    <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes about this user" />
+                    <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes about this user" autoComplete="off" />
                   </div>
 
                   {/* Supervisor filter */}

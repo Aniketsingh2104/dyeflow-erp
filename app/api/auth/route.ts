@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
           if (users.length > 0) {
             const found = users.find(u =>
               (u.username || '').trim().toLowerCase() === uname &&
-              (u.password || '') === password
+              (u.password || '').trim() === password.trim()
             )
 
             if (found) {
