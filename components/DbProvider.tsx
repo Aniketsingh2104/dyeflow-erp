@@ -100,6 +100,8 @@ export default function DbProvider({ children }: { children: React.ReactNode }) 
     // Protected page — check session
     const session = getSession()
     if (!session) {
+      // Clear any stale cookie
+      document.cookie = 'dyeflow_session=; path=/; max-age=0'
       setAuthState('login')
       router.replace('/login')
       return

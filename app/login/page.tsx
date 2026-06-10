@@ -32,14 +32,17 @@ export default function LoginPage() {
         return
       }
 
-      // Store full session including permissions
-      localStorage.setItem('dyeflow_session', JSON.stringify({
+      // Store session in localStorage AND as a cookie so middleware can read it
+      const sessionData = JSON.stringify({
         username:    json.user.username,
         fullName:    json.user.full_name,
         role:        json.user.role,
         permissions: json.user.permissions || null,
         loginAt:     new Date().toISOString(),
-      }))
+      })
+      localStorage.setItem('dyeflow_session', sessionData)
+      // Cookie readable by Next.js middleware (7 day expiry)
+      document.cookie = `dyeflow_session=${encodeURIComponent(sessionData)}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
 
       // Sync active user into db blob
       try {
