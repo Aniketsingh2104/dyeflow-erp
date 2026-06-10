@@ -9,6 +9,16 @@ import {
 } from '@/lib/permissions'
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Extended with password for local storage
+interface DyeflowUserWithPassword extends DyeflowUser {
+  password?: string
+  fullName?: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -30,7 +40,7 @@ function getScopeSummary(user: DyeflowUser): string {
   return '-'
 }
 
-function nextUserId(users: DyeflowUser[]): string {
+function nextUserId(users: DyeflowUserWithPassword[]): string {
   const nums = users.map(u => { const m = (u.id || '').match(/(\d+)/); return m ? parseInt(m[1]) : 0 })
   return 'USR-' + String(Math.max(0, ...nums) + 1).padStart(3, '0')
 }
@@ -72,7 +82,7 @@ function PagePermRow({ page, perm, onChange }: { page: PageDef; perm: PagePerm; 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PasswordInput — shows/hides password
+// PasswordInput
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PasswordInput({ value, onChange, placeholder, required }: {
@@ -89,11 +99,8 @@ function PasswordInput({ value, onChange, placeholder, required }: {
         required={required}
         style={{ paddingRight: 38 }}
       />
-      <button
-        type="button"
-        onClick={() => setShow(s => !s)}
-        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: show ? 'var(--accent)' : 'var(--text-tertiary)', fontSize: 14, padding: '2px 4px' }}
-      >
+      <button type="button" onClick={() => setShow(s => !s)}
+        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: show ? 'var(--accent)' : 'var(--text-tertiary)', fontSize: 14, padding: '2px 4px' }}>
         {show ? '🙈' : '👁'}
       </button>
     </div>
@@ -101,34 +108,25 @@ function PasswordInput({ value, onChange, placeholder, required }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main page
+// Main Page
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function UserManagementPage() {
-  const [users, setUsers]               = useState<DyeflowUser[]>([])
+  const [users, setUsers]               = useState<DyeflowUserWithPassword[]>([])
   const [activeUserId, setActiveUserId] = useState('')
   const [isModalOpen, setIsModalOpen]   = useState(false)
   const [editingUserId, setEditingUserId] = useState('')
-  const [editingUsername, setEditingUsername] = useState('') // original username for Supabase lookup
   const [modalTab, setModalTab]         = useState<'basic' | 'permissions'>('basic')
   const [allPages, setAllPages]         = useState<PageDef[]>([])
   const [supervisorNames, setSupervisorNames] = useState<string[]>([])
-  const [saving, setSaving]             = useState(false)
   const [saveError, setSaveError]       = useState('')
 
-  // Form state
   const [formData, setFormData] = useState({
-    username:        '',
-    password:        '',
-    confirmPassword: '',
-    role:            'custom' as RolePreset,
-    scopeMode:       'all',
-    unit:            '',
-    party:           '',
-    notes:           '',
+    username: '', password: '', confirmPassword: '',
+    role: 'custom' as RolePreset, scopeMode: 'all',
+    unit: '', party: '', notes: '',
   })
   const [formPerms, setFormPerms] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS)
-  const [availableUnits,   setAvailableUnits]   = useState<string[]>([])
   const [availableParties, setAvailableParties] = useState<string[]>([])
 
   // ── Load ──────────────────────────────────────────────────────────────────
@@ -139,28 +137,23 @@ export default function UserManagementPage() {
     setAllPages(buildPageList())
     const raw = localStorage.getItem('dyeflow_db')
     const db  = raw ? JSON.parse(raw) : {}
-    if (!db.users || db.users.length === 0) initDefaultAdmin(db)
+    if (!db.users || db.users.length === 0) {
+      db.users = [{
+        id: 'USR-001', username: 'admin', password: 'dyeflow123',
+        fullName: 'Admin', role: 'admin', scopeMode: 'all',
+        notes: 'Default admin', createdAt: new Date().toLocaleString('en-GB'),
+      }]
+      db.activeUserId = 'USR-001'
+      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+    }
     setUsers(db.users || [])
     setActiveUserId(db.activeUserId || db.users?.[0]?.id || '')
     setSupervisorNames((db.supervisors || []).map((s: any) => s.name).filter(Boolean))
-    const orders = db.orders || []
-    const parties = [...new Set(orders.map((x: any) => x.party).filter(Boolean))].sort() as string[]
-    setAvailableUnits(parties)
+    const parties = [...new Set((db.orders || []).map((x: any) => x.party).filter(Boolean))].sort() as string[]
     setAvailableParties(parties)
   }
 
-  const initDefaultAdmin = (db: any) => {
-    db.users = [{
-      id: 'USR-001', username: 'Admin', role: 'admin',
-      scopeMode: 'all', notes: 'Default full-access admin',
-      createdAt: new Date().toLocaleString('en-GB'),
-    }]
-    db.activeUserId = 'USR-001'
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadData()
-  }
-
-  const saveToLocalStorage = (updatedUsers: DyeflowUser[], newActiveId?: string) => {
+  const saveToLocalStorage = (updatedUsers: DyeflowUserWithPassword[], newActiveId?: string) => {
     const raw = localStorage.getItem('dyeflow_db')
     const db  = raw ? JSON.parse(raw) : {}
     db.users = updatedUsers
@@ -168,24 +161,6 @@ export default function UserManagementPage() {
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
     window.dispatchEvent(new Event('dyeflow-db-updated'))
     loadData()
-  }
-
-  // ── Supabase user sync ────────────────────────────────────────────────────
-
-  const syncToSupabase = async (action: 'create' | 'update' | 'delete', payload: any) => {
-    try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...payload }),
-      })
-      const json = await res.json()
-      if (!json.ok) throw new Error(json.error || 'Supabase sync failed')
-    } catch (err: any) {
-      // Non-fatal — data is already saved locally, warn but don't block
-      console.warn('Supabase sync warning:', err.message)
-      throw err
-    }
   }
 
   // ── Permission helpers ────────────────────────────────────────────────────
@@ -208,10 +183,10 @@ export default function UserManagementPage() {
   const clearAll = () => setFormPerms(prev => ({ ...prev, pages: {} }))
   const viewAll  = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = VIEW_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
 
-  // ── Modal ────────────────────────────────────────────────────────────────
+  // ── Modal ─────────────────────────────────────────────────────────────────
 
   const openAddModal = () => {
-    setEditingUserId(''); setEditingUsername(''); setSaveError('')
+    setEditingUserId(''); setSaveError('')
     setFormData({ username: '', password: '', confirmPassword: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
     setFormPerms(DEFAULT_USER_PERMISSIONS)
     setModalTab('basic'); setIsModalOpen(true)
@@ -220,16 +195,11 @@ export default function UserManagementPage() {
   const openEditModal = (userId: string) => {
     const user = users.find(u => u.id === userId)
     if (!user) return
-    setEditingUserId(userId); setEditingUsername(user.username); setSaveError('')
+    setEditingUserId(userId); setSaveError('')
     setFormData({
-      username:        user.username || '',
-      password:        '',   // blank = keep existing
-      confirmPassword: '',
-      role:            (user.role as RolePreset) || 'custom',
-      scopeMode:       user.scopeMode || 'all',
-      unit:            user.unit || '',
-      party:           user.party || '',
-      notes:           user.notes || '',
+      username: user.username || '', password: '', confirmPassword: '',
+      role: (user.role as RolePreset) || 'custom', scopeMode: user.scopeMode || 'all',
+      unit: user.unit || '', party: user.party || '', notes: user.notes || '',
     })
     setFormPerms(user.permissions || DEFAULT_USER_PERMISSIONS)
     setModalTab('basic'); setIsModalOpen(true)
@@ -239,69 +209,63 @@ export default function UserManagementPage() {
 
   // ── Save ─────────────────────────────────────────────────────────────────
 
-  const saveUser = async () => {
+  const saveUser = () => {
     setSaveError('')
-
     if (!formData.username.trim()) { setSaveError('Username is required.'); return }
 
-    // Password rules
-    if (!editingUserId) {
-      // Creating new user — password mandatory
-      if (!formData.password.trim()) { setSaveError('Password is required for new users.'); return }
-      if (formData.password.length < 4) { setSaveError('Password must be at least 4 characters.'); return }
+    // Password validation
+    if (!editingUserId && !formData.password.trim()) {
+      setSaveError('Password is required for new users.'); return
+    }
+    if (formData.password && formData.password.length < 4) {
+      setSaveError('Password must be at least 4 characters.'); return
     }
     if (formData.password && formData.password !== formData.confirmPassword) {
       setSaveError('Passwords do not match.'); return
     }
 
-    setSaving(true)
-    try {
-      const userData: Partial<DyeflowUser> = {
-        username:    formData.username.trim(),
-        role:        formData.role,
-        scopeMode:   formData.scopeMode,
-        unit:        formData.unit.trim(),
-        party:       formData.party.trim(),
-        notes:       formData.notes.trim(),
-        permissions: formData.role === 'admin' ? undefined : formPerms,
-        createdAt:   new Date().toLocaleString('en-GB'),
-      }
-
-      // 1. Sync to Supabase
-      await syncToSupabase(editingUserId ? 'update' : 'create', {
-        username:       formData.username.trim(),
-        targetUsername: editingUsername || formData.username.trim(),
-        password:       formData.password.trim() || undefined,
-        full_name:      formData.username.trim(),
-        role:           formData.role,
-        is_active:      true,
-      })
-
-      // 2. Save to localStorage
-      let updatedUsers: DyeflowUser[]
-      if (editingUserId) {
-        updatedUsers = users.map(u => u.id === editingUserId ? { ...u, ...userData } : u)
-      } else {
-        updatedUsers = [...users, { id: nextUserId(users), ...userData } as DyeflowUser]
-      }
-      saveToLocalStorage(updatedUsers)
-      closeModal()
-    } catch (err: any) {
-      setSaveError(err.message || 'Failed to save user. Check Supabase connection.')
-    } finally {
-      setSaving(false)
+    // Duplicate username check (only on create)
+    if (!editingUserId) {
+      const exists = users.some(u => u.username.toLowerCase() === formData.username.trim().toLowerCase())
+      if (exists) { setSaveError('Username already exists. Choose a different one.'); return }
     }
+
+    const userData: DyeflowUserWithPassword = {
+      id:          editingUserId ? (users.find(u => u.id === editingUserId)?.id || nextUserId(users)) : nextUserId(users),
+      username:    formData.username.trim().toLowerCase(),
+      fullName:    formData.username.trim(),
+      role:        formData.role,
+      scopeMode:   formData.scopeMode,
+      unit:        formData.unit.trim(),
+      party:       formData.party.trim(),
+      notes:       formData.notes.trim(),
+      permissions: formData.role === 'admin' ? undefined : formPerms,
+      createdAt:   new Date().toLocaleString('en-GB'),
+    }
+
+    // Set password: new user always sets it; edit only if provided
+    if (formData.password.trim()) {
+      userData.password = formData.password.trim()
+    } else if (editingUserId) {
+      // Keep existing password
+      const existing = users.find(u => u.id === editingUserId)
+      userData.password = existing?.password || ''
+    }
+
+    const updatedUsers = editingUserId
+      ? users.map(u => u.id === editingUserId ? { ...u, ...userData } : u)
+      : [...users, userData]
+
+    saveToLocalStorage(updatedUsers)
+    closeModal()
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
 
-  const deleteUser = async (id: string) => {
+  const deleteUser = (id: string) => {
     const user = users.find(u => u.id === id)
     if (!user) return
     if (!confirm(`Delete user "${user.username}"? This cannot be undone.`)) return
-    try {
-      await syncToSupabase('delete', { username: user.username })
-    } catch { /* ignore Supabase errors on delete */ }
     const updated = users.filter(u => u.id !== id)
     const newActive = activeUserId === id ? (updated[0]?.id || '') : activeUserId
     saveToLocalStorage(updated, newActive)
@@ -309,26 +273,18 @@ export default function UserManagementPage() {
 
   // ── Reset password ────────────────────────────────────────────────────────
 
-  const resetPassword = async (user: DyeflowUser) => {
-    const newPwd = prompt(`Set new password for "${user.username}":`)
+  const resetPassword = (userId: string) => {
+    const user = users.find(u => u.id === userId)
+    if (!user) return
+    const newPwd = prompt(`New password for "${user.username}":`)
     if (!newPwd || !newPwd.trim()) return
     if (newPwd.trim().length < 4) { alert('Password must be at least 4 characters.'); return }
-    try {
-      await syncToSupabase('update', {
-        username:       user.username,
-        targetUsername: user.username,
-        password:       newPwd.trim(),
-        full_name:      user.username,
-        role:           user.role,
-        is_active:      true,
-      })
-      alert(`✓ Password updated for "${user.username}"`)
-    } catch (err: any) {
-      alert(`Failed: ${err.message}`)
-    }
+    const updated = users.map(u => u.id === userId ? { ...u, password: newPwd.trim() } : u)
+    saveToLocalStorage(updated)
+    alert(`✓ Password updated for "${user.username}"`)
   }
 
-  // ── Active user ───────────────────────────────────────────────────────────
+  // ── Set active user ───────────────────────────────────────────────────────
 
   const setActiveUser = (id: string) => {
     const raw = localStorage.getItem('dyeflow_db')
@@ -394,9 +350,10 @@ export default function UserManagementPage() {
                 <th>ID</th>
                 <th>Username</th>
                 <th>Role</th>
+                <th>Password</th>
                 <th>Data Scope</th>
                 <th>Supervisor Filter</th>
-                <th>Pages Granted</th>
+                <th>Pages</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -404,23 +361,25 @@ export default function UserManagementPage() {
             <tbody>
               {users.map(user => {
                 const isActive = user.id === activeUserId
-                const granted  = user.role === 'admin' ? '∞ All' : `${countGranted(user.permissions || { pages: {}, supervisorFilter: 'all' })}`
+                const granted  = user.role === 'admin' ? '∞' : `${countGranted(user.permissions || { pages: {}, supervisorFilter: 'all' })}`
                 const sfLabel  = user.permissions?.supervisorFilter || 'all'
                 return (
                   <tr key={user.id}>
-                    <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{user.id}</td>
+                    <td style={{ fontWeight: 700, color: 'var(--accent)', fontSize: 11 }}>{user.id}</td>
                     <td style={{ fontWeight: 600 }}>{user.username}</td>
                     <td>
                       <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 600, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)' }}>
                         {ROLE_LABELS[user.role as RolePreset] || user.role}
                       </span>
                     </td>
+                    <td style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-tertiary)' }}>
+                      {user.password ? '••••••••' : <span style={{ color: 'var(--danger)', fontSize: 11 }}>Not set</span>}
+                    </td>
                     <td style={{ fontSize: 12 }}>{getScopeSummary(user)}</td>
                     <td style={{ fontSize: 12 }}>
                       {sfLabel === 'all'
-                        ? <span style={{ color: 'var(--text-tertiary)' }}>All supervisors</span>
-                        : <span style={{ fontWeight: 600, color: 'var(--accent-dark)' }}>{sfLabel}</span>
-                      }
+                        ? <span style={{ color: 'var(--text-tertiary)' }}>All</span>
+                        : <span style={{ fontWeight: 600, color: 'var(--accent-dark)' }}>{sfLabel}</span>}
                     </td>
                     <td style={{ fontSize: 12, fontWeight: 600 }}>{granted}</td>
                     <td>{isActive ? <span className="badge badge-done">✓ Active</span> : <span className="badge badge-pending">Inactive</span>}</td>
@@ -429,7 +388,7 @@ export default function UserManagementPage() {
                         {isActive ? 'Using' : 'Use'}
                       </button>
                       <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
-                      <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user)}>Reset Pwd</button>
+                      <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
                       <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
                     </td>
                   </tr>
@@ -438,17 +397,19 @@ export default function UserManagementPage() {
             </tbody>
           </table>
         </div>
+
+        <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border-light)' }}>
+          ℹ Users and passwords are stored in the DyeFlow database and synced across all devices automatically.
+        </div>
       </div>
 
       {/* Legend */}
       <div className="card">
         <div className="card-header"><span className="card-title" style={{ fontSize: 13 }}>Permission Legend</span></div>
         <div style={{ display: 'flex', gap: 24, padding: '0 16px 16px', flexWrap: 'wrap', fontSize: 12 }}>
-          {[
-            { label: 'View',   color: 'var(--accent)',  desc: 'Can open and read the page' },
-            { label: 'Edit',   color: '#D97706',        desc: 'Can create and update records' },
-            { label: 'Delete', color: 'var(--danger)',  desc: 'Can delete records' },
-          ].map(({ label, color, desc }) => (
+          {[{ label: 'View', color: 'var(--accent)', desc: 'Can open and read the page' },
+            { label: 'Edit', color: '#D97706', desc: 'Can create and update records' },
+            { label: 'Delete', color: 'var(--danger)', desc: 'Can delete records' }].map(({ label, color, desc }) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 12, height: 12, borderRadius: 3, background: color, display: 'inline-block' }} />
               <strong>{label}</strong> — {desc}
@@ -461,13 +422,13 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      {/* ═══ MODAL ═════════════════════════════════════════════════════════ */}
+      {/* ═══ MODAL ══════════════════════════════════════════════════════════ */}
       {isModalOpen && (
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 860, width: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
 
             <div className="modal-header" style={{ flexShrink: 0 }}>
-              <span className="modal-title">{editingUserId ? `Edit User — ${editingUsername}` : 'Create New User'}</span>
+              <span className="modal-title">{editingUserId ? `Edit User — ${users.find(u => u.id === editingUserId)?.username}` : 'Create New User'}</span>
               <button className="small" onClick={closeModal}>✕</button>
             </div>
 
@@ -488,21 +449,21 @@ export default function UserManagementPage() {
             {/* Body */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
 
-              {/* Error */}
               {saveError && (
                 <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--danger)', marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
                   ⚠ {saveError}
                 </div>
               )}
 
-              {/* ── BASIC TAB ─────────────────────────────────────── */}
+              {/* ── BASIC TAB ─────────────────────────────────────────── */}
               {modalTab === 'basic' && (
                 <div>
-                  {/* Row 1: username + role */}
+                  {/* Username + Role */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
                       <label>Username *</label>
-                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.operator" autoFocus />
+                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.m" autoFocus />
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, display: 'block' }}>Stored lowercase. Used to log in.</span>
                     </div>
                     <div className="form-group">
                       <label>Role</label>
@@ -512,10 +473,11 @@ export default function UserManagementPage() {
                     </div>
                   </div>
 
-                  {/* Password section */}
+                  {/* Password */}
                   <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
-                      🔑 Password {editingUserId && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>(leave blank to keep existing password)</span>}
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
+                      🔑 Password
+                      {editingUserId && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 8 }}>Leave blank to keep existing password</span>}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                       <div className="form-group">
@@ -528,7 +490,7 @@ export default function UserManagementPage() {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Confirm Password {!editingUserId && '*'}</label>
+                        <label>Confirm Password{!editingUserId && ' *'}</label>
                         <PasswordInput
                           value={formData.confirmPassword}
                           onChange={v => { setFormData(f => ({ ...f, confirmPassword: v })); setSaveError('') }}
@@ -536,15 +498,15 @@ export default function UserManagementPage() {
                         />
                       </div>
                     </div>
-                    {formData.password && formData.confirmPassword && formData.password !== formData.confirmPassword && (
-                      <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>⚠ Passwords do not match</div>
-                    )}
-                    {formData.password && formData.confirmPassword && formData.password === formData.confirmPassword && (
-                      <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 6 }}>✓ Passwords match</div>
+                    {/* Match indicator */}
+                    {formData.password && formData.confirmPassword && (
+                      <div style={{ fontSize: 11, marginTop: 6, color: formData.password === formData.confirmPassword ? 'var(--success)' : 'var(--danger)' }}>
+                        {formData.password === formData.confirmPassword ? '✓ Passwords match' : '⚠ Passwords do not match'}
+                      </div>
                     )}
                   </div>
 
-                  {/* Scope + unit/party */}
+                  {/* Scope */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
                       <label>Data Scope</label>
@@ -555,9 +517,7 @@ export default function UserManagementPage() {
                     <div className="form-group">
                       <label>Unit</label>
                       <input value={formData.unit} onChange={e => setFormData(f => ({ ...f, unit: e.target.value }))}
-                        placeholder="Unit name" list="unit-list"
-                        disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
-                      <datalist id="unit-list">{availableUnits.map(u => <option key={u} value={u} />)}</datalist>
+                        placeholder="Unit name" disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
                     </div>
                     <div className="form-group">
                       <label>Party</label>
@@ -592,8 +552,7 @@ export default function UserManagementPage() {
                           value={formPerms.supervisorFilter === 'all' ? '' : formPerms.supervisorFilter}
                           onChange={e => setFormPerms(p => ({ ...p, supervisorFilter: e.target.value }))}
                           disabled={formPerms.supervisorFilter === 'all'}
-                          style={{ fontSize: 13, padding: '5px 8px' }}
-                        >
+                          style={{ fontSize: 13, padding: '5px 8px' }}>
                           <option value="">— select —</option>
                           {supervisorNames.map(n => <option key={n} value={n}>{n}</option>)}
                         </select>
@@ -615,7 +574,7 @@ export default function UserManagementPage() {
                 </div>
               )}
 
-              {/* ── PERMISSIONS TAB ───────────────────────────────── */}
+              {/* ── PERMISSIONS TAB ───────────────────────────────────── */}
               {modalTab === 'permissions' && (
                 <div>
                   {formData.role === 'admin' ? (
@@ -664,11 +623,12 @@ export default function UserManagementPage() {
             {/* Footer */}
             <div style={{ flexShrink: 0, padding: '14px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
               {saveError && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>⚠ {saveError}</span>}
-              <button onClick={closeModal} disabled={saving}>Cancel</button>
-              <button className="primary" onClick={saveUser} disabled={saving}>
-                {saving ? 'Saving…' : editingUserId ? '✓ Update User' : '✓ Create User'}
+              <button onClick={closeModal}>Cancel</button>
+              <button className="primary" onClick={saveUser}>
+                {editingUserId ? '✓ Update User' : '✓ Create User'}
               </button>
             </div>
+
           </div>
         </div>
       )}
