@@ -1,6 +1,6 @@
 'use client'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
 import { loadOrSeedProcessList, ProcessDef } from '@/lib/processMap'
 import GlobalSearch from '@/components/GlobalSearch'
@@ -32,12 +32,14 @@ interface NavSection {
 
 export default function Navigation() {
   const pathname = usePathname()
+  const router   = useRouter()
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [machines, setMachines] = useState<NavItem[]>([])
   const [fmsItems, setFmsItems] = useState<NavItem[]>([])
   const [supervisorItems, setSupervisorItems] = useState<NavItem[]>([])
   const [userPerms, setUserPerms] = useState<Record<string, any> | null>(null)
   const [userIsAdmin, setUserIsAdmin] = useState(true)
+  const [loggedInUser, setLoggedInUser] = useState<string>('')
   const navRef = useRef<HTMLDivElement>(null)
 
   const loadUserPerms = () => {
@@ -45,6 +47,20 @@ export default function Navigation() {
     const admin = isAdminUser(user)
     setUserIsAdmin(admin)
     setUserPerms(admin || !user?.permissions ? null : (user.permissions?.pages || {}))
+    // Get logged-in username from session
+    try {
+      const s = localStorage.getItem('dyeflow_session')
+      if (s) setLoggedInUser(JSON.parse(s)?.username || '')
+    } catch { /* ignore */ }
+  }
+
+  const handleLogout = () => {
+    // Clear session from localStorage
+    localStorage.removeItem('dyeflow_session')
+    // Clear session cookie
+    document.cookie = 'dyeflow_session=; path=/; max-age=0'
+    // Redirect to login
+    router.replace('/login')
   }
 
   const loadDynamic = () => {
@@ -342,6 +358,47 @@ export default function Navigation() {
         >⚙ Setup</Link>
 
         {/* Sheet Login — removed, page does not exist */}
+
+        {/* Logged-in user + Logout */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+          {loggedInUser && (
+            <span style={{
+              fontSize: 12, color: 'var(--text-tertiary)',
+              fontWeight: 500, whiteSpace: 'nowrap',
+            }}>
+              👤 {loggedInUser}
+            </span>
+          )}
+          <button
+            onClick={handleLogout}
+            title="Logout"
+            style={{
+              padding: '5px 12px', fontSize: 12, fontWeight: 600,
+              background: 'transparent',
+              border: '1px solid var(--border-light)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--danger)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'var(--danger-light)'
+              e.currentTarget.style.borderColor = 'var(--danger)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'transparent'
+              e.currentTarget.style.borderColor = 'var(--border-light)'
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            Logout
+          </button>
+        </div>
       </div>
     </nav>
   )
