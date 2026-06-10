@@ -13,18 +13,14 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SCOPE_MODES = ['all', 'unit', 'party', 'unit_or_party']
-
 const SCOPE_LABELS: Record<string, string> = {
-  all:          'All Data',
-  unit:         'Unit Only',
-  party:        'Party Only',
-  unit_or_party:'Unit OR Party',
+  all: 'All Data', unit: 'Unit Only', party: 'Party Only', unit_or_party: 'Unit OR Party',
 }
 
 function getScopeSummary(user: DyeflowUser): string {
   if (user.scopeMode === 'all' || !user.scopeMode) return 'All data'
-  if (user.scopeMode === 'unit')   return `Unit: ${user.unit || '-'}`
-  if (user.scopeMode === 'party')  return `Party: ${user.party || '-'}`
+  if (user.scopeMode === 'unit')  return `Unit: ${user.unit || '-'}`
+  if (user.scopeMode === 'party') return `Party: ${user.party || '-'}`
   if (user.scopeMode === 'unit_or_party') {
     const parts: string[] = []
     if (user.unit)  parts.push(`Unit: ${user.unit}`)
@@ -44,40 +40,25 @@ function countGranted(perms: UserPermissions): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tiny checkbox group for a single page row
+// PagePermRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PagePermRow({
-  page, perm, onChange,
-}: {
-  page: PageDef
-  perm: PagePerm
-  onChange: (p: PagePerm) => void
-}) {
+function PagePermRow({ page, perm, onChange }: { page: PageDef; perm: PagePerm; onChange: (p: PagePerm) => void }) {
   return (
     <div style={{
-      display: 'grid',
-      gridTemplateColumns: '1fr 56px 56px 56px',
-      alignItems: 'center',
-      padding: '5px 8px',
-      borderRadius: 6,
-      background: perm.view ? 'var(--accent-light)' : 'var(--bg-secondary)',
-      marginBottom: 3,
-      gap: 4,
+      display: 'grid', gridTemplateColumns: '1fr 56px 56px 56px',
+      alignItems: 'center', padding: '5px 8px', borderRadius: 6,
+      background: perm.view ? 'var(--accent-light)' : 'var(--bg-secondary)', marginBottom: 3, gap: 4,
     }}>
       <span style={{ fontSize: 12, color: perm.view ? 'var(--accent-dark)' : 'var(--text-tertiary)', fontWeight: perm.view ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {page.dynamic ? '↪ ' : ''}{page.label}
       </span>
       {(['view', 'edit', 'delete'] as const).map(k => (
         <label key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={!!perm[k]}
+          <input type="checkbox" checked={!!perm[k]}
             onChange={e => {
               const next = { ...perm, [k]: e.target.checked }
-              // If enabling edit/delete, also enable view
               if ((k === 'edit' || k === 'delete') && e.target.checked) next.view = true
-              // If disabling view, also disable edit/delete
               if (k === 'view' && !e.target.checked) { next.edit = false; next.delete = false }
               onChange(next)
             }}
@@ -91,30 +72,62 @@ function PagePermRow({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PasswordInput — shows/hides password
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PasswordInput({ value, onChange, placeholder, required }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; required?: boolean
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || 'Enter password'}
+        required={required}
+        style={{ paddingRight: 38 }}
+      />
+      <button
+        type="button"
+        onClick={() => setShow(s => !s)}
+        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: show ? 'var(--accent)' : 'var(--text-tertiary)', fontSize: 14, padding: '2px 4px' }}
+      >
+        {show ? '🙈' : '👁'}
+      </button>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function UserManagementPage() {
-  const [users, setUsers]         = useState<DyeflowUser[]>([])
+  const [users, setUsers]               = useState<DyeflowUser[]>([])
   const [activeUserId, setActiveUserId] = useState('')
   const [isModalOpen, setIsModalOpen]   = useState(false)
   const [editingUserId, setEditingUserId] = useState('')
-  const [modalTab, setModalTab]   = useState<'basic' | 'permissions'>('basic')
-  const [allPages, setAllPages]   = useState<PageDef[]>([])
+  const [editingUsername, setEditingUsername] = useState('') // original username for Supabase lookup
+  const [modalTab, setModalTab]         = useState<'basic' | 'permissions'>('basic')
+  const [allPages, setAllPages]         = useState<PageDef[]>([])
   const [supervisorNames, setSupervisorNames] = useState<string[]>([])
+  const [saving, setSaving]             = useState(false)
+  const [saveError, setSaveError]       = useState('')
 
   // Form state
   const [formData, setFormData] = useState({
-    username:   '',
-    role:       'custom' as RolePreset,
-    scopeMode:  'all',
-    unit:       '',
-    party:      '',
-    notes:      '',
+    username:        '',
+    password:        '',
+    confirmPassword: '',
+    role:            'custom' as RolePreset,
+    scopeMode:       'all',
+    unit:            '',
+    party:           '',
+    notes:           '',
   })
   const [formPerms, setFormPerms] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS)
-
-  // Available units/parties for datalist
   const [availableUnits,   setAvailableUnits]   = useState<string[]>([])
   const [availableParties, setAvailableParties] = useState<string[]>([])
 
@@ -123,48 +136,31 @@ export default function UserManagementPage() {
   useEffect(() => { loadData() }, [])
 
   const loadData = () => {
-    const pages = buildPageList()
-    setAllPages(pages)
-
+    setAllPages(buildPageList())
     const raw = localStorage.getItem('dyeflow_db')
     const db  = raw ? JSON.parse(raw) : {}
-
     if (!db.users || db.users.length === 0) initDefaultAdmin(db)
-
     setUsers(db.users || [])
     setActiveUserId(db.activeUserId || db.users?.[0]?.id || '')
-
-    // Supervisor names for the filter dropdown
     setSupervisorNames((db.supervisors || []).map((s: any) => s.name).filter(Boolean))
-
-    // Units / parties for datalist
-    const units = [...new Set([
-      ...(db.orders || []).map((x: any) => x.party),
-    ].filter(Boolean))].sort() as string[]
-    const parties = [...new Set([
-      ...(db.orders || []).map((x: any) => x.party),
-    ].filter(Boolean))].sort() as string[]
-
-    setAvailableUnits(units)
+    const orders = db.orders || []
+    const parties = [...new Set(orders.map((x: any) => x.party).filter(Boolean))].sort() as string[]
+    setAvailableUnits(parties)
     setAvailableParties(parties)
   }
 
   const initDefaultAdmin = (db: any) => {
-    const admin: DyeflowUser = {
-      id: 'USR-001',
-      username: 'Admin',
-      role: 'admin',
-      scopeMode: 'all',
-      notes: 'Default full-access admin',
+    db.users = [{
+      id: 'USR-001', username: 'Admin', role: 'admin',
+      scopeMode: 'all', notes: 'Default full-access admin',
       createdAt: new Date().toLocaleString('en-GB'),
-    }
-    db.users = [admin]
+    }]
     db.activeUserId = 'USR-001'
     localStorage.setItem('dyeflow_db', JSON.stringify(db))
     loadData()
   }
 
-  const saveToDB = (updatedUsers: DyeflowUser[], newActiveId?: string) => {
+  const saveToLocalStorage = (updatedUsers: DyeflowUser[], newActiveId?: string) => {
     const raw = localStorage.getItem('dyeflow_db')
     const db  = raw ? JSON.parse(raw) : {}
     db.users = updatedUsers
@@ -174,15 +170,31 @@ export default function UserManagementPage() {
     loadData()
   }
 
-  // ── Permission helpers ────────────────────────────────────────────────────
+  // ── Supabase user sync ────────────────────────────────────────────────────
 
-  const setPagePerm = (path: string, perm: PagePerm) => {
-    setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, [path]: perm } }))
+  const syncToSupabase = async (action: 'create' | 'update' | 'delete', payload: any) => {
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...payload }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error || 'Supabase sync failed')
+    } catch (err: any) {
+      // Non-fatal — data is already saved locally, warn but don't block
+      console.warn('Supabase sync warning:', err.message)
+      throw err
+    }
   }
 
+  // ── Permission helpers ────────────────────────────────────────────────────
+
+  const setPagePerm = (path: string, perm: PagePerm) =>
+    setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, [path]: perm } }))
+
   const applyRolePreset = (role: RolePreset) => {
-    const perms = buildPermissionsFromRole(role, allPages, formPerms.supervisorFilter)
-    setFormPerms(perms)
+    setFormPerms(buildPermissionsFromRole(role, allPages, formPerms.supervisorFilter))
     setFormData(f => ({ ...f, role }))
   }
 
@@ -192,71 +204,131 @@ export default function UserManagementPage() {
     setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, ...updates } }))
   }
 
-  const grantAll   = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = FULL_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
-  const clearAll   = () => { setFormPerms(prev => ({ ...prev, pages: {} })) }
-  const viewAll    = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = VIEW_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
+  const grantAll = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = FULL_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
+  const clearAll = () => setFormPerms(prev => ({ ...prev, pages: {} }))
+  const viewAll  = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = VIEW_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
 
-  // ── Modal open/close ──────────────────────────────────────────────────────
+  // ── Modal ────────────────────────────────────────────────────────────────
 
   const openAddModal = () => {
-    setEditingUserId('')
-    setFormData({ username: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
+    setEditingUserId(''); setEditingUsername(''); setSaveError('')
+    setFormData({ username: '', password: '', confirmPassword: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
     setFormPerms(DEFAULT_USER_PERMISSIONS)
-    setModalTab('basic')
-    setIsModalOpen(true)
+    setModalTab('basic'); setIsModalOpen(true)
   }
 
   const openEditModal = (userId: string) => {
     const user = users.find(u => u.id === userId)
     if (!user) return
-    setEditingUserId(userId)
+    setEditingUserId(userId); setEditingUsername(user.username); setSaveError('')
     setFormData({
-      username:  user.username  || '',
-      role:      (user.role as RolePreset) || 'custom',
-      scopeMode: user.scopeMode || 'all',
-      unit:      user.unit      || '',
-      party:     user.party     || '',
-      notes:     user.notes     || '',
+      username:        user.username || '',
+      password:        '',   // blank = keep existing
+      confirmPassword: '',
+      role:            (user.role as RolePreset) || 'custom',
+      scopeMode:       user.scopeMode || 'all',
+      unit:            user.unit || '',
+      party:           user.party || '',
+      notes:           user.notes || '',
     })
     setFormPerms(user.permissions || DEFAULT_USER_PERMISSIONS)
-    setModalTab('basic')
-    setIsModalOpen(true)
+    setModalTab('basic'); setIsModalOpen(true)
   }
 
-  const closeModal = () => { setIsModalOpen(false); setEditingUserId('') }
+  const closeModal = () => { setIsModalOpen(false); setEditingUserId(''); setSaveError('') }
 
-  // ── Save user ─────────────────────────────────────────────────────────────
+  // ── Save ─────────────────────────────────────────────────────────────────
 
-  const saveUser = () => {
-    if (!formData.username.trim()) { alert('Please enter a username.'); return }
+  const saveUser = async () => {
+    setSaveError('')
 
-    const userData: Partial<DyeflowUser> = {
-      username:    formData.username.trim(),
-      role:        formData.role,
-      scopeMode:   formData.scopeMode,
-      unit:        formData.unit.trim(),
-      party:       formData.party.trim(),
-      notes:       formData.notes.trim(),
-      permissions: formData.role === 'admin' ? undefined : formPerms,
-      createdAt:   new Date().toLocaleString('en-GB'),
+    if (!formData.username.trim()) { setSaveError('Username is required.'); return }
+
+    // Password rules
+    if (!editingUserId) {
+      // Creating new user — password mandatory
+      if (!formData.password.trim()) { setSaveError('Password is required for new users.'); return }
+      if (formData.password.length < 4) { setSaveError('Password must be at least 4 characters.'); return }
+    }
+    if (formData.password && formData.password !== formData.confirmPassword) {
+      setSaveError('Passwords do not match.'); return
     }
 
-    let updatedUsers: DyeflowUser[]
-    if (editingUserId) {
-      updatedUsers = users.map(u => u.id === editingUserId ? { ...u, ...userData } : u)
-    } else {
-      updatedUsers = [...users, { id: nextUserId(users), ...userData } as DyeflowUser]
+    setSaving(true)
+    try {
+      const userData: Partial<DyeflowUser> = {
+        username:    formData.username.trim(),
+        role:        formData.role,
+        scopeMode:   formData.scopeMode,
+        unit:        formData.unit.trim(),
+        party:       formData.party.trim(),
+        notes:       formData.notes.trim(),
+        permissions: formData.role === 'admin' ? undefined : formPerms,
+        createdAt:   new Date().toLocaleString('en-GB'),
+      }
+
+      // 1. Sync to Supabase
+      await syncToSupabase(editingUserId ? 'update' : 'create', {
+        username:       formData.username.trim(),
+        targetUsername: editingUsername || formData.username.trim(),
+        password:       formData.password.trim() || undefined,
+        full_name:      formData.username.trim(),
+        role:           formData.role,
+        is_active:      true,
+      })
+
+      // 2. Save to localStorage
+      let updatedUsers: DyeflowUser[]
+      if (editingUserId) {
+        updatedUsers = users.map(u => u.id === editingUserId ? { ...u, ...userData } : u)
+      } else {
+        updatedUsers = [...users, { id: nextUserId(users), ...userData } as DyeflowUser]
+      }
+      saveToLocalStorage(updatedUsers)
+      closeModal()
+    } catch (err: any) {
+      setSaveError(err.message || 'Failed to save user. Check Supabase connection.')
+    } finally {
+      setSaving(false)
     }
-    saveToDB(updatedUsers)
-    closeModal()
   }
 
-  const deleteUser = (id: string) => {
-    if (!confirm('Delete this user?')) return
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  const deleteUser = async (id: string) => {
+    const user = users.find(u => u.id === id)
+    if (!user) return
+    if (!confirm(`Delete user "${user.username}"? This cannot be undone.`)) return
+    try {
+      await syncToSupabase('delete', { username: user.username })
+    } catch { /* ignore Supabase errors on delete */ }
     const updated = users.filter(u => u.id !== id)
     const newActive = activeUserId === id ? (updated[0]?.id || '') : activeUserId
-    saveToDB(updated, newActive)
+    saveToLocalStorage(updated, newActive)
   }
+
+  // ── Reset password ────────────────────────────────────────────────────────
+
+  const resetPassword = async (user: DyeflowUser) => {
+    const newPwd = prompt(`Set new password for "${user.username}":`)
+    if (!newPwd || !newPwd.trim()) return
+    if (newPwd.trim().length < 4) { alert('Password must be at least 4 characters.'); return }
+    try {
+      await syncToSupabase('update', {
+        username:       user.username,
+        targetUsername: user.username,
+        password:       newPwd.trim(),
+        full_name:      user.username,
+        role:           user.role,
+        is_active:      true,
+      })
+      alert(`✓ Password updated for "${user.username}"`)
+    } catch (err: any) {
+      alert(`Failed: ${err.message}`)
+    }
+  }
+
+  // ── Active user ───────────────────────────────────────────────────────────
 
   const setActiveUser = (id: string) => {
     const raw = localStorage.getItem('dyeflow_db')
@@ -266,8 +338,6 @@ export default function UserManagementPage() {
     setActiveUserId(id)
     window.dispatchEvent(new Event('dyeflow-db-updated'))
   }
-
-  // ── Group pages for the matrix ────────────────────────────────────────────
 
   const groupedPages = useMemo(() => {
     const groups: Record<string, PageDef[]> = {}
@@ -287,7 +357,7 @@ export default function UserManagementPage() {
   return (
     <div className="content">
 
-      {/* ── Active User Banner ─────────────────────────────────────────── */}
+      {/* Active user banner */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--success-light)', borderRadius: 8, border: '1px solid var(--success)' }}>
           <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 700, flexShrink: 0 }}>
@@ -295,10 +365,8 @@ export default function UserManagementPage() {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--success)' }}>
-              {activeUser ? activeUser.username : 'No active user'} &nbsp;
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)' }}>
-                ({activeUser?.role || 'no role'})
-              </span>
+              {activeUser ? activeUser.username : 'No active user'}
+              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>({activeUser?.role || 'no role'})</span>
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
               Data scope: {activeUser ? getScopeSummary(activeUser) : '-'} &nbsp;·&nbsp;
@@ -309,14 +377,12 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      {/* ── Users Table ───────────────────────────────────────────────── */}
+      {/* Users table */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="card-title">Users</span>
-            <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
-              {users.length}
-            </span>
+            <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{users.length}</span>
           </div>
           <button className="primary" onClick={openAddModal}>+ Add User</button>
         </div>
@@ -345,7 +411,7 @@ export default function UserManagementPage() {
                     <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{user.id}</td>
                     <td style={{ fontWeight: 600 }}>{user.username}</td>
                     <td>
-                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)', fontWeight: 600 }}>
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 600, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)' }}>
                         {ROLE_LABELS[user.role as RolePreset] || user.role}
                       </span>
                     </td>
@@ -357,17 +423,13 @@ export default function UserManagementPage() {
                       }
                     </td>
                     <td style={{ fontSize: 12, fontWeight: 600 }}>{granted}</td>
-                    <td>
-                      {isActive
-                        ? <span className="badge badge-done">✓ Active</span>
-                        : <span className="badge badge-pending">Inactive</span>
-                      }
-                    </td>
+                    <td>{isActive ? <span className="badge badge-done">✓ Active</span> : <span className="badge badge-pending">Inactive</span>}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="xs primary" onClick={() => setActiveUser(user.id)} disabled={isActive} style={{ opacity: isActive ? 0.4 : 1, marginRight: 4 }}>
                         {isActive ? 'Using' : 'Use'}
                       </button>
                       <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
+                      <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user)}>Reset Pwd</button>
                       <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
                     </td>
                   </tr>
@@ -378,14 +440,14 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      {/* ── Legend ──────────────────────────────────────────────────────── */}
+      {/* Legend */}
       <div className="card">
         <div className="card-header"><span className="card-title" style={{ fontSize: 13 }}>Permission Legend</span></div>
         <div style={{ display: 'flex', gap: 24, padding: '0 16px 16px', flexWrap: 'wrap', fontSize: 12 }}>
           {[
-            { label: 'View',   color: 'var(--accent)',   desc: 'Can open and read the page' },
-            { label: 'Edit',   color: '#D97706',         desc: 'Can create and update records' },
-            { label: 'Delete', color: 'var(--danger)',   desc: 'Can delete records' },
+            { label: 'View',   color: 'var(--accent)',  desc: 'Can open and read the page' },
+            { label: 'Edit',   color: '#D97706',        desc: 'Can create and update records' },
+            { label: 'Delete', color: 'var(--danger)',  desc: 'Can delete records' },
           ].map(({ label, color, desc }) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 12, height: 12, borderRadius: 3, background: color, display: 'inline-block' }} />
@@ -394,25 +456,22 @@ export default function UserManagementPage() {
           ))}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)' }}>↪</span>
-            Dynamic pages (auto-generated from machines / processes / supervisors you add)
+            Dynamic pages auto-generated from machines / processes / supervisors
           </div>
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════════════
-          MODAL
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* ═══ MODAL ═════════════════════════════════════════════════════════ */}
       {isModalOpen && (
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 860, width: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
 
-            {/* Modal header */}
             <div className="modal-header" style={{ flexShrink: 0 }}>
-              <span className="modal-title">{editingUserId ? 'Edit User' : 'Create User'}</span>
+              <span className="modal-title">{editingUserId ? `Edit User — ${editingUsername}` : 'Create New User'}</span>
               <button className="small" onClick={closeModal}>✕</button>
             </div>
 
-            {/* Tab bar */}
+            {/* Tabs */}
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border-light)', flexShrink: 0 }}>
               {(['basic', 'permissions'] as const).map(tab => (
                 <button key={tab} onClick={() => setModalTab(tab)} style={{
@@ -421,75 +480,113 @@ export default function UserManagementPage() {
                   background: 'transparent', color: modalTab === tab ? 'var(--accent)' : 'var(--text-secondary)',
                   cursor: 'pointer', marginBottom: -1,
                 }}>
-                  {tab === 'basic' ? '👤 Basic Info' : `🔐 Permissions (${countGranted(formPerms)} pages)`}
+                  {tab === 'basic' ? '👤 Basic Info & Password' : `🔐 Permissions (${countGranted(formPerms)} pages)`}
                 </button>
               ))}
             </div>
 
-            {/* Scrollable body */}
+            {/* Body */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
 
-              {/* ── BASIC TAB ─────────────────────────────────────────── */}
+              {/* Error */}
+              {saveError && (
+                <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--danger)', marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  ⚠ {saveError}
+                </div>
+              )}
+
+              {/* ── BASIC TAB ─────────────────────────────────────── */}
               {modalTab === 'basic' && (
                 <div>
+                  {/* Row 1: username + role */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
                       <label>Username *</label>
-                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. Machine Operator 1" />
+                      <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.operator" autoFocus />
                     </div>
                     <div className="form-group">
                       <label>Role</label>
                       <select value={formData.role} onChange={e => applyRolePreset(e.target.value as RolePreset)}>
-                        {Object.entries(ROLE_LABELS).map(([k, v]) => (
-                          <option key={k} value={k}>{v}</option>
-                        ))}
+                        {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Password section */}
+                  <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
+                      🔑 Password {editingUserId && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>(leave blank to keep existing password)</span>}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                      <div className="form-group">
+                        <label>{editingUserId ? 'New Password' : 'Password *'}</label>
+                        <PasswordInput
+                          value={formData.password}
+                          onChange={v => { setFormData(f => ({ ...f, password: v })); setSaveError('') }}
+                          placeholder={editingUserId ? 'Leave blank to keep current' : 'Min. 4 characters'}
+                          required={!editingUserId}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Confirm Password {!editingUserId && '*'}</label>
+                        <PasswordInput
+                          value={formData.confirmPassword}
+                          onChange={v => { setFormData(f => ({ ...f, confirmPassword: v })); setSaveError('') }}
+                          placeholder="Re-enter password"
+                        />
+                      </div>
+                    </div>
+                    {formData.password && formData.confirmPassword && formData.password !== formData.confirmPassword && (
+                      <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>⚠ Passwords do not match</div>
+                    )}
+                    {formData.password && formData.confirmPassword && formData.password === formData.confirmPassword && (
+                      <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 6 }}>✓ Passwords match</div>
+                    )}
+                  </div>
+
+                  {/* Scope + unit/party */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
-                      <label>Data Visibility (Scope)</label>
+                      <label>Data Scope</label>
                       <select value={formData.scopeMode} onChange={e => setFormData(f => ({ ...f, scopeMode: e.target.value }))}>
                         {SCOPE_MODES.map(m => <option key={m} value={m}>{SCOPE_LABELS[m]}</option>)}
                       </select>
                     </div>
                     <div className="form-group">
-                      <label>Unit <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>(for unit-based scope)</span></label>
+                      <label>Unit</label>
                       <input value={formData.unit} onChange={e => setFormData(f => ({ ...f, unit: e.target.value }))}
-                        placeholder="Type or select unit" list="unit-list"
+                        placeholder="Unit name" list="unit-list"
                         disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
                       <datalist id="unit-list">{availableUnits.map(u => <option key={u} value={u} />)}</datalist>
                     </div>
                     <div className="form-group">
-                      <label>Party <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>(for party-based scope)</span></label>
+                      <label>Party</label>
                       <input value={formData.party} onChange={e => setFormData(f => ({ ...f, party: e.target.value }))}
-                        placeholder="Type or select party" list="party-list"
+                        placeholder="Party name" list="party-list"
                         disabled={formData.scopeMode === 'all' || formData.scopeMode === 'unit'} />
                       <datalist id="party-list">{availableParties.map(p => <option key={p} value={p} />)}</datalist>
                     </div>
-                    <div className="form-group">
-                      <label>Notes</label>
-                      <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes" />
-                    </div>
                   </div>
 
-                  {/* ── Supervisor Filter ─────────────────────────────── */}
-                  <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '16px', marginBottom: 14, border: '1px solid var(--border-light)' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
-                      🔍 Data Visibility — Supervisor Filter
-                    </div>
-                    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <div className="form-group" style={{ marginBottom: 14 }}>
+                    <label>Notes</label>
+                    <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes about this user" />
+                  </div>
+
+                  {/* Supervisor filter */}
+                  <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>🔍 Supervisor Data Filter</div>
+                    <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                         <input type="radio" name="sf" checked={formPerms.supervisorFilter === 'all'}
                           onChange={() => setFormPerms(p => ({ ...p, supervisorFilter: 'all' }))} />
-                        All supervisors — see everyone's data
+                        All supervisors
                       </label>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                           <input type="radio" name="sf" checked={formPerms.supervisorFilter !== 'all'}
-                            onChange={() => {
-                              const first = supervisorNames[0] || ''
-                              setFormPerms(p => ({ ...p, supervisorFilter: first }))
-                            }} />
-                          Specific supervisor only:
+                            onChange={() => setFormPerms(p => ({ ...p, supervisorFilter: supervisorNames[0] || '' }))} />
+                          Specific supervisor:
                         </label>
                         <select
                           value={formPerms.supervisorFilter === 'all' ? '' : formPerms.supervisorFilter}
@@ -502,60 +599,48 @@ export default function UserManagementPage() {
                         </select>
                       </div>
                     </div>
-                    <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 10, marginBottom: 0, lineHeight: 1.6 }}>
-                      When a specific supervisor is selected, this user will only see orders, batches, FMS entries, and machine sheets
-                      belonging to that supervisor — even on pages they have full view access to.
+                    <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8, marginBottom: 0, lineHeight: 1.6 }}>
+                      Restricts all data on every page to orders belonging to the selected supervisor only.
                     </p>
                   </div>
 
-                  {formData.role !== 'admin' && (
-                    <div style={{ padding: '10px 14px', background: 'var(--accent-light)', borderRadius: 8, fontSize: 12, color: 'var(--accent-dark)', lineHeight: 1.6 }}>
-                      <strong>Tip:</strong> Switch to the <em>Permissions</em> tab to grant page-level access (View / Edit / Delete per page).
-                      Role preset above auto-fills a sensible starting set.
-                    </div>
-                  )}
-                  {formData.role === 'admin' && (
-                    <div style={{ padding: '10px 14px', background: 'var(--danger-light)', borderRadius: 8, fontSize: 12, color: 'var(--danger)', lineHeight: 1.6 }}>
-                      <strong>Admin role:</strong> This user bypasses all page-permission checks and can see/edit/delete everything.
-                    </div>
-                  )}
+                  {formData.role === 'admin'
+                    ? <div style={{ padding: '10px 14px', background: 'var(--danger-light)', borderRadius: 8, fontSize: 12, color: 'var(--danger)' }}>
+                        <strong>Admin role:</strong> Bypasses all page-permission checks — full access to everything.
+                      </div>
+                    : <div style={{ padding: '10px 14px', background: 'var(--accent-light)', borderRadius: 8, fontSize: 12, color: 'var(--accent-dark)' }}>
+                        <strong>Tip:</strong> Switch to the Permissions tab to control exactly which pages this user can access.
+                      </div>
+                  }
                 </div>
               )}
 
-              {/* ── PERMISSIONS TAB ───────────────────────────────────── */}
+              {/* ── PERMISSIONS TAB ───────────────────────────────── */}
               {modalTab === 'permissions' && (
                 <div>
                   {formData.role === 'admin' ? (
                     <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-tertiary)' }}>
                       <div style={{ fontSize: 32, marginBottom: 12 }}>👑</div>
                       <div style={{ fontSize: 14, fontWeight: 600 }}>Admin bypasses all permission checks.</div>
-                      <div style={{ fontSize: 12, marginTop: 6 }}>Change the role to Custom or another preset to configure page permissions.</div>
+                      <div style={{ fontSize: 12, marginTop: 6 }}>Change the role to configure page-level permissions.</div>
                     </div>
                   ) : (
                     <>
-                      {/* Quick actions */}
                       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, marginRight: 4 }}>Quick:</span>
                         <button className="xs primary" onClick={grantAll}>Grant All (Full)</button>
                         <button className="xs" onClick={viewAll}>View-Only All</button>
                         <button className="xs danger" onClick={clearAll}>Clear All</button>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 8 }}>
-                          {countGranted(formPerms)} pages with view access
-                        </span>
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 8 }}>{countGranted(formPerms)} pages with view access</span>
                       </div>
-
-                      {/* Column headers */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 56px 56px 56px', padding: '0 8px', marginBottom: 6 }}>
                         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Page</span>
                         {['View', 'Edit', 'Del'].map(h => (
                           <span key={h} style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', textAlign: 'center' }}>{h}</span>
                         ))}
                       </div>
-
-                      {/* Groups */}
                       {Object.entries(groupedPages).map(([group, pages]) => (
                         <div key={group} style={{ marginBottom: 16 }}>
-                          {/* Group header */}
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                             <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{group}</span>
                             <div style={{ flex: 1, height: 1, background: 'var(--border-light)' }} />
@@ -564,12 +649,9 @@ export default function UserManagementPage() {
                             <button className="xs" onClick={() => grantGroupAll(group, EMPTY_PERM)} style={{ fontSize: 10, padding: '2px 7px' }}>None</button>
                           </div>
                           {pages.map(page => (
-                            <PagePermRow
-                              key={page.path}
-                              page={page}
+                            <PagePermRow key={page.path} page={page}
                               perm={formPerms.pages[page.path] || EMPTY_PERM}
-                              onChange={perm => setPagePerm(page.path, perm)}
-                            />
+                              onChange={perm => setPagePerm(page.path, perm)} />
                           ))}
                         </div>
                       ))}
@@ -579,11 +661,12 @@ export default function UserManagementPage() {
               )}
             </div>
 
-            {/* Modal footer */}
-            <div style={{ flexShrink: 0, padding: '14px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={closeModal}>Cancel</button>
-              <button className="primary" onClick={saveUser}>
-                {editingUserId ? '✓ Update User' : '✓ Create User'}
+            {/* Footer */}
+            <div style={{ flexShrink: 0, padding: '14px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+              {saveError && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>⚠ {saveError}</span>}
+              <button onClick={closeModal} disabled={saving}>Cancel</button>
+              <button className="primary" onClick={saveUser} disabled={saving}>
+                {saving ? 'Saving…' : editingUserId ? '✓ Update User' : '✓ Create User'}
               </button>
             </div>
           </div>
