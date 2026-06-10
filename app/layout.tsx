@@ -27,10 +27,7 @@ export default function RootLayout({
         style={{ margin: 0, padding: 0, height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <DbProvider>
-          <Navigation />
-          <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-            {children}
-          </div>
+          {children}
         </DbProvider>
       </body>
     </html>
