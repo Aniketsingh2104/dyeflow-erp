@@ -316,6 +316,13 @@ export default function UserManagementPage() {
   }, [allPages])
 
   const activeUser = users.find(u => u.id === activeUserId)
+  // Determine who is actually logged in from the session
+  const loggedInUsername = (() => {
+    try {
+      const s = localStorage.getItem('dyeflow_session')
+      return s ? JSON.parse(s)?.username?.toLowerCase() : null
+    } catch { return null }
+  })()
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -365,13 +372,13 @@ export default function UserManagementPage() {
                 <th>Data Scope</th>
                 <th>Supervisor Filter</th>
                 <th>Pages</th>
-                <th>Status</th>
+                <th>Session</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {users.map(user => {
-                const isActive = user.id === activeUserId
+                const isActive = (user.username || '').toLowerCase() === loggedInUsername
                 const granted  = user.role === 'admin' ? '∞' : `${countGranted(user.permissions || { pages: {}, supervisorFilter: 'all' })}`
                 const sfLabel  = user.permissions?.supervisorFilter || 'all'
                 return (
@@ -393,11 +400,8 @@ export default function UserManagementPage() {
                         : <span style={{ fontWeight: 600, color: 'var(--accent-dark)' }}>{sfLabel}</span>}
                     </td>
                     <td style={{ fontSize: 12, fontWeight: 600 }}>{granted}</td>
-                    <td>{isActive ? <span className="badge badge-done">✓ Active</span> : <span className="badge badge-pending">Inactive</span>}</td>
+                    <td>{isActive ? <span className="badge badge-done">✓ Current session</span> : <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="xs primary" onClick={() => setActiveUser(user.id)} disabled={isActive} style={{ opacity: isActive ? 0.4 : 1, marginRight: 4 }}>
-                        {isActive ? 'Using' : 'Use'}
-                      </button>
                       <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
                       <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
                       <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
