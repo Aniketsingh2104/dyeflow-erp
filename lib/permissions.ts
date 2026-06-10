@@ -17,6 +17,7 @@ export interface PagePerm {
 export interface UserPermissions {
   pages: Record<string, PagePerm>
   supervisorFilter: string
+  allowedSheets?: string[]   // array of sheet IDs the user can access
 }
 
 export interface PageDef {

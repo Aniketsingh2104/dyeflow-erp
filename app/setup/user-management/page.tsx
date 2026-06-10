@@ -119,6 +119,7 @@ export default function UserManagementPage() {
   const [modalTab, setModalTab]         = useState<'basic' | 'permissions'>('basic')
   const [allPages, setAllPages]         = useState<PageDef[]>([])
   const [supervisorNames, setSupervisorNames] = useState<string[]>([])
+  const [allSheets, setAllSheets]       = useState<{id:string,title:string,assignedTo:string}[]>([])
   const [saveError, setSaveError]       = useState('')
 
   const [formData, setFormData] = useState({
@@ -160,6 +161,7 @@ export default function UserManagementPage() {
     setUsers(db.users || [])
     setActiveUserId(db.activeUserId || db.users?.[0]?.id || '')
     setSupervisorNames((db.supervisors || []).map((s: any) => s.name).filter(Boolean))
+    setAllSheets((db.orderSheets || []).map((s: any) => ({ id: s.id, title: s.title, assignedTo: s.assignedTo || '' })))
     const parties = [...new Set((db.orders || []).map((x: any) => x.party).filter(Boolean))].sort() as string[]
     setAvailableParties(parties)
   }
@@ -629,6 +631,58 @@ export default function UserManagementPage() {
                           ))}
                         </div>
                       ))}
+
+                      {/* ── Order Sheet Access ── */}
+                      {allSheets.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '.06em' }}>📋 Order Sheet Access</span>
+                            <div style={{ flex: 1, height: 1, background: 'var(--border-light)' }} />
+                            <button className="xs" onClick={() => setFormPerms(p => ({ ...p, allowedSheets: allSheets.map(s => s.id) }))} style={{ fontSize: 10, padding: '2px 7px' }}>All</button>
+                            <button className="xs" onClick={() => setFormPerms(p => ({ ...p, allowedSheets: [] }))} style={{ fontSize: 10, padding: '2px 7px' }}>None</button>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {allSheets.map(sheet => {
+                              const allowed = (formPerms.allowedSheets || []).includes(sheet.id)
+                              return (
+                                <label key={sheet.id} style={{
+                                  display: 'flex', alignItems: 'center', gap: 10,
+                                  padding: '8px 12px', borderRadius: 6, cursor: 'pointer',
+                                  background: allowed ? 'var(--accent-light)' : 'var(--bg-secondary)',
+                                  border: `1px solid ${allowed ? 'var(--accent)' : 'var(--border-light)'}`,
+                                }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={allowed}
+                                    onChange={e => {
+                                      const current = formPerms.allowedSheets || []
+                                      setFormPerms(p => ({
+                                        ...p,
+                                        allowedSheets: e.target.checked
+                                          ? [...current, sheet.id]
+                                          : current.filter(id => id !== sheet.id)
+                                      }))
+                                    }}
+                                    style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                                  />
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: 13, fontWeight: allowed ? 700 : 400, color: allowed ? 'var(--accent-dark)' : 'var(--text-primary)' }}>
+                                      {sheet.title}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                      {sheet.id} {sheet.assignedTo ? `· ${sheet.assignedTo}` : ''}
+                                    </div>
+                                  </div>
+                                  {allowed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ Access granted</span>}
+                                </label>
+                              )
+                            })}
+                          </div>
+                          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8 }}>
+                            Checked sheets will be visible to this user when they log in. Unchecked sheets are hidden.
+                          </p>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
