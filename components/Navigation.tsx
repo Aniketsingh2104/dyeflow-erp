@@ -341,17 +341,7 @@ export default function Navigation() {
           onMouseLeave={e => { if (!isActive('/setup')) e.currentTarget.style.background = 'transparent' }}
         >⚙ Setup</Link>
 
-        {/* Sheet Login */}
-        <Link href="/sheet-login" style={{
-          padding: '6px 12px', fontSize: '12px',
-          color: isActive('/sheet-login') ? 'var(--accent-dark)' : 'var(--text-primary)',
-          background: isActive('/sheet-login') ? 'var(--accent-light)' : 'var(--bg-primary)',
-          border: '1px solid var(--border-light)', borderRadius: 'var(--radius-sm)',
-          textDecoration: 'none', fontWeight: 500
-        }}
-          onMouseEnter={e => { if (!isActive('/sheet-login')) { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.borderColor = 'var(--accent)' } }}
-          onMouseLeave={e => { if (!isActive('/sheet-login')) { e.currentTarget.style.background = 'var(--bg-primary)'; e.currentTarget.style.borderColor = 'var(--border-light)' } }}
-        >Sheet Login</Link>
+        {/* Sheet Login — removed, page does not exist */}
       </div>
     </nav>
   )

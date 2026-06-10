@@ -458,7 +458,7 @@ export default function UserManagementPage() {
             </div>
 
             {/* Body */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+            <form onSubmit={e => { e.preventDefault(); saveUser() }} style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
 
               {saveError && (
                 <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--danger)', marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -629,7 +629,7 @@ export default function UserManagementPage() {
                   )}
                 </div>
               )}
-            </div>
+            </form>
 
             {/* Footer */}
             <div style={{ flexShrink: 0, padding: '14px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
