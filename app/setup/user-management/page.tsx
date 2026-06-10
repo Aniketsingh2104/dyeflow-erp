@@ -137,6 +137,8 @@ export default function UserManagementPage() {
     setAllPages(buildPageList())
     const raw = localStorage.getItem('dyeflow_db')
     const db  = raw ? JSON.parse(raw) : {}
+    // Migrate old users — ensure role and password fields exist
+    let changed = false
     if (!db.users || db.users.length === 0) {
       db.users = [{
         id: 'USR-001', username: 'admin', password: 'dyeflow123',
@@ -144,8 +146,17 @@ export default function UserManagementPage() {
         notes: 'Default admin', createdAt: new Date().toLocaleString('en-GB'),
       }]
       db.activeUserId = 'USR-001'
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+      changed = true
+    } else {
+      // Patch existing users that are missing role or password
+      db.users = db.users.map((u: any) => {
+        const patched = { ...u }
+        if (!patched.role) { patched.role = 'admin'; changed = true }
+        if (!patched.username) { patched.username = patched.id || 'user'; changed = true }
+        return patched
+      })
     }
+    if (changed) localStorage.setItem('dyeflow_db', JSON.stringify(db))
     setUsers(db.users || [])
     setActiveUserId(db.activeUserId || db.users?.[0]?.id || '')
     setSupervisorNames((db.supervisors || []).map((s: any) => s.name).filter(Boolean))

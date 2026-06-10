@@ -190,7 +190,12 @@ export function getActiveUserRecord(): DyeflowUser | null {
 
 export function isAdminUser(user: DyeflowUser | null): boolean {
   if (!user) return false
-  return user.role === 'admin' || !user.permissions
+  // Only explicit 'admin' role gets admin access
+  // Users with no permissions object AND no role get treated as admin (legacy)
+  // Users with a role set always follow that role
+  if (user.role === 'admin') return true
+  if (!user.role && !user.permissions) return true  // legacy user with no setup
+  return false
 }
 
 export interface PermResult {
