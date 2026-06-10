@@ -6,20 +6,23 @@ import Navigation from '@/components/Navigation'
 
 const DB_KEY      = 'dyeflow_db'
 const SESSION_KEY = 'dyeflow_session'
-let pollTimer: any = null
-let saveTimer: any = null
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let saveTimer: ReturnType<typeof setTimeout>  | null = null
+
+// ── Supabase sync helpers ──────────────────────────────────────────────────────
 
 function saveToServer(jsonStr: string) {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(async () => {
     try {
       await fetch('/api/db', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: jsonStr,
+        body:    jsonStr,
       })
-    } catch { /* offline */ }
-  }, 400)
+    } catch { /* offline — data stays in localStorage */ }
+  }, 600)
 }
 
 function patchStorage() {
@@ -38,9 +41,8 @@ async function loadFromServer() {
     const res = await fetch('/api/db?_t=' + Date.now(), { cache: 'no-store' })
     if (!res.ok) return
     const json = await res.json()
-    const serverData = json.data
-    if (!serverData || Object.keys(serverData).length === 0) return
-    const serverStr = JSON.stringify(serverData)
+    if (!json.ok || !json.data || Object.keys(json.data).length === 0) return
+    const serverStr = JSON.stringify(json.data)
     const localStr  = localStorage.getItem(DB_KEY) || ''
     if (serverStr !== localStr) {
       const session = localStorage.getItem(SESSION_KEY)
@@ -56,57 +58,94 @@ function startPolling() {
   pollTimer = setInterval(loadFromServer, 5000)
 }
 
-/** Validate session — returns true if a valid session exists */
-function hasValidSession(): boolean {
+// ── Session helpers ────────────────────────────────────────────────────────────
+
+function getSession(): { username: string; role: string } | null {
+  if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(SESSION_KEY)
-    if (!raw) return false
-    const session = JSON.parse(raw)
-    if (!session?.username) return false
-    return true
+    if (!raw) return null
+    const s = JSON.parse(raw)
+    if (!s?.username) return null
+    return s
   } catch {
-    return false
+    return null
   }
 }
+
+// ── DbProvider ─────────────────────────────────────────────────────────────────
 
 export default function DbProvider({ children }: { children: React.ReactNode }) {
   const router   = useRouter()
   const pathname = usePathname()
   const isLogin  = pathname === '/login'
-  const [ready, setReady] = useState(false)
+
+  // 'checking' — haven't verified session yet (avoids flash of protected content)
+  // 'authed'   — session valid, show app
+  // 'login'    — no session, show login page
+  const [authState, setAuthState] = useState<'checking' | 'authed' | 'login'>('checking')
 
   useEffect(() => {
     if (isLogin) {
-      // On login page — just mark ready, no auth check needed
-      setReady(true)
+      // If already logged in and user visits /login, send to dashboard
+      const session = getSession()
+      if (session) {
+        router.replace('/')
+        return
+      }
+      setAuthState('login')
       return
     }
 
-    // On any other page — check for valid session
-    if (!hasValidSession()) {
+    // Protected page — check session
+    const session = getSession()
+    if (!session) {
+      setAuthState('login')
       router.replace('/login')
       return
     }
 
-    setReady(true)
+    // Session valid — start syncing
+    setAuthState('authed')
     patchStorage()
     loadFromServer()
     startPolling()
 
     return () => {
       if (pollTimer) clearInterval(pollTimer)
-      if (saveTimer) clearTimeout(saveTimer)
+      if (saveTimer)  clearTimeout(saveTimer)
     }
   }, [pathname])
 
-  // Don't flash nav while redirecting
-  if (!ready && !isLogin) return null
+  // Block render until we know auth state — prevents flashing protected content
+  if (authState === 'checking') {
+    return (
+      <div style={{
+        minHeight: '100vh', background: '#0f1117',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <div style={{ textAlign: 'center', color: '#5f5e5a' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#185FA5" strokeWidth="2" strokeLinecap="round"
+            style={{ animation: 'spin 0.8s linear infinite', display: 'block', margin: '0 auto 12px' }}>
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+          </svg>
+          <span style={{ fontSize: 13 }}>Loading…</span>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      </div>
+    )
+  }
 
+  // Login page — no nav, full screen
+  if (isLogin) {
+    return <>{children}</>
+  }
+
+  // App — nav + content
   return (
     <>
-      {/* Hide navigation on the login page */}
-      {!isLogin && <Navigation />}
-      <div style={isLogin ? {} : { flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <Navigation />
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
         {children}
       </div>
     </>
