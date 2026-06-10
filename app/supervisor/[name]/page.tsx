@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import RouteAssignment from './RouteAssignment'
 import ColumnSettingsModal from './ColumnSettingsModal'
 import { ColumnConfig, DEFAULT_COLUMNS, loadColumnConfig, saveColumnConfig, resetColumnConfig } from './column-config'
-import { useSupervisorFilter, AccessDenied } from '@/lib/permissions'
+import { useSupervisorFilter } from '@/lib/permissions'
+import { AccessDenied } from '@/lib/AccessDenied'
 
 export default function SupervisorDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: supervisorSlug } = use(params)

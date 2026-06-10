@@ -1,22 +1,12 @@
 /**
  * lib/permissions.ts
  * Single source of truth for the DyeFlow permission system.
- *
- * Covers:
- *  - Page registry (static + dynamic pages auto-discovered from db)
- *  - Permission read/write helpers
- *  - usePermission hook  → { canView, canEdit, canDelete, isAdmin }
- *  - useSupervisorFilter hook → string | null
- *  - Role presets
+ * NOTE: No JSX here — AccessDenied component is in lib/AccessDenied.tsx
  */
 
 'use client'
 
 import { useState, useEffect } from 'react'
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
 
 export interface PagePerm {
   view: boolean
@@ -25,15 +15,15 @@ export interface PagePerm {
 }
 
 export interface UserPermissions {
-  pages: Record<string, PagePerm>       // path → {view, edit, delete}
-  supervisorFilter: string              // 'all' | supervisor name
+  pages: Record<string, PagePerm>
+  supervisorFilter: string
 }
 
 export interface PageDef {
   path: string
   label: string
   group: string
-  dynamic?: boolean   // auto-generated from db
+  dynamic?: boolean
 }
 
 export interface DyeflowUser {
@@ -48,10 +38,6 @@ export interface DyeflowUser {
   permissions?: UserPermissions
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Default empty permissions
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const EMPTY_PERM: PagePerm = { view: false, edit: false, delete: false }
 export const FULL_PERM:  PagePerm = { view: true,  edit: true,  delete: true  }
 export const VIEW_PERM:  PagePerm = { view: true,  edit: false, delete: false }
@@ -61,135 +47,88 @@ export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
   supervisorFilter: 'all',
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Static page list — always available regardless of db content
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const STATIC_PAGES: PageDef[] = [
-  // Operations
-  { path: '/',                       label: 'Dashboard',               group: 'Operations' },
-  { path: '/orders',                 label: 'Orders',                  group: 'Operations' },
-  { path: '/order-sheets',           label: 'Order Sheets',            group: 'Operations' },
-  { path: '/pending-approvals',      label: 'Pending Approvals',       group: 'Operations' },
-  { path: '/edited-orders',          label: 'Edited Orders',           group: 'Operations' },
-  { path: '/splitted-orders',        label: 'Splitted Orders',         group: 'Operations' },
-  { path: '/date-calculator',        label: 'Date Calculator',         group: 'Operations' },
-  { path: '/batches',                label: 'Batch Tracking',          group: 'Operations' },
-  { path: '/batches/search',         label: 'Batch Trace',             group: 'Operations' },
-  { path: '/import',                 label: 'Import Orders (Excel)',   group: 'Operations' },
-  { path: '/repairing-order',        label: 'Repairing Order',         group: 'Operations' },
-  // Others
-  { path: '/machines',               label: 'Machine Sheets (All)',    group: 'Others' },
-  { path: '/production',             label: 'Production Kanban',       group: 'Others' },
-  { path: '/timeline',               label: 'Order Timeline',          group: 'Others' },
-  { path: '/shifts',                 label: 'Shift Management',        group: 'Others' },
-  // Faulty & FOB
-  { path: '/faulty',                 label: 'Faulty Records',          group: 'Faulty & FOB' },
-  { path: '/fob',                    label: 'FOB Records',             group: 'Faulty & FOB' },
-  { path: '/first-process-batch',    label: 'First Process Batch',     group: 'Faulty & FOB' },
-  // Greige
-  { path: '/greige/entry',           label: 'Greige Entry',            group: 'Greige' },
-  { path: '/greige/register',        label: 'Greige Register',         group: 'Greige' },
-  { path: '/greige/lots',            label: 'Greige Lot Details',      group: 'Greige' },
-  { path: '/greige/recheck',         label: 'Greige Recheck',          group: 'Greige' },
-  // Lab
-  { path: '/lab/indent',             label: 'Lab Indent',              group: 'Lab' },
-  { path: '/lab/requested',          label: 'Lab Requested',           group: 'Lab' },
-  { path: '/lab/requested-unit',     label: 'Lab Requested (Unit)',    group: 'Lab' },
-  { path: '/lab/rechecked',          label: 'Rechecked Lab',           group: 'Lab' },
-  { path: '/lab/inhouse-recheck',    label: 'InHouse Lab Recheck',     group: 'Lab' },
-  { path: '/lab/fms',                label: 'Lab FMS',                 group: 'Lab' },
-  { path: '/lab/submitted',          label: 'Lab Submitted',           group: 'Lab' },
-  { path: '/lab/approval',           label: 'Approved Lab',            group: 'Lab' },
-  { path: '/lab/receipe',            label: 'Lab Recipe',              group: 'Lab' },
-  { path: '/lab/with-issue',         label: 'Lab With Issue',          group: 'Lab' },
-  { path: '/lab/pc-lab',             label: 'PC Lab',                  group: 'Lab' },
-  // Reports
-  { path: '/reports',                label: 'Reports',                 group: 'Reports' },
-  { path: '/reports/daily',          label: 'Daily Summary',           group: 'Reports' },
-  { path: '/report-agent',           label: 'Report Agent',            group: 'Reports' },
-  { path: '/audit-log',              label: 'Audit Log',               group: 'Reports' },
-  // AI
-  { path: '/ai-assistant',           label: 'AI Assistant',            group: 'AI' },
-  // Supervisor overview
-  { path: '/supervisor',             label: 'Supervisors Overview',    group: 'Supervisors' },
-  // Setup
-  { path: '/setup',                  label: 'Setup Overview',          group: 'Setup' },
-  { path: '/setup/factory-settings', label: 'Factory Settings',        group: 'Setup' },
-  { path: '/setup/supervisor-master',label: 'Supervisor Master',       group: 'Setup' },
-  { path: '/setup/customer-master',  label: 'Customer Master',         group: 'Setup' },
-  { path: '/setup/article-master',   label: 'Article→Supervisor Map',  group: 'Setup' },
-  { path: '/setup/process-route-master', label: 'Process Route Master',group: 'Setup' },
-  { path: '/setup/process-machine-master', label: 'Process & Machine Map', group: 'Setup' },
-  { path: '/setup/process-master',   label: 'Process Master',          group: 'Setup' },
-  { path: '/setup/machine-master',   label: 'Machine Master',          group: 'Setup' },
-  { path: '/setup/user-management',  label: 'User Management',         group: 'Setup' },
-  { path: '/setup/colour-chemical-master', label: 'Colour Chemical Master', group: 'Setup' },
-  { path: '/setup/shade-master',     label: 'Shade Master',            group: 'Setup' },
-  { path: '/setup/holiday-master',   label: 'Holiday Master',          group: 'Setup' },
-  { path: '/setup/information',      label: 'System Information',      group: 'Setup' },
-  // PC
-  { path: '/pc',                     label: 'PC Overview',             group: 'PC' },
-  { path: '/mobile',                 label: 'Mobile / Floor View',     group: 'Other' },
+  { path: '/',                             label: 'Dashboard',               group: 'Operations' },
+  { path: '/orders',                       label: 'Orders',                  group: 'Operations' },
+  { path: '/order-sheets',                 label: 'Order Sheets',            group: 'Operations' },
+  { path: '/pending-approvals',            label: 'Pending Approvals',       group: 'Operations' },
+  { path: '/edited-orders',               label: 'Edited Orders',           group: 'Operations' },
+  { path: '/splitted-orders',             label: 'Splitted Orders',         group: 'Operations' },
+  { path: '/date-calculator',             label: 'Date Calculator',         group: 'Operations' },
+  { path: '/batches',                     label: 'Batch Tracking',          group: 'Operations' },
+  { path: '/batches/search',              label: 'Batch Trace',             group: 'Operations' },
+  { path: '/import',                      label: 'Import Orders (Excel)',   group: 'Operations' },
+  { path: '/repairing-order',             label: 'Repairing Order',         group: 'Operations' },
+  { path: '/machines',                    label: 'Machine Sheets (All)',    group: 'Others' },
+  { path: '/production',                  label: 'Production Kanban',       group: 'Others' },
+  { path: '/timeline',                    label: 'Order Timeline',          group: 'Others' },
+  { path: '/shifts',                      label: 'Shift Management',        group: 'Others' },
+  { path: '/faulty',                      label: 'Faulty Records',          group: 'Faulty & FOB' },
+  { path: '/fob',                         label: 'FOB Records',             group: 'Faulty & FOB' },
+  { path: '/first-process-batch',         label: 'First Process Batch',     group: 'Faulty & FOB' },
+  { path: '/greige/entry',                label: 'Greige Entry',            group: 'Greige' },
+  { path: '/greige/register',             label: 'Greige Register',         group: 'Greige' },
+  { path: '/greige/lots',                 label: 'Greige Lot Details',      group: 'Greige' },
+  { path: '/greige/recheck',              label: 'Greige Recheck',          group: 'Greige' },
+  { path: '/lab/indent',                  label: 'Lab Indent',              group: 'Lab' },
+  { path: '/lab/requested',               label: 'Lab Requested',           group: 'Lab' },
+  { path: '/lab/requested-unit',          label: 'Lab Requested (Unit)',    group: 'Lab' },
+  { path: '/lab/rechecked',               label: 'Rechecked Lab',           group: 'Lab' },
+  { path: '/lab/inhouse-recheck',         label: 'InHouse Lab Recheck',     group: 'Lab' },
+  { path: '/lab/fms',                     label: 'Lab FMS',                 group: 'Lab' },
+  { path: '/lab/submitted',               label: 'Lab Submitted',           group: 'Lab' },
+  { path: '/lab/approval',                label: 'Approved Lab',            group: 'Lab' },
+  { path: '/lab/receipe',                 label: 'Lab Recipe',              group: 'Lab' },
+  { path: '/lab/with-issue',              label: 'Lab With Issue',          group: 'Lab' },
+  { path: '/lab/pc-lab',                  label: 'PC Lab',                  group: 'Lab' },
+  { path: '/reports',                     label: 'Reports',                 group: 'Reports' },
+  { path: '/reports/daily',               label: 'Daily Summary',           group: 'Reports' },
+  { path: '/report-agent',                label: 'Report Agent',            group: 'Reports' },
+  { path: '/audit-log',                   label: 'Audit Log',               group: 'Reports' },
+  { path: '/ai-assistant',                label: 'AI Assistant',            group: 'AI' },
+  { path: '/supervisor',                  label: 'Supervisors Overview',    group: 'Supervisors' },
+  { path: '/setup',                       label: 'Setup Overview',          group: 'Setup' },
+  { path: '/setup/factory-settings',      label: 'Factory Settings',        group: 'Setup' },
+  { path: '/setup/supervisor-master',     label: 'Supervisor Master',       group: 'Setup' },
+  { path: '/setup/customer-master',       label: 'Customer Master',         group: 'Setup' },
+  { path: '/setup/article-master',        label: 'Article→Supervisor Map',  group: 'Setup' },
+  { path: '/setup/process-route-master',  label: 'Process Route Master',    group: 'Setup' },
+  { path: '/setup/process-machine-master',label: 'Process & Machine Map',   group: 'Setup' },
+  { path: '/setup/process-master',        label: 'Process Master',          group: 'Setup' },
+  { path: '/setup/machine-master',        label: 'Machine Master',          group: 'Setup' },
+  { path: '/setup/user-management',       label: 'User Management',         group: 'Setup' },
+  { path: '/setup/colour-chemical-master',label: 'Colour Chemical Master',  group: 'Setup' },
+  { path: '/setup/shade-master',          label: 'Shade Master',            group: 'Setup' },
+  { path: '/setup/holiday-master',        label: 'Holiday Master',          group: 'Setup' },
+  { path: '/setup/information',           label: 'System Information',      group: 'Setup' },
+  { path: '/pc',                          label: 'PC Overview',             group: 'PC' },
+  { path: '/mobile',                      label: 'Mobile / Floor View',     group: 'Other' },
 ]
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dynamic page builder — reads db and adds machine / FMS / supervisor pages
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function buildPageList(): PageDef[] {
   const pages: PageDef[] = [...STATIC_PAGES]
-
   if (typeof window === 'undefined') return pages
-
   try {
     const raw = localStorage.getItem('dyeflow_db')
     if (!raw) return pages
     const db = JSON.parse(raw)
-
-    // Machine pages — one per machine
     for (const m of (db.machines || [])) {
       const slug = (m.id || m.name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
       if (!slug) continue
-      pages.push({
-        path: `/machines/${slug}`,
-        label: m.name || m.id,
-        group: 'Machines',
-        dynamic: true,
-      })
+      pages.push({ path: `/machines/${slug}`, label: m.name || m.id, group: 'Machines', dynamic: true })
     }
-
-    // FMS pages — one per enabled process
-    const processList = db.processList || []
-    for (const p of processList) {
+    for (const p of (db.processList || [])) {
       if (!p.enabled) continue
-      pages.push({
-        path: `/fms/${p.code}`,
-        label: `FMS — ${p.code} · ${p.name}`,
-        group: 'FMS',
-        dynamic: true,
-      })
+      pages.push({ path: `/fms/${p.code}`, label: `FMS — ${p.code} · ${p.name}`, group: 'FMS', dynamic: true })
     }
-
-    // Supervisor pages — one per supervisor
     for (const s of (db.supervisors || [])) {
       const idSlug = encodeURIComponent(s.id || s.name || '')
       if (!idSlug) continue
-      pages.push({
-        path: `/supervisor/${idSlug}`,
-        label: `Supervisor — ${s.name}`,
-        group: 'Supervisors',
-        dynamic: true,
-      })
+      pages.push({ path: `/supervisor/${idSlug}`, label: `Supervisor — ${s.name}`, group: 'Supervisors', dynamic: true })
     }
-  } catch { /* ignore parse errors */ }
-
+  } catch { /* ignore */ }
   return pages
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Role presets
-// ─────────────────────────────────────────────────────────────────────────────
 
 export type RolePreset = 'admin' | 'machine_operator' | 'supervisor_role' | 'lab_technician' | 'viewer' | 'custom'
 
@@ -202,75 +141,39 @@ export const ROLE_LABELS: Record<RolePreset, string> = {
   custom:           'Custom',
 }
 
-/**
- * Generate a permissions object from a role preset.
- * For machine_operator and supervisor_role the caller should then
- * narrow pages further based on specific machine / supervisor selection.
- */
 export function buildPermissionsFromRole(
   role: RolePreset,
   allPages: PageDef[],
-  supervisorFilter: string = 'all'
+  supervisorFilter = 'all'
 ): UserPermissions {
   const pages: Record<string, PagePerm> = {}
-
   const grant = (path: string, perm: PagePerm) => { pages[path] = perm }
-  const grantGroup = (group: string, perm: PagePerm) => {
-    allPages.filter(p => p.group === group).forEach(p => grant(p.path, perm))
-  }
-  const grantAll = (perm: PagePerm) => {
-    allPages.forEach(p => grant(p.path, perm))
-  }
+  const grantGroup = (group: string, perm: PagePerm) => allPages.filter(p => p.group === group).forEach(p => grant(p.path, perm))
+  const grantAll   = (perm: PagePerm) => allPages.forEach(p => grant(p.path, perm))
 
   switch (role) {
-    case 'admin':
-      grantAll(FULL_PERM)
-      break
-
-    case 'viewer':
-      grantAll(VIEW_PERM)
-      break
-
+    case 'admin':           grantAll(FULL_PERM); break
+    case 'viewer':          grantAll(VIEW_PERM); break
     case 'machine_operator':
-      // Basic operations — view only
       ;['/orders', '/batches', '/batches/search', '/', '/supervisor'].forEach(p => grant(p, VIEW_PERM))
-      // Machine pages + FMS — view + edit (no delete)
-      allPages.filter(p => p.group === 'Machines' || p.group === 'FMS').forEach(p =>
-        grant(p.path, { view: true, edit: true, delete: false })
-      )
+      allPages.filter(p => p.group === 'Machines' || p.group === 'FMS').forEach(p => grant(p.path, { view: true, edit: true, delete: false }))
       break
-
     case 'supervisor_role':
-      ;['/orders', '/batches', '/batches/search', '/', '/supervisor'].forEach(p =>
-        grant(p, { view: true, edit: true, delete: false })
-      )
-      allPages.filter(p => p.group === 'Supervisors').forEach(p =>
-        grant(p.path, { view: true, edit: true, delete: false })
-      )
+      ;['/orders', '/batches', '/batches/search', '/', '/supervisor'].forEach(p => grant(p, { view: true, edit: true, delete: false }))
+      allPages.filter(p => p.group === 'Supervisors').forEach(p => grant(p.path, { view: true, edit: true, delete: false }))
       break
-
     case 'lab_technician':
       grantGroup('Lab', { view: true, edit: true, delete: false })
       ;['/orders', '/batches', '/'].forEach(p => grant(p, VIEW_PERM))
       break
-
-    case 'custom':
-    default:
-      // Start with nothing — admin will hand-pick
-      break
+    default: break
   }
-
   return { pages, supervisorFilter }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Session helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 const SESSION_KEY = 'dyeflow_session'
 const DB_KEY      = 'dyeflow_db'
 
-/** Read the active user record from db (matching session username). */
 export function getActiveUserRecord(): DyeflowUser | null {
   if (typeof window === 'undefined') return null
   try {
@@ -285,34 +188,23 @@ export function getActiveUserRecord(): DyeflowUser | null {
   } catch { return null }
 }
 
-/** True if the active user is admin (role==='admin' or no permissions set). */
 export function isAdminUser(user: DyeflowUser | null): boolean {
   if (!user) return false
   return user.role === 'admin' || !user.permissions
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// usePermission hook
-// ─────────────────────────────────────────────────────────────────────────────
-
 export interface PermResult {
-  canView:   boolean
-  canEdit:   boolean
+  canView: boolean
+  canEdit: boolean
   canDelete: boolean
-  isAdmin:   boolean
-  loading:   boolean
+  isAdmin: boolean
+  loading: boolean
 }
 
-/**
- * usePermission('/machines/long-tube-jet-no-30')
- * Returns live canView / canEdit / canDelete for the current logged-in user.
- * Admins (role==='admin' or no permissions object) always get full access.
- */
 export function usePermission(path: string): PermResult {
   const [result, setResult] = useState<PermResult>({
     canView: true, canEdit: true, canDelete: true, isAdmin: true, loading: true,
   })
-
   useEffect(() => {
     const compute = () => {
       const user = getActiveUserRecord()
@@ -322,15 +214,8 @@ export function usePermission(path: string): PermResult {
       }
       const perms = user.permissions || DEFAULT_USER_PERMISSIONS
       const pagePerm = perms.pages[path] || EMPTY_PERM
-      setResult({
-        canView:   pagePerm.view,
-        canEdit:   pagePerm.edit,
-        canDelete: pagePerm.delete,
-        isAdmin:   false,
-        loading:   false,
-      })
+      setResult({ canView: pagePerm.view, canEdit: pagePerm.edit, canDelete: pagePerm.delete, isAdmin: false, loading: false })
     }
-
     compute()
     window.addEventListener('dyeflow-db-updated', compute)
     window.addEventListener('storage', compute)
@@ -339,26 +224,11 @@ export function usePermission(path: string): PermResult {
       window.removeEventListener('storage', compute)
     }
   }, [path])
-
   return result
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// useSupervisorFilter hook
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returns the supervisor name to filter by, or null if 'all' (no filter).
- * Pages use this to narrow their data queries:
- *
- *   const supervisorFilter = useSupervisorFilter()
- *   const orders = db.orders.filter(o =>
- *     !supervisorFilter || o.supervisor === supervisorFilter
- *   )
- */
 export function useSupervisorFilter(): string | null {
   const [filter, setFilter] = useState<string | null>(null)
-
   useEffect(() => {
     const compute = () => {
       const user = getActiveUserRecord()
@@ -366,7 +236,6 @@ export function useSupervisorFilter(): string | null {
       const sf = user.permissions?.supervisorFilter || 'all'
       setFilter(sf === 'all' || !sf ? null : sf)
     }
-
     compute()
     window.addEventListener('dyeflow-db-updated', compute)
     window.addEventListener('storage', compute)
@@ -375,30 +244,5 @@ export function useSupervisorFilter(): string | null {
       window.removeEventListener('storage', compute)
     }
   }, [])
-
   return filter
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AccessDenied component — shown when canView is false
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function AccessDenied({ pageName }: { pageName?: string }) {
-  return (
-    <div className="content">
-      <div className="card" style={{ textAlign: 'center', padding: '60px 20px' }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
-          Access Denied
-        </div>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24, maxWidth: 360, margin: '0 auto 24px' }}>
-          You do not have permission to view{pageName ? ` "${pageName}"` : ' this page'}.
-          Contact your administrator to request access.
-        </div>
-        <button className="primary" onClick={() => window.history.back()}>
-          ← Go Back
-        </button>
-      </div>
-    </div>
-  )
 }

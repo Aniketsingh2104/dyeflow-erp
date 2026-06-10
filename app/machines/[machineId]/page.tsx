@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
-import { usePermission, useSupervisorFilter, AccessDenied } from '@/lib/permissions'
+import { usePermission, useSupervisorFilter } from '@/lib/permissions'
+import { AccessDenied } from '@/lib/AccessDenied'
 
 // Helper functions
 const getShadeTypeByColor = (color: string): string => {

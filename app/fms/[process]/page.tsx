@@ -4,7 +4,8 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { PROCESS_MAP, getProcessName, loadOrSeedProcessList, ProcessDef } from '@/lib/processMap'
 import { logAudit } from '@/lib/auditLog'
-import { usePermission, useSupervisorFilter, AccessDenied } from '@/lib/permissions'
+import { usePermission, useSupervisorFilter } from '@/lib/permissions'
+import { AccessDenied } from '@/lib/AccessDenied'
 
 export default function FmsProcessPage() {
   const params = useParams()
