@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSupervisorFilter } from '@/lib/permissions'
 
 export default function BatchesPage() {
   const router = useRouter()
+  const supervisorFilter = useSupervisorFilter()
   const [batches, setBatches] = useState<any[]>([])
   const [stats, setStats] = useState({ pending: 0, inProcess: 0, done: 0 })
   const [search, setSearch] = useState('')
@@ -20,8 +22,9 @@ export default function BatchesPage() {
     if (!stored) return
 
     const db = JSON.parse(stored)
-    const allBatches = (db.orders || []).flatMap((o: any) =>
-      (o.splits || []).map((s: any) => ({
+    const allBatches = (db.orders || []).flatMap((o: any) => {
+      if (supervisorFilter && o.supervisor !== supervisorFilter) return []
+      return (o.splits || []).map((s: any) => ({
         ...s,
         orderId: o.id,
         orderNo: o.orderNumber,
@@ -32,7 +35,7 @@ export default function BatchesPage() {
         machine: s.machine || o.machine,
         supervisor: o.supervisor,
       }))
-    )
+    })
 
     // Sort: active first by priority, then done
     allBatches.sort((a: any, b: any) => {

@@ -4,11 +4,15 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { PROCESS_MAP, getProcessName, loadOrSeedProcessList, ProcessDef } from '@/lib/processMap'
 import { logAudit } from '@/lib/auditLog'
+import { usePermission, useSupervisorFilter, AccessDenied } from '@/lib/permissions'
 
 export default function FmsProcessPage() {
   const params = useParams()
   const router = useRouter()
   const processCode = String(params?.process || '').toUpperCase()
+
+  const { canView, canEdit, canDelete, loading: permLoading } = usePermission(`/fms/${String(params?.process || '')}`)
+  const supervisorFilter = useSupervisorFilter()
   
   const [batches, setBatches] = useState<any[]>([])
   const [processName, setProcessName] = useState<string>('')
@@ -149,6 +153,8 @@ export default function FmsProcessPage() {
     setProcessName(name)
 
     ;(db.orders || []).forEach((order: any) => {
+      // Apply supervisor filter
+      if (supervisorFilter && order.supervisor !== supervisorFilter) return
       const fullRoute = getFmsRouteForOrder(order)
       if (!fullRoute.includes(processCode)) return
       ;(order.splits || []).forEach((batch: any) => {
@@ -170,8 +176,8 @@ export default function FmsProcessPage() {
         const currentProcessName = getProcessName(processCode, list)
         rows.push({
           orderId: order.id,
-          timestamp: stageEntryTs || order.timestamp || '-',
           orderNo: order.orderNumber || '-',
+          timestamp: stageEntryTs || order.timestamp || '-',
           batchId: batch.batchId || '-',
           party: order.party || '-',
           subParty: order.subParty || '-',
@@ -514,6 +520,11 @@ export default function FmsProcessPage() {
     loadProcessBatches()
     alert(`✓ Batch ${fobBatchData.batchId} FOB entry added (${fobType}) → view in FOB page`)
   }
+
+  if (permLoading) return (
+    <div className="content"><div className="card"><div style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</div></div></div>
+  )
+  if (!canView) return <AccessDenied pageName={`${processName || processCode}-FMS`} />
 
   if (loading) {
     return (

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSupervisorFilter } from '@/lib/permissions'
 
 // Shade grouping helper functions — reads custom rules from db, falls back to built-in keywords
 const BUILTIN_SHADE_RULES = [
@@ -79,6 +80,7 @@ const isMachineMatch = (batchMachine: string, machine: any): boolean => {
 }
 
 export default function MachinesPage() {
+  const supervisorFilter = useSupervisorFilter()
   const [machines, setMachines] = useState<any[]>([])
   const [machineData, setMachineData] = useState<Record<string, any>>({})
 
@@ -105,6 +107,8 @@ export default function MachinesPage() {
 
       for (const order of (db.orders || [])) {
         if (!order.splits || order.splits.length === 0) continue
+        // Apply supervisor filter
+        if (supervisorFilter && order.supervisor !== supervisorFilter) continue
 
         for (const batch of order.splits) {
           const batchMachine = batch.machine || order.machine

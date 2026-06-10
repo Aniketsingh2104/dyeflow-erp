@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
+import { usePermission, useSupervisorFilter, AccessDenied } from '@/lib/permissions'
 
 // Helper functions
 const getShadeTypeByColor = (color: string): string => {
@@ -214,6 +215,11 @@ export default function MachinePage() {
   const params = useParams()
   const router = useRouter()
   const machineId = params.machineId as string
+
+  // Permission guard
+  const machinePath = `/machines/${machineId}`
+  const { canView, canEdit, canDelete, loading: permLoading } = usePermission(machinePath)
+  const supervisorFilter = useSupervisorFilter()
   
   const [machine, setMachine] = useState<any>(null)
   const [batches, setBatches] = useState<any[]>([])
@@ -232,10 +238,11 @@ export default function MachinePage() {
   const [collabBatches, setCollabBatches] = useState<any[]>([])
 
   useEffect(() => {
+    if (!permLoading && !canView) return  // wait for guard
     loadData()
     loadColumnWidths()
     loadHiddenColumns()
-  }, [machineId])
+  }, [machineId, canView, permLoading])
 
   useEffect(() => {
     applyFilters()
@@ -356,6 +363,8 @@ export default function MachinePage() {
     const machineBatches: any[] = []
 
     for (const order of (db.orders || [])) {
+      // Apply supervisor filter
+      if (supervisorFilter && order.supervisor !== supervisorFilter) continue
       if (!order.splits || order.splits.length === 0) continue
 
       for (const batch of order.splits) {
@@ -960,6 +969,9 @@ export default function MachinePage() {
   }
 
   const visibleColumns = COLUMNS.filter(col => !hiddenColumns.has(col.key))
+
+  if (permLoading) return <div className="content"><div className="card"><div style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</div></div></div>
+  if (!canView) return <AccessDenied pageName={machine?.name || machineId} />
 
   if (!machine) {
     return (

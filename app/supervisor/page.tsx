@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSupervisorFilter } from '@/lib/permissions'
 
 // ── Dynamic supervisor colour palette — same 8-colour system as AppShell ─────
 const SUP_PALETTE = [
@@ -16,6 +17,7 @@ function supColor(name: string, allNames: string[]): string {
 
 export default function SupervisorPage() {
   const router = useRouter()
+  const supervisorFilter = useSupervisorFilter()
   const [supervisors, setSupervisors] = useState<any[]>([])
   const [supNames, setSupNames] = useState<string[]>([])
   const [unassignedOrders, setUnassignedOrders] = useState<any[]>([])
@@ -39,7 +41,12 @@ export default function SupervisorPage() {
     const names: string[] = db.supervisors.map((s: any) => s.name).filter(Boolean)
     setSupNames(names)
 
-    const supervisorData = db.supervisors.map((sup: any) => {
+    // If user is restricted to one supervisor, only show that one
+    const visibleSupervisors = supervisorFilter
+      ? db.supervisors.filter((s: any) => (s.name || '').toLowerCase() === supervisorFilter.toLowerCase())
+      : db.supervisors
+
+    const supervisorData = visibleSupervisors.map((sup: any) => {
       const supOrders = db.orders.filter((o: any) =>
         (o.supervisor || '').toLowerCase() === (sup.name || '').toLowerCase()
       )
@@ -57,7 +64,10 @@ export default function SupervisorPage() {
 
     setSupervisors(supervisorData)
 
-    const unassigned = db.orders.filter((o: any) => !o.supervisor || o.status === 'new')
+    const unassigned = db.orders.filter((o: any) =>
+      (!o.supervisor || o.status === 'new') &&
+      (!supervisorFilter)
+    )
     setUnassignedOrders(unassigned)
 
     setStats({

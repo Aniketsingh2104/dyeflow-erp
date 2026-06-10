@@ -5,6 +5,19 @@ import { useState, useRef, useEffect } from 'react'
 import { loadOrSeedProcessList, ProcessDef } from '@/lib/processMap'
 import GlobalSearch from '@/components/GlobalSearch'
 import { DarkModeToggle, NotificationCenter, KeyboardShortcuts } from '@/components/AppShell'
+import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
+
+// Returns true if the current user can view this path
+function canViewPath(path: string, userPerms: Record<string, any> | null, admin: boolean): boolean {
+  if (admin || !userPerms) return true
+  if (userPerms[path]) return !!userPerms[path].view
+  for (const key of Object.keys(userPerms)) {
+    if (path.startsWith(key + '/') || key.startsWith(path + '/')) {
+      return !!userPerms[key].view
+    }
+  }
+  return false
+}
 
 interface NavItem {
   name: string
@@ -23,7 +36,16 @@ export default function Navigation() {
   const [machines, setMachines] = useState<NavItem[]>([])
   const [fmsItems, setFmsItems] = useState<NavItem[]>([])
   const [supervisorItems, setSupervisorItems] = useState<NavItem[]>([])
+  const [userPerms, setUserPerms] = useState<Record<string, any> | null>(null)
+  const [userIsAdmin, setUserIsAdmin] = useState(true)
   const navRef = useRef<HTMLDivElement>(null)
+
+  const loadUserPerms = () => {
+    const user = getActiveUserRecord()
+    const admin = isAdminUser(user)
+    setUserIsAdmin(admin)
+    setUserPerms(admin || !user?.permissions ? null : (user.permissions?.pages || {}))
+  }
 
   const loadDynamic = () => {
     const stored = localStorage.getItem('dyeflow_db')
@@ -40,7 +62,6 @@ export default function Navigation() {
 
     const processList: ProcessDef[] = loadOrSeedProcessList()
 
-    // Count active batches per process for FMS nav badges
     const activeBatchesPerProcess: Record<string, number> = {}
     for (const order of (db.orders || [])) {
       for (const batch of (order.splits || [])) {
@@ -69,7 +90,6 @@ export default function Navigation() {
         db.supervisors
           .filter((s: any) => s.name)
           .map((s: any) => {
-            // Count inbox orders (status === 'assigned') for this supervisor
             const inbox = (db.orders || []).filter((o: any) =>
               o.status === 'assigned' &&
               (o.supervisor || '').toLowerCase() === (s.name || '').toLowerCase()
@@ -86,8 +106,9 @@ export default function Navigation() {
   }
 
   useEffect(() => {
+    loadUserPerms()
     loadDynamic()
-    const handle = () => loadDynamic()
+    const handle = () => { loadUserPerms(); loadDynamic() }
     window.addEventListener('storage', handle)
     window.addEventListener('dyeflow-db-updated', handle)
     return () => {
@@ -103,6 +124,12 @@ export default function Navigation() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // Filter nav items by permission
+  const filterItems = (items: NavItem[]): NavItem[] => {
+    if (userIsAdmin || !userPerms) return items
+    return items.filter(item => canViewPath(item.path, userPerms, userIsAdmin))
+  }
 
   const sections: NavSection[] = [
     {
@@ -216,10 +243,16 @@ export default function Navigation() {
 
   const isActive = (path: string) => pathname === path
 
+  // Apply permission filter to each section's items
+  const filteredSections = sections.map(section => ({
+    ...section,
+    items: filterItems(section.items),
+  })).filter(section => section.items.length > 0)
+
   return (
     <nav ref={navRef} style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-light)', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
       <div style={{ display: 'flex', gap: '4px', alignItems: 'center', minHeight: '42px' }}>
-        {sections.map(section => {
+        {filteredSections.map(section => {
           const isOpen = openDropdown === section.label
           const hasActiveItem = section.items.some(item => isActive(item.path))
           return (
@@ -268,7 +301,7 @@ export default function Navigation() {
         {/* Global Search */}
         <GlobalSearch />
 
-        {/* App shell — Notifications, Dark Mode, Keyboard Shortcuts */}
+        {/* App shell */}
         <NotificationCenter />
         <DarkModeToggle />
         <KeyboardShortcuts />

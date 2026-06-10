@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation'
 import RouteAssignment from './RouteAssignment'
 import ColumnSettingsModal from './ColumnSettingsModal'
 import { ColumnConfig, DEFAULT_COLUMNS, loadColumnConfig, saveColumnConfig, resetColumnConfig } from './column-config'
+import { useSupervisorFilter, AccessDenied } from '@/lib/permissions'
 
 export default function SupervisorDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: supervisorSlug } = use(params)
   const router = useRouter()
+  const supervisorFilter = useSupervisorFilter()
   // supervisorSlug is either a supervisor ID (new) or a name slug (legacy)
   const decodedSlug = decodeURIComponent(supervisorSlug)
   
@@ -328,6 +330,12 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
         </div>
       </div>
     )
+  }
+
+  // Guard: if user is restricted to a specific supervisor and this page is for a different one, deny access
+  if (supervisorFilter && fullSupervisorName &&
+    supervisorFilter.toLowerCase() !== fullSupervisorName.toLowerCase()) {
+    return <AccessDenied pageName={`Supervisor — ${fullSupervisorName}`} />
   }
 
   return (

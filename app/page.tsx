@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { buildDbContext, buildAnomalyContext, AnomalyItem } from '@/lib/dbContext'
+import { useSupervisorFilter } from '@/lib/permissions'
 
 interface Order {
   id: string
@@ -414,6 +415,7 @@ function HolidayWarnings({ orders }: { orders: Order[] }) {
 // ── Dashboard Page ─────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const supervisorFilter = useSupervisorFilter()
   const [orders, setOrders] = useState<Order[]>([])
   const [machines, setMachines] = useState<Machine[]>([])
   const [lastRefreshed, setLastRefreshed] = useState('')
@@ -422,11 +424,16 @@ export default function DashboardPage() {
     const stored = localStorage.getItem('dyeflow_db')
     if (stored) {
       const db = JSON.parse(stored)
-      setOrders(db.orders || [])
+      const allOrders: Order[] = db.orders || []
+      // Apply supervisor filter to dashboard stats and tables
+      const filteredOrders = supervisorFilter
+        ? allOrders.filter(o => (o as any).supervisor === supervisorFilter)
+        : allOrders
+      setOrders(filteredOrders)
       setMachines(db.machines || [])
       setLastRefreshed(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
     }
-  }, [])
+  }, [supervisorFilter])
 
   useEffect(() => {
     loadDashboard()
