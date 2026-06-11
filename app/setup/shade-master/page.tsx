@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 
 // Shade groups in order (sorted by dye intensity)
@@ -78,10 +78,87 @@ export default function ShadeMasterPage() {
   const [testColor, setTestColor] = useState('')
   const [testResult, setTestResult] = useState('')
   const [saved, setSaved] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<{ added: number; skipped: number; invalid: number } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setRules(loadRules())
   }, [])
+
+  // ── Excel Upload ───────────────────────────────────────────────────────────
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.name.match(/\.(xlsx|xls|csv)$/i)) {
+      alert('Please upload an .xlsx, .xls, or .csv file.')
+      return
+    }
+    setUploading(true)
+    setUploadResult(null)
+    try {
+      if (file.name.match(/\.csv$/i)) {
+        // Parse CSV
+        const text = await file.text()
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+        importRows(lines.slice(1).map(line => {
+          const parts = line.split(',')
+          return [parts[0]?.replace(/"/g, '').trim(), parts[1]?.replace(/"/g, '').trim()]
+        }))
+      } else {
+        // Parse XLSX using SheetJS loaded from CDN
+        const buffer = await file.arrayBuffer()
+        const XLSX = await import('xlsx')
+        const wb = XLSX.read(buffer, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+        // Skip header row, map Colour Name (col 0) + Type (col 1)
+        importRows(data.slice(1).map(row => [String(row[0] || '').trim(), String(row[1] || '').trim()]))
+      }
+    } catch (err: any) {
+      alert('Failed to read file: ' + (err.message || 'Unknown error'))
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const importRows = (rows: [string, string][]) => {
+    const validGroups = ['white', 'light', 'medium', 'dark']
+    const existing = loadRules()
+    const existingKeywords = new Set(existing.map(r => r.keyword.toLowerCase()))
+
+    let added = 0, skipped = 0, invalid = 0
+    const newRules: ShadeRule[] = []
+    const seen = new Set<string>()
+
+    for (const [colourName, type] of rows) {
+      const keyword = colourName.toLowerCase().trim()
+      const groupRaw = type.toLowerCase().trim()
+
+      if (!keyword) { invalid++; continue }
+
+      // Normalize group: accept Light/Medium/Dark/White (case-insensitive)
+      const groupMap: Record<string, string> = { white: 'White', light: 'Light', medium: 'Medium', dark: 'Dark' }
+      const shadeGroup = groupMap[groupRaw]
+
+      if (!shadeGroup) { invalid++; continue }
+
+      // Skip duplicates within the file and duplicates vs existing rules
+      if (seen.has(keyword) || existingKeywords.has(keyword)) { skipped++; continue }
+
+      seen.add(keyword)
+      existingKeywords.add(keyword)
+      newRules.push({ id: `xl-${Date.now()}-${added}`, keyword, shadeGroup })
+      added++
+    }
+
+    const merged = [...existing, ...newRules]
+    setRules(merged)
+    saveRules(merged)
+    setUploadResult({ added, skipped, invalid })
+    flash()
+  }
 
   const addRule = () => {
     const kw = newKeyword.trim().toLowerCase()
@@ -142,6 +219,70 @@ export default function ShadeMasterPage() {
       {/* How it works */}
       <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '12px 16px', marginBottom: 18, fontSize: 12, color: '#1E40AF' }}>
         <strong>How it works:</strong> When a colour name (e.g. "Navy Blue") is checked, each keyword is tested as a substring match (case-insensitive). The first matching rule wins. Custom rules below are checked <em>before</em> the built-in rules, so you can override defaults.
+      </div>
+
+      {/* Excel Upload */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '16px 20px', marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>📤 Import from Excel</div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+              Upload an <strong>.xlsx</strong> or <strong>.csv</strong> file with columns: <code style={{ background: 'var(--bg-secondary)', padding: '1px 5px', borderRadius: 3 }}>Colour Name</code> and <code style={{ background: 'var(--bg-secondary)', padding: '1px 5px', borderRadius: 3 }}>Type</code> (White / Light / Medium / Dark)
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleExcelUpload}
+              style={{ display: 'none' }}
+              id="shade-excel-upload"
+            />
+            <label
+              htmlFor="shade-excel-upload"
+              style={{
+                padding: '8px 16px', fontSize: 13, fontWeight: 600,
+                background: uploading ? 'var(--bg-secondary)' : 'var(--accent)',
+                color: uploading ? 'var(--text-tertiary)' : '#fff',
+                border: 'none', borderRadius: 6, cursor: uploading ? 'not-allowed' : 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+              }}
+            >
+              {uploading ? (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                    style={{ animation: 'spin 0.8s linear infinite' }}>
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                  </svg>
+                  Importing…
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  Upload Excel / CSV
+                </>
+              )}
+            </label>
+          </div>
+        </div>
+
+        {/* Upload result */}
+        {uploadResult && (
+          <div style={{
+            display: 'flex', gap: 16, flexWrap: 'wrap',
+            background: 'var(--bg-secondary)', borderRadius: 8,
+            padding: '10px 14px', fontSize: 12, marginTop: 8,
+          }}>
+            <span style={{ color: '#065F46', fontWeight: 700 }}>✓ {uploadResult.added} rules added</span>
+            {uploadResult.skipped > 0 && <span style={{ color: 'var(--text-tertiary)' }}>⏭ {uploadResult.skipped} skipped (duplicates)</span>}
+            {uploadResult.invalid > 0 && <span style={{ color: 'var(--danger)' }}>⚠ {uploadResult.invalid} invalid rows (missing/unknown shade type)</span>}
+          </div>
+        )}
       </div>
 
       {/* Add new rule */}
@@ -260,6 +401,7 @@ export default function ShadeMasterPage() {
           )}
         </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }
