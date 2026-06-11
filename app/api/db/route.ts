@@ -35,8 +35,8 @@ export async function GET() {
     const row = rows?.[0]
     return NextResponse.json({
       ok: true,
-      data: row?.data ?? {},
-      updated_at: row?.updated_at ?? null,
+      data:       row?.data       ?? {},
+      updated_at: row?.updated_at ?? null,   // ISO string e.g. "2026-06-10T09:13:36.464461+00"
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
