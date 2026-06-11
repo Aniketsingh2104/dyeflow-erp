@@ -56,8 +56,28 @@ export default function OrderSheetsPage() {
     const stored = localStorage.getItem('dyeflow_db')
     if (!stored) return
     const db = JSON.parse(stored)
-    const orderSheets = db.orderSheets || []
-    setSheets(orderSheets.sort((a: OrderSheet, b: OrderSheet) =>
+    const allSheets: OrderSheet[] = db.orderSheets || []
+
+    // Get logged-in user and their allowed sheets
+    const sessionRaw = localStorage.getItem('dyeflow_session')
+    const session = sessionRaw ? JSON.parse(sessionRaw) : null
+    const loggedInUsername = (session?.username || '').toLowerCase()
+
+    // Find the user record to get their permissions
+    const users: any[] = db.users || []
+    const userRecord = users.find((u: any) => (u.username || '').toLowerCase() === loggedInUsername)
+    const isAdmin = !userRecord || userRecord.role === 'admin' || !userRecord.permissions
+
+    // Admins see all sheets; others only see their allowed ones
+    const allowedSheetIds: string[] | null = isAdmin
+      ? null  // null = all
+      : (userRecord?.permissions?.allowedSheets || [])
+
+    const visible = allSheets.filter((s: OrderSheet) =>
+      isAdmin || (allowedSheetIds && allowedSheetIds.includes(s.id))
+    )
+
+    setSheets(visible.sort((a: OrderSheet, b: OrderSheet) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     ))
   }

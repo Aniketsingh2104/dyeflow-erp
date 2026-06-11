@@ -95,18 +95,32 @@ export default function SheetPageContent() {
     }
   }, [])
 
-  // Load sheet
+  // Load sheet — with access check
   useEffect(() => {
     if (!sheetId) return
     const stored = localStorage.getItem('dyeflow_db')
-    if (stored) {
-      const db = JSON.parse(stored)
-      const foundSheet = db.orderSheets?.find((s: any) => s.id === sheetId)
-      if (foundSheet) {
-        setSheet(foundSheet)
-        setRows(foundSheet.rows || [createBlankRow()])
-      }
+    if (!stored) return
+    const db = JSON.parse(stored)
+    const foundSheet = db.orderSheets?.find((s: any) => s.id === sheetId)
+    if (!foundSheet) return
+
+    // Access check: admin sees all, others must have sheetId in allowedSheets
+    const sessionRaw = localStorage.getItem('dyeflow_session')
+    const session = sessionRaw ? JSON.parse(sessionRaw) : null
+    const loggedInUsername = (session?.username || '').toLowerCase()
+    const users: any[] = db.users || []
+    const userRecord = users.find((u: any) => (u.username || '').toLowerCase() === loggedInUsername)
+    const isAdmin = !userRecord || userRecord.role === 'admin' || !userRecord.permissions
+    const allowedSheets: string[] = userRecord?.permissions?.allowedSheets || []
+
+    if (!isAdmin && !allowedSheets.includes(sheetId)) {
+      // No access — show denied state
+      setSheet({ __accessDenied: true })
+      return
     }
+
+    setSheet(foundSheet)
+    setRows(foundSheet.rows || [createBlankRow()])
   }, [sheetId])
 
   // Focus input when editing
@@ -740,6 +754,23 @@ export default function SheetPageContent() {
         <div className="card">
           <div className="empty-state">
             Sheet not found. <Link href="/order-sheets">Go back</Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (sheet.__accessDenied) {
+    return (
+      <div className="content">
+        <div className="card">
+          <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>Access Denied</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24 }}>
+              You do not have permission to view this sheet. Contact your administrator.
+            </div>
+            <Link href="/order-sheets"><button className="primary">← Back to Sheets</button></Link>
           </div>
         </div>
       </div>
