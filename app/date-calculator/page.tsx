@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { loadOrSeedProcessList } from '@/lib/processMap'
+import * as XLSX from 'xlsx'
 
 interface Batch {
   batchId: string
@@ -108,6 +109,11 @@ const ALL_PROCESS_CODES = [
 
 export default function DateCalculatorPage() {
   const [rows, setRows] = useState<any[]>([])
+  const [excelRows, setExcelRows] = useState<any[]>([])  // temporary rows from Excel upload
+  const [showExcelRows, setShowExcelRows] = useState(false)
+  const [excelUploading, setExcelUploading] = useState(false)
+  const [excelFileName, setExcelFileName] = useState('')
+  const excelFileRef = useRef<HTMLInputElement>(null)
   const [allProcesses] = useState<string[]>(ALL_PROCESS_CODES)
   const [processDurations, setProcessDurations] = useState<ProcessDuration[]>([])
   const [showProcessDaysModal, setShowProcessDaysModal] = useState(false)
@@ -155,6 +161,170 @@ export default function DateCalculatorPage() {
   }
 
   const pendingDateChanges = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  // ── Excel Upload Handler ─────────────────────────────────────────────
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setExcelUploading(true)
+    setExcelFileName(file.name)
+    try {
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: 'array' })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+
+      if (data.length < 2) { alert('File is empty or has no data rows.'); return }
+
+      // Auto-detect headers
+      const headers = (data[0] as string[]).map(h => String(h || '').trim().toLowerCase())
+
+      const colIdx = (names: string[]) => {
+        for (const n of names) {
+          const i = headers.findIndex(h => h.includes(n.toLowerCase()))
+          if (i >= 0) return i
+        }
+        return -1
+      }
+
+      const batchCol   = colIdx(['batch', 'batch id', 'batchid', 'batch_id'])
+      const colorCol   = colIdx(['color', 'colour'])
+      const articleCol = colIdx(['article', 'art'])
+      const kgCol      = colIdx(['qty', 'kg', 'weight', 'quantity'])
+      const routeCol   = colIdx(['route', 'process route', 'processroute'])
+      const machineCol = colIdx(['machine'])
+      const dateCol    = colIdx(['date', 'planned date', 'start date', 'dye date'])
+
+      const parsed: any[] = []
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i] as any[]
+        const batchId = batchCol >= 0 ? String(row[batchCol] || '').trim() : `XL-${i}`
+        if (!batchId || batchId === 'XL-') continue
+
+        const color    = colorCol   >= 0 ? String(row[colorCol]   || '').trim() : ''
+        const article  = articleCol >= 0 ? String(row[articleCol] || '').trim() : ''
+        const kg       = kgCol      >= 0 ? parseFloat(row[kgCol])  || 0 : 0
+        const machine  = machineCol >= 0 ? String(row[machineCol] || '').trim() : ''
+        const dateVal  = dateCol    >= 0 ? row[dateCol] : ''
+        const routeRaw = routeCol   >= 0 ? String(row[routeCol]   || '').trim() : ''
+
+        // Parse date
+        let dateStr = ''
+        if (dateVal) {
+          if (typeof dateVal === 'number') {
+            // Excel serial date
+            const d = XLSX.SSF.parse_date_code(dateVal)
+            if (d) dateStr = `${String(d.d).padStart(2,'0')}/${String(d.m).padStart(2,'0')}/${d.y}`
+          } else {
+            const s = String(dateVal).trim()
+            const parsed2 = normalizeDate(s)
+            if (parsed2) dateStr = dateToDisplayStr(parsed2)
+          }
+        }
+
+        // Parse process route
+        const routeParts = routeRaw
+          ? routeRaw.split(/[\s,>/\\|]+/).map((x: string) => x.trim()).filter(Boolean)
+          : []
+
+        // Build the row in same shape as DB rows
+        const fakeOrder = {
+          id:           `xl-order-${i}`,
+          orderNumber:  batchId,
+          article,
+          color,
+          qtyKg:        kg,
+          processRoute: routeParts,
+          machine,
+          processMachines: machine ? { [machine]: machine } : {},
+          splits: [],
+        }
+        const fakeBatch = {
+          batchId,
+          batchNumber: i,
+          kg,
+          plannedDate: dateStr,
+          dateCalcPlan: machine && dateStr ? { [machine]: dateStr } : {},
+          dcGeneratedOnce: false,
+          dcRegenerate:    false,
+          _fromExcel: true,
+        }
+        // Pre-fill any process date columns found in headers
+        for (const pc of ALL_PROCESS_CODES) {
+          const ci = headers.findIndex(h => h === pc.toLowerCase())
+          if (ci >= 0 && row[ci]) {
+            const rawD = row[ci]
+            let ds = ''
+            if (typeof rawD === 'number') {
+              const pd = XLSX.SSF.parse_date_code(rawD)
+              if (pd) ds = `${String(pd.d).padStart(2,'0')}/${String(pd.m).padStart(2,'0')}/${pd.y}`
+            } else {
+              const pn = normalizeDate(String(rawD))
+              if (pn) ds = dateToDisplayStr(pn)
+            }
+            if (ds) fakeBatch.dateCalcPlan[pc] = ds
+          }
+        }
+        parsed.push({ order: fakeOrder, batch: fakeBatch })
+      }
+
+      if (!parsed.length) { alert('No valid batch rows found. Check your file has Batch ID column.'); return }
+      setExcelRows(parsed)
+      setShowExcelRows(true)
+      alert(`✓ Loaded ${parsed.length} batches from "${file.name}".\n\nNow click ⚙ Generate Dates to calculate.`)
+    } catch (err: any) {
+      alert('Failed to read Excel: ' + (err.message || 'Unknown error'))
+    } finally {
+      setExcelUploading(false)
+      if (excelFileRef.current) excelFileRef.current.value = ''
+    }
+  }
+
+  const handleExcelDateChange = (batchId: string, pc: string, value: string) => {
+    setExcelRows(prev => prev.map(r =>
+      r.batch.batchId === batchId
+        ? { ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan, [pc]: value } } }
+        : r
+    ))
+  }
+
+  const generateExcelDates = () => {
+    const stored = localStorage.getItem('dyeflow_db')
+    const db = stored ? JSON.parse(stored) : {}
+    // Inject temp Excel orders into db for calculation
+    const tempOrders = excelRows.map(r => ({ ...r.order, splits: [r.batch] }))
+    const origOrders = db.orders || []
+    db.orders = [...tempOrders]
+    const result = dcPlanAllRows(db)
+    // Extract back the updated batches
+    const updated: any[] = []
+    for (const o of db.orders) {
+      const b = o.splits?.[0]
+      if (b) updated.push({ order: o, batch: b })
+    }
+    db.orders = origOrders  // Restore real orders
+    localStorage.setItem('dyeflow_db', JSON.stringify(db))
+    setExcelRows(updated)
+    alert(`✓ Dates generated for ${result.generated} Excel batches!`)
+  }
+
+  const exportExcelWithDates = () => {
+    if (!excelRows.length) return
+    const headers = ['Batch ID', 'Color', 'Article', 'Qty (Kg)', 'Route', 'Machine', ...ALL_PROCESS_CODES]
+    const dataRows = excelRows.map(({ order, batch }) => [
+      batch.batchId,
+      order.color,
+      order.article,
+      batch.kg || order.qtyKg,
+      (order.processRoute || []).join('/'),
+      order.machine,
+      ...ALL_PROCESS_CODES.map(pc => batch.dateCalcPlan?.[pc] || '')
+    ])
+    const wb = XLSX.utils.book_new()
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
+    XLSX.utils.book_append_sheet(wb, ws, 'Dates')
+    XLSX.writeFile(wb, 'date_calculator_output.xlsx')
+  }
 
   const handleDateChange = (orderId: string, batchId: string, pc: string, value: string) => {
     setRows(prev => prev.map(r => {
@@ -512,6 +682,29 @@ export default function DateCalculatorPage() {
         <div className="card-header">
           <span className="card-title">Date Calculator Sheet</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {/* Excel Upload */}
+            <input ref={excelFileRef} type="file" accept=".xlsx,.xls,.csv"
+              onChange={handleExcelUpload} style={{ display: 'none' }} id="dc-excel-upload" />
+            <label htmlFor="dc-excel-upload" style={{
+              padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+              background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
+              color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 5,
+            }}>
+              {excelUploading ? '⏳ Loading…' : '📤 Upload Excel'}
+            </label>
+            {showExcelRows && (
+              <>
+                <button className="small success" onClick={generateExcelDates}>⚙ Generate Dates (Excel)</button>
+                <button className="small" onClick={exportExcelWithDates}
+                  style={{ background: '#059669', color: '#fff', border: 'none', fontWeight: 600 }}>
+                  ⬇ Download Output
+                </button>
+                <button className="small danger" onClick={() => { setExcelRows([]); setShowExcelRows(false); setExcelFileName('') }}>
+                  ✕ Clear Excel
+                </button>
+              </>
+            )}
+            <span style={{ width: 1, height: 20, background: 'var(--border-light)', display: 'inline-block' }} />
             <button className="small success" onClick={generateDates}>⚙ Generate Dates</button>
             <button className="small" onClick={() => savePlannedDatesToOrders(true)}
               style={{ background: saveStatus === 'saved' ? '#1D9E75' : 'var(--accent)', color: '#fff', border: 'none', fontWeight: 600 }}>
@@ -528,6 +721,56 @@ export default function DateCalculatorPage() {
           Dates locked after first generation unless <strong>Re-Generate</strong> is checked.
           Click <strong>⬇ Save to Orders</strong> to push dates to Delay Predictor, Reports, and AI.
         </div>
+
+        {/* ── Excel Batch Table ── */}
+        {showExcelRows && excelRows.length > 0 && (
+          <div style={{ borderTop: '2px solid var(--accent)', marginBottom: 0 }}>
+            <div style={{ padding: '8px 16px', background: 'var(--accent-light)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-dark)' }}>
+                📤 Excel Batches — {excelRows.length} rows from "{excelFileName}"
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Temporary · not saved to ERP orders</span>
+            </div>
+            <div style={{ overflowX: 'auto', maxHeight: 320 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: '#EFF6FF', position: 'sticky', top: 0, zIndex: 10 }}>
+                    <th style={thStyle}>BATCH ID</th>
+                    <th style={thStyle}>COLOR</th>
+                    <th style={thStyle}>ARTICLE</th>
+                    <th style={thStyle}>KG</th>
+                    <th style={thStyle}>ROUTE</th>
+                    <th style={thStyle}>MACHINE</th>
+                    {ALL_PROCESS_CODES.map(pc => <th key={pc} style={thStyle}>{pc}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {excelRows.map(({ order, batch }) => {
+                    const plan: Record<string,string> = batch.dateCalcPlan || {}
+                    return (
+                      <tr key={batch.batchId} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: '#2563EB' }}>{batch.batchId}</td>
+                        <td style={tdStyle}>{order.color || '-'}</td>
+                        <td style={tdStyle}>{order.article || '-'}</td>
+                        <td style={{ ...tdStyle, fontWeight: 700 }}>{batch.kg || '-'}</td>
+                        <td style={tdStyle}>{(order.processRoute || []).join('/') || '-'}</td>
+                        <td style={tdStyle}>{order.machine || '-'}</td>
+                        {ALL_PROCESS_CODES.map(pc => (
+                          <td key={pc} style={{ padding: 0, borderRight: '1px solid #E5E7EB', background: plan[pc] ? '#F0FDF4' : 'transparent' }}>
+                            <input type="text" value={plan[pc] || ''}
+                              onChange={e => handleExcelDateChange(batch.batchId, pc, e.target.value)}
+                              style={{ width: '100%', minWidth: 100, height: 32, border: 0, background: 'transparent', padding: '2px 6px', fontSize: 11, textAlign: 'center', outline: 'none' }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 200px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
