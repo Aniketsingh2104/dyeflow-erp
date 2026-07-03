@@ -265,6 +265,9 @@ export default function DateCalculatorPage() {
         ? routeRaw.split(/[/,\\\s>|]+/).map((x: string) => x.trim()).filter(Boolean)
         : []
 
+      // If no machine column, use first process in route as anchor
+      const anchorProcess = machine || (routeParts.length > 0 ? routeParts[0] : '')
+
       const fakeOrder = {
         id: `xl-order-${i}`,
         orderNumber: batchId,
@@ -272,8 +275,9 @@ export default function DateCalculatorPage() {
         color,
         qtyKg: kg,
         processRoute: routeParts,
-        machine,
-        processMachines: machine && dateStr ? { [machine]: machine } : {},
+        machine: anchorProcess,
+        // processMachines maps anchor process → date so engine can find anchor
+        processMachines: anchorProcess && dateStr ? { [anchorProcess]: anchorProcess } : {},
         splits: [],
       }
       const fakeBatch: any = {
@@ -281,7 +285,8 @@ export default function DateCalculatorPage() {
         batchNumber: i,
         kg,
         plannedDate: dateStr,
-        dateCalcPlan: machine && dateStr ? { [machine]: dateStr } : {},
+        // Seed dateCalcPlan with anchor process date so engine has something to work from
+        dateCalcPlan: anchorProcess && dateStr ? { [anchorProcess]: dateStr } : {},
         dcGeneratedOnce: false,
         dcRegenerate: false,
         _fromExcel: true,
@@ -496,37 +501,49 @@ export default function DateCalculatorPage() {
 
       let anchorCode = ''
       let anchorDate: Date | null = null
+      // First try: find a date in MACHINE_REQUIRED processes
       for (const c of seq) {
         if (!MACHINE_REQUIRED.includes(c)) continue
         const d = normalizeDate(plan[c])
         if (d && (!anchorDate || d > anchorDate)) { anchorDate = d; anchorCode = c }
       }
+      // Second try: any process that has a date
       if (!anchorDate) {
         for (const c of seq) {
           const d = normalizeDate(plan[c])
           if (d) { anchorDate = d; anchorCode = c; break }
         }
       }
+      // Third try: ANY process in dateCalcPlan even if not in seq
+      if (!anchorDate) {
+        for (const [c, ds] of Object.entries(plan)) {
+          const d = normalizeDate(ds as string)
+          if (d) { anchorDate = d; anchorCode = c; break }
+        }
+      }
       if (!anchorDate || !anchorCode) continue
 
-      const anchorIdx = seq.indexOf(anchorCode)
+      // If anchorCode not in seq, insert it at position 0
+      let workSeq = [...seq]
+      if (!workSeq.includes(anchorCode)) workSeq = [anchorCode, ...workSeq]
+      const anchorIdx = workSeq.indexOf(anchorCode)
       if (anchorIdx < 0) continue
 
       const planned: Record<string, string> = { [anchorCode]: dateToStr(anchorDate) }
 
       let back = new Date(anchorDate.getTime())
       for (let i = anchorIdx - 1; i >= 0; i--) {
-        back = addDaysSkippingHolidays(back, Math.max(1, dayMap[seq[i]] || 1), holidaySet, false)
-        planned[seq[i]] = dateToStr(back)
+        back = addDaysSkippingHolidays(back, Math.max(1, dayMap[workSeq[i]] || 1), holidaySet, false)
+        planned[workSeq[i]] = dateToStr(back)
       }
 
       let fwd = new Date(anchorDate.getTime())
-      for (let i = anchorIdx + 1; i < seq.length; i++) {
-        fwd = addDaysSkippingHolidays(fwd, Math.max(1, dayMap[seq[i-1]] || 1), holidaySet, true)
-        planned[seq[i]] = dateToStr(fwd)
+      for (let i = anchorIdx + 1; i < workSeq.length; i++) {
+        fwd = addDaysSkippingHolidays(fwd, Math.max(1, dayMap[workSeq[i-1]] || 1), holidaySet, true)
+        planned[workSeq[i]] = dateToStr(fwd)
       }
 
-      const firstCode = seq[0]
+      const firstCode = workSeq[0]
       const firstDt = normalizeDate(planned[firstCode])
       let useFwdRule = false
       if (firstDt && today && firstDt < today) {
@@ -534,14 +551,14 @@ export default function DateCalculatorPage() {
         const start = addDaysSkippingHolidays(today, Math.max(1, dayMap[firstCode] || 1), holidaySet, true)
         planned[firstCode] = dateToStr(start)
         let cur = new Date(start.getTime())
-        for (let i = 1; i < seq.length; i++) {
-          cur = addDaysSkippingHolidays(cur, Math.max(1, dayMap[seq[i]] || 1), holidaySet, true)
-          planned[seq[i]] = dateToStr(cur)
+        for (let i = 1; i < workSeq.length; i++) {
+          cur = addDaysSkippingHolidays(cur, Math.max(1, dayMap[workSeq[i]] || 1), holidaySet, true)
+          planned[workSeq[i]] = dateToStr(cur)
         }
       }
 
       // Store as DD/MM/YYYY
-      seq.forEach((c: string) => { plan[c] = planned[c] ? toDisplay(planned[c]) : '' })
+      workSeq.forEach((c: string) => { plan[c] = planned[c] ? toDisplay(planned[c]) : '' })
 
       // Capacity-aware pass
       const qty = getQty(o, b)
@@ -550,9 +567,9 @@ export default function DateCalculatorPage() {
         const ff = fitDate(firstCode, dateToStr(fa), qty)
         if (ff) plan[firstCode] = toDisplay(ff)
         let prev = normalizeDate(plan[firstCode]) || fa
-        for (let i = 1; i < seq.length; i++) {
-          const c = seq[i]
-          const pc = seq[i-1]
+        for (let i = 1; i < workSeq.length; i++) {
+          const c = workSeq[i]
+          const pc = workSeq[i-1]
           const days = Math.max(1, dayMap[useFwdRule ? c : pc] || 1)
           const cand = addDaysSkippingHolidays(prev, days, holidaySet, true)
           const finalDs = fitDate(c, dateToStr(cand), qty)
@@ -950,6 +967,9 @@ export default function DateCalculatorPage() {
             {(!colMap.batchId || !colMap.date) && (
               <div style={{ fontSize:11, color:'#DC2626', marginTop:8 }}>* Batch ID and Dye Date are required to generate dates.</div>
             )}
+            <div style={{ fontSize:11, color:'#6B7280', marginTop:8 }}>
+              💡 <strong>Machine</strong> is optional — if not mapped, the first process in Route will be used as the anchor.
+            </div>
           </div>
         </div>
       )}
