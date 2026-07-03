@@ -169,6 +169,19 @@ export default function DateCalculatorPage() {
   const pendingDateChanges = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   // ── Excel Upload Handler ─────────────────────────────────────────────
+
+  // Load SheetJS from CDN once
+  const loadXLSX = (): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if ((window as any).XLSX) { resolve((window as any).XLSX); return }
+      const script = document.createElement('script')
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+      script.onload = () => resolve((window as any).XLSX)
+      script.onerror = () => reject(new Error('Failed to load xlsx library'))
+      document.head.appendChild(script)
+    })
+  }
+
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -179,9 +192,9 @@ export default function DateCalculatorPage() {
       const buffer = await file.arrayBuffer()
       const uint8 = new Uint8Array(buffer)
 
-      // Dynamically load xlsx
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(uint8, { type: 'array' })
+      // Load SheetJS from CDN (works everywhere, no bundler issues)
+      const XLSX = await loadXLSX()
+      const wb = XLSX.read(uint8, { type: 'array', raw: false })
 
       if (!wb.SheetNames.length) {
         alert('No sheets found in file.')
@@ -196,7 +209,7 @@ export default function DateCalculatorPage() {
         return
       }
 
-      const headers = (data[0] as any[]).map(h => String(h || '').trim())
+      const headers = (data[0] as any[]).map((h: any) => String(h || '').trim())
       if (!headers.length) {
         alert('No headers found in first row.')
         return
@@ -208,11 +221,11 @@ export default function DateCalculatorPage() {
       // Auto-guess column mapping
       const guess = (keywords: string[]) => {
         for (const kw of keywords) {
-          const i = headers.findIndex(h => h.toLowerCase() === kw.toLowerCase())
+          const i = headers.findIndex((h: string) => h.toLowerCase() === kw.toLowerCase())
           if (i >= 0) return headers[i]
         }
         for (const kw of keywords) {
-          const i = headers.findIndex(h => h.toLowerCase().includes(kw.toLowerCase()))
+          const i = headers.findIndex((h: string) => h.toLowerCase().includes(kw.toLowerCase()))
           if (i >= 0) return headers[i]
         }
         return ''
@@ -234,7 +247,6 @@ export default function DateCalculatorPage() {
       alert('Failed to read file: ' + (err?.message || String(err) || 'Unknown error'))
     } finally {
       setExcelUploading(false)
-      // Reset file input so same file can be re-uploaded
       e.target.value = ''
     }
   }
@@ -352,7 +364,7 @@ export default function DateCalculatorPage() {
 
   const exportExcelWithDates = async () => {
     if (!excelRows.length) return
-    const XLSX = await import('xlsx')
+    const XLSX = await loadXLSX()
     const headers = ['Batch ID', 'Color', 'Article', 'Qty (Kg)', 'Route', 'Machine', ...ALL_PROCESS_CODES]
     const dataRows = excelRows.map(({ order, batch }) => [
       batch.batchId,
