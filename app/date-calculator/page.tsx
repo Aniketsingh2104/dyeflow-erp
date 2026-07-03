@@ -210,20 +210,28 @@ export default function DateCalculatorPage() {
           else { const d = normalizeDate(s); if (d) dateStr = dateToDisplayStr(d) }
         }
         const routeParts = routeRaw ? routeRaw.split(/[/,\\\s>|]+/).map((x:string)=>x.trim()).filter(Boolean) : []
-        const anchor = machine || (routeParts[0] || '')
+
+        // Find the machine process in the route (S, D, Wash, S2, Add, Level, Rc, Fix)
+        // The date given in Excel belongs to this machine process
+        const MACHINE_PROCS = ['S2','Add','Level','Rc','Fix','Wash','S','D']
+        const machineInRoute = routeParts.find((p:string) => MACHINE_PROCS.some(m => p.toLowerCase() === m.toLowerCase()))
+        const anchor = machine || machineInRoute || (routeParts[0] || '')
+
+        // Normalise anchor to correct case (e.g. 'wash' -> 'Wash', 's' -> 'S')
+        const anchorNorm = MACHINE_PROCS.find(m => m.toLowerCase() === anchor.toLowerCase()) || anchor
         parsed.push({
           order: { id:`xl-${i}`, orderNumber:batchId, article, color, qtyKg:kg,
-            processRoute:routeParts, machine:anchor,
-            processMachines: anchor&&dateStr ? {[anchor]:anchor} : {}, splits:[] },
+            processRoute:routeParts, machine:anchorNorm,
+            processMachines: anchorNorm&&dateStr ? {[anchorNorm]:anchorNorm} : {}, splits:[] },
           batch: { batchId, batchNumber:i, kg, plannedDate:dateStr,
-            dateCalcPlan: anchor&&dateStr ? {[anchor]:dateStr} : {},
+            dateCalcPlan: anchorNorm&&dateStr ? {[anchorNorm]:dateStr} : {},
             dcGeneratedOnce:false, dcRegenerate:false, _fromExcel:true }
         })
       }
       if (!parsed.length) { alert('No valid rows found.'); return }
       setExcelRows(parsed)
       setShowExcelRows(true)
-      alert(`✓ Loaded ${parsed.length} batches!\n\nBatch ID: ${headers[bc]}\nDate: ${headers[dc]}\nRoute: ${rc>=0?headers[rc]:'—'}\n\nNow click ⚙ Generate Dates (Excel)`)
+      alert(`✓ Loaded ${parsed.length} batches!\n\nBatch ID: ${headers[bc]}\nDate: ${headers[dc]}\nRoute: ${rc>=0?headers[rc]:'—'}\n\nDate column mapped to machine process automatically.\n(D/F → D column, S/F → S column, Wash/F → Wash column)\n\nClick ⚙ Generate Dates (Excel) to calculate.`)
     } catch (err: any) {
       alert('Error: ' + (err?.message || String(err)))
     } finally {
