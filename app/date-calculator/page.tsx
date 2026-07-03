@@ -708,14 +708,17 @@ export default function DateCalculatorPage() {
           <span className="card-title">Date Calculator Sheet</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input ref={excelFileRef} type="file" accept=".xlsx,.xls,.csv"
-              onChange={handleExcelUpload} style={{ display: 'none' }} id="dc-excel-upload-empty" />
-            <label htmlFor="dc-excel-upload-empty" style={{
-              padding: '8px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
-              background: 'var(--accent)', color: '#fff',
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-            }}>
+              onChange={handleExcelUpload} style={{ display: 'none' }} />
+            <button
+              onClick={() => excelFileRef.current?.click()}
+              style={{
+                padding: '8px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+                background: 'var(--accent)', color: '#fff', border: 'none',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+              }}
+            >
               {excelUploading ? '⏳ Loading…' : '📤 Upload Excel to Calculate Dates'}
-            </label>
+            </button>
           </div>
         </div>
         <div style={{ padding: '40px', textAlign: 'center' }}>
@@ -746,14 +749,17 @@ export default function DateCalculatorPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             {/* Excel Upload */}
             <input ref={excelFileRef} type="file" accept=".xlsx,.xls,.csv"
-              onChange={handleExcelUpload} style={{ display: 'none' }} id="dc-excel-upload" />
-            <label htmlFor="dc-excel-upload" style={{
-              padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
-              background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
-              color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 5,
-            }}>
+              onChange={handleExcelUpload} style={{ display: 'none' }} />
+            <button
+              onClick={() => excelFileRef.current?.click()}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+                background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
+                color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 5,
+              }}
+            >
               {excelUploading ? '⏳ Loading…' : '📤 Upload Excel'}
-            </label>
+            </button>
             {showExcelRows && (
               <>
                 <button className="small success" onClick={generateExcelDates}>⚙ Generate Dates (Excel)</button>
