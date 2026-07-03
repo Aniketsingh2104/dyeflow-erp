@@ -114,6 +114,13 @@ export default function DateCalculatorPage() {
   const [excelUploading, setExcelUploading] = useState(false)
   const [excelFileName, setExcelFileName] = useState('')
   const excelFileRef = useRef<HTMLInputElement>(null)
+  // Column mapping state
+  const [showColMapModal, setShowColMapModal] = useState(false)
+  const [excelHeaders, setExcelHeaders] = useState<string[]>([])
+  const [excelRawData, setExcelRawData] = useState<any[][]>([])
+  const [colMap, setColMap] = useState<Record<string,string>>({
+    batchId: '', color: '', article: '', kg: '', route: '', machine: '', date: ''
+  })
   const [allProcesses] = useState<string[]>(ALL_PROCESS_CODES)
   const [processDurations, setProcessDurations] = useState<ProcessDuration[]>([])
   const [showProcessDaysModal, setShowProcessDaysModal] = useState(false)
@@ -173,111 +180,120 @@ export default function DateCalculatorPage() {
       const wb = XLSX.read(buffer, { type: 'array' })
       const ws = wb.Sheets[wb.SheetNames[0]]
       const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-
       if (data.length < 2) { alert('File is empty or has no data rows.'); return }
 
-      // Auto-detect headers
-      const headers = (data[0] as string[]).map(h => String(h || '').trim().toLowerCase())
+      const headers = (data[0] as any[]).map(h => String(h || '').trim())
+      setExcelHeaders(headers)
+      setExcelRawData(data)
 
-      const colIdx = (names: string[]) => {
-        for (const n of names) {
-          const i = headers.findIndex(h => h.includes(n.toLowerCase()))
-          if (i >= 0) return i
+      // Auto-guess column mapping
+      const guess = (keywords: string[]) => {
+        for (const kw of keywords) {
+          const i = headers.findIndex(h => h.toLowerCase() === kw.toLowerCase())
+          if (i >= 0) return headers[i]
         }
-        return -1
+        for (const kw of keywords) {
+          const i = headers.findIndex(h => h.toLowerCase().includes(kw.toLowerCase()))
+          if (i >= 0) return headers[i]
+        }
+        return ''
       }
 
-      const batchCol   = colIdx(['batch', 'batch id', 'batchid', 'batch_id'])
-      const colorCol   = colIdx(['color', 'colour'])
-      const articleCol = colIdx(['article', 'art'])
-      const kgCol      = colIdx(['qty', 'kg', 'weight', 'quantity'])
-      const routeCol   = colIdx(['route', 'process route', 'processroute'])
-      const machineCol = colIdx(['machine'])
-      const dateCol    = colIdx(['date', 'planned date', 'start date', 'dye date'])
+      setColMap({
+        batchId:  guess(['batch id','batchid','batch_id','batch no','batch number','batch','lot no','lot']),
+        color:    guess(['color','colour','shade','shade name']),
+        article:  guess(['article','art no','article no','design']),
+        kg:       guess(['qty kg','qty(kg)','qty (kg)','kg','weight','qty','quantity']),
+        route:    guess(['route','process route','process','processroute']),
+        machine:  guess(['machine','m/c','machine no']),
+        date:     guess(['dye date','dyeing date','start date','planned date','date']),
+      })
 
-      const parsed: any[] = []
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i] as any[]
-        const batchId = batchCol >= 0 ? String(row[batchCol] || '').trim() : `XL-${i}`
-        if (!batchId || batchId === 'XL-') continue
-
-        const color    = colorCol   >= 0 ? String(row[colorCol]   || '').trim() : ''
-        const article  = articleCol >= 0 ? String(row[articleCol] || '').trim() : ''
-        const kg       = kgCol      >= 0 ? parseFloat(row[kgCol])  || 0 : 0
-        const machine  = machineCol >= 0 ? String(row[machineCol] || '').trim() : ''
-        const dateVal  = dateCol    >= 0 ? row[dateCol] : ''
-        const routeRaw = routeCol   >= 0 ? String(row[routeCol]   || '').trim() : ''
-
-        // Parse date
-        let dateStr = ''
-        if (dateVal) {
-          if (typeof dateVal === 'number') {
-            // Excel serial date
-            const d = XLSX.SSF.parse_date_code(dateVal)
-            if (d) dateStr = `${String(d.d).padStart(2,'0')}/${String(d.m).padStart(2,'0')}/${d.y}`
-          } else {
-            const s = String(dateVal).trim()
-            const parsed2 = normalizeDate(s)
-            if (parsed2) dateStr = dateToDisplayStr(parsed2)
-          }
-        }
-
-        // Parse process route
-        const routeParts = routeRaw
-          ? routeRaw.split(/[\s,>/\\|]+/).map((x: string) => x.trim()).filter(Boolean)
-          : []
-
-        // Build the row in same shape as DB rows
-        const fakeOrder = {
-          id:           `xl-order-${i}`,
-          orderNumber:  batchId,
-          article,
-          color,
-          qtyKg:        kg,
-          processRoute: routeParts,
-          machine,
-          processMachines: machine ? { [machine]: machine } : {},
-          splits: [],
-        }
-        const fakeBatch = {
-          batchId,
-          batchNumber: i,
-          kg,
-          plannedDate: dateStr,
-          dateCalcPlan: machine && dateStr ? { [machine]: dateStr } : {},
-          dcGeneratedOnce: false,
-          dcRegenerate:    false,
-          _fromExcel: true,
-        }
-        // Pre-fill any process date columns found in headers
-        for (const pc of ALL_PROCESS_CODES) {
-          const ci = headers.findIndex(h => h === pc.toLowerCase())
-          if (ci >= 0 && row[ci]) {
-            const rawD = row[ci]
-            let ds = ''
-            if (typeof rawD === 'number') {
-              const pd = XLSX.SSF.parse_date_code(rawD)
-              if (pd) ds = `${String(pd.d).padStart(2,'0')}/${String(pd.m).padStart(2,'0')}/${pd.y}`
-            } else {
-              const pn = normalizeDate(String(rawD))
-              if (pn) ds = dateToDisplayStr(pn)
-            }
-            if (ds) fakeBatch.dateCalcPlan[pc] = ds
-          }
-        }
-        parsed.push({ order: fakeOrder, batch: fakeBatch })
-      }
-
-      if (!parsed.length) { alert('No valid batch rows found. Check your file has Batch ID column.'); return }
-      setExcelRows(parsed)
-      setShowExcelRows(true)
-      alert(`✓ Loaded ${parsed.length} batches from "${file.name}".\n\nNow click ⚙ Generate Dates to calculate.`)
+      setShowColMapModal(true)
     } catch (err: any) {
-      alert('Failed to read Excel: ' + (err.message || 'Unknown error'))
+      alert('Failed to read file: ' + (err.message || 'Unknown error'))
     } finally {
       setExcelUploading(false)
       if (excelFileRef.current) excelFileRef.current.value = ''
     }
+  }
+
+  const applyColMapping = () => {
+    const headers = excelHeaders
+    const data = excelRawData
+
+    const getCol = (colName: string) => colName ? headers.indexOf(colName) : -1
+
+    const batchCol   = getCol(colMap.batchId)
+    const colorCol   = getCol(colMap.color)
+    const articleCol = getCol(colMap.article)
+    const kgCol      = getCol(colMap.kg)
+    const routeCol   = getCol(colMap.route)
+    const machineCol = getCol(colMap.machine)
+    const dateCol    = getCol(colMap.date)
+
+    const parsed: any[] = []
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i] as any[]
+      const batchId = batchCol >= 0 ? String(row[batchCol] || '').trim() : `XL-${i}`
+      if (!batchId || batchId === `XL-${i}` && !row.some(Boolean)) continue
+      if (!batchId.trim()) continue
+
+      const color    = colorCol   >= 0 ? String(row[colorCol]   || '').trim() : ''
+      const article  = articleCol >= 0 ? String(row[articleCol] || '').trim() : ''
+      const kg       = kgCol      >= 0 ? parseFloat(String(row[kgCol]).replace(/[^0-9.]/g,'')) || 0 : 0
+      const machine  = machineCol >= 0 ? String(row[machineCol] || '').trim() : ''
+      const dateVal  = dateCol    >= 0 ? row[dateCol] : ''
+      const routeRaw = routeCol   >= 0 ? String(row[routeCol]   || '').trim() : ''
+
+      // Parse date (handle Excel serial numbers and string dates)
+      let dateStr = ''
+      if (dateVal !== '' && dateVal !== null && dateVal !== undefined) {
+        if (typeof dateVal === 'number' && dateVal > 10000) {
+          // Excel serial date
+          const d = new Date(Math.round((dateVal - 25569) * 86400 * 1000))
+          if (!isNaN(d.getTime())) dateStr = dateToDisplayStr(d)
+        } else {
+          const s = String(dateVal).trim()
+          const pn = normalizeDate(s)
+          if (pn) dateStr = dateToDisplayStr(pn)
+        }
+      }
+
+      // Parse route: split on / , space > \
+      const routeParts = routeRaw
+        ? routeRaw.split(/[/,\\\s>|]+/).map((x: string) => x.trim()).filter(Boolean)
+        : []
+
+      const fakeOrder = {
+        id: `xl-order-${i}`,
+        orderNumber: batchId,
+        article,
+        color,
+        qtyKg: kg,
+        processRoute: routeParts,
+        machine,
+        processMachines: machine && dateStr ? { [machine]: machine } : {},
+        splits: [],
+      }
+      const fakeBatch: any = {
+        batchId,
+        batchNumber: i,
+        kg,
+        plannedDate: dateStr,
+        dateCalcPlan: machine && dateStr ? { [machine]: dateStr } : {},
+        dcGeneratedOnce: false,
+        dcRegenerate: false,
+        _fromExcel: true,
+      }
+
+      parsed.push({ order: fakeOrder, batch: fakeBatch })
+    }
+
+    if (!parsed.length) { alert('No valid rows found. Check the Batch ID column mapping.'); return }
+    setExcelRows(parsed)
+    setShowExcelRows(true)
+    setShowColMapModal(false)
   }
 
   const handleExcelDateChange = (batchId: string, pc: string, value: string) => {
@@ -870,6 +886,73 @@ export default function DateCalculatorPage() {
         </div>
         )}
       </div>
+
+      {/* ── Column Mapping Modal ── */}
+      {showColMapModal && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000 }}
+          onClick={() => setShowColMapModal(false)}>
+          <div style={{ background:'white', borderRadius:10, padding:28, maxWidth:520, width:'94%', maxHeight:'85vh', overflow:'auto' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <div>
+                <div style={{ fontSize:15, fontWeight:700 }}>Map Excel Columns</div>
+                <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Tell us which column contains each field from <strong>{excelFileName}</strong></div>
+              </div>
+              <button onClick={() => setShowColMapModal(false)} style={{ border:'none', background:'none', fontSize:20, cursor:'pointer' }}>✕</button>
+            </div>
+
+            {/* Preview first 3 rows */}
+            <div style={{ background:'#F9FAFB', borderRadius:8, padding:'8px 12px', marginBottom:16, fontSize:11, color:'#374151', overflowX:'auto' }}>
+              <div style={{ fontWeight:700, marginBottom:4, color:'#6B7280' }}>YOUR EXCEL HEADERS:</div>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                {excelHeaders.map((h,i) => (
+                  <span key={i} style={{ background:'#E0E7FF', color:'#3730A3', padding:'2px 8px', borderRadius:4, fontSize:11, fontWeight:600 }}>{h}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Mapping dropdowns */}
+            {([
+              { key:'batchId',  label:'Batch ID *',   hint:'Unique batch identifier' },
+              { key:'color',    label:'Color / Shade', hint:'Colour or shade name' },
+              { key:'article',  label:'Article',       hint:'Article or design number' },
+              { key:'kg',       label:'Qty (KG)',       hint:'Weight in kg' },
+              { key:'route',    label:'Process Route', hint:'e.g. S/F or D/S/F' },
+              { key:'machine',  label:'Machine',       hint:'Machine name or number' },
+              { key:'date',     label:'Dye Date *',    hint:'The anchor date for generation' },
+            ] as {key:string,label:string,hint:string}[]).map(({ key, label, hint }) => (
+              <div key={key} style={{ display:'grid', gridTemplateColumns:'160px 1fr', gap:8, alignItems:'center', marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:12, fontWeight:600, color:'#111' }}>{label}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF' }}>{hint}</div>
+                </div>
+                <select
+                  value={colMap[key] || ''}
+                  onChange={e => setColMap(prev => ({ ...prev, [key]: e.target.value }))}
+                  style={{ padding:'7px 10px', fontSize:12, border:'1px solid #D1D5DB', borderRadius:6, background: colMap[key] ? '#F0FDF4' : '#FFF' }}
+                >
+                  <option value="">— Not in file —</option>
+                  {excelHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+            ))}
+
+            <div style={{ display:'flex', gap:8, marginTop:20 }}>
+              <button
+                onClick={applyColMapping}
+                disabled={!colMap.batchId || !colMap.date}
+                style={{ padding:'9px 20px', fontSize:13, fontWeight:700, background: (!colMap.batchId || !colMap.date) ? '#E5E7EB' : 'var(--accent)', color: (!colMap.batchId || !colMap.date) ? '#9CA3AF' : '#fff', border:'none', borderRadius:6, cursor: (!colMap.batchId || !colMap.date) ? 'not-allowed' : 'pointer' }}
+              >
+                ✓ Load {excelRawData.length - 1} Rows
+              </button>
+              <button onClick={() => setShowColMapModal(false)} style={{ padding:'9px 16px', fontSize:13, border:'1px solid #D1D5DB', borderRadius:6, cursor:'pointer', background:'white' }}>Cancel</button>
+            </div>
+            {(!colMap.batchId || !colMap.date) && (
+              <div style={{ fontSize:11, color:'#DC2626', marginTop:8 }}>* Batch ID and Dye Date are required to generate dates.</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showProcessDaysModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
