@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { loadOrSeedProcessList } from '@/lib/processMap'
-import * as XLSX from 'xlsx'
 
 interface Batch {
   batchId: string
@@ -176,6 +175,7 @@ export default function DateCalculatorPage() {
     setExcelUploading(true)
     setExcelFileName(file.name)
     try {
+      const XLSX = await import('xlsx')
       const buffer = await file.arrayBuffer()
       const wb = XLSX.read(buffer, { type: 'array' })
       const ws = wb.Sheets[wb.SheetNames[0]]
@@ -329,8 +329,9 @@ export default function DateCalculatorPage() {
     alert(`✓ Dates generated for ${result.generated} Excel batches!`)
   }
 
-  const exportExcelWithDates = () => {
+  const exportExcelWithDates = async () => {
     if (!excelRows.length) return
+    const XLSX = await import('xlsx')
     const headers = ['Batch ID', 'Color', 'Article', 'Qty (Kg)', 'Route', 'Machine', ...ALL_PROCESS_CODES]
     const dataRows = excelRows.map(({ order, batch }) => [
       batch.batchId,
