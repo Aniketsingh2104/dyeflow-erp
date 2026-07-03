@@ -667,11 +667,39 @@ export default function DateCalculatorPage() {
     return entries.map(e => `${e.pc}: ${e.date}`).join(' / ')
   }
 
-  if (!rows.length) return (
+  if (!rows.length && !showExcelRows) return (
     <div className="content">
       <div className="card">
-        <div className="card-header"><span className="card-title">Date Calculator Sheet</span></div>
-        <div className="empty-state" style={{ padding: '30px' }}>No split batches found. Split orders first.</div>
+        <div className="card-header">
+          <span className="card-title">Date Calculator Sheet</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input ref={excelFileRef} type="file" accept=".xlsx,.xls,.csv"
+              onChange={handleExcelUpload} style={{ display: 'none' }} id="dc-excel-upload-empty" />
+            <label htmlFor="dc-excel-upload-empty" style={{
+              padding: '8px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+              background: 'var(--accent)', color: '#fff',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+              {excelUploading ? '⏳ Loading…' : '📤 Upload Excel to Calculate Dates'}
+            </label>
+          </div>
+        </div>
+        <div style={{ padding: '40px', textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>No split batches in ERP</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 20 }}>
+            You can still calculate dates by uploading an Excel file with batch details.
+          </div>
+          <div style={{ display: 'inline-block', background: 'var(--bg-secondary)', borderRadius: 10, padding: '14px 20px', fontSize: 12, color: 'var(--text-secondary)', textAlign: 'left' }}>
+            <strong>Required columns in your Excel:</strong><br/>
+            <span style={{ color: 'var(--accent)' }}>Batch ID</span> &nbsp;· 
+            <span style={{ color: 'var(--accent)' }}>Color</span> &nbsp;· 
+            <span style={{ color: 'var(--accent)' }}>KG</span> &nbsp;· 
+            <span style={{ color: 'var(--accent)' }}>Route</span> &nbsp;· 
+            <span style={{ color: 'var(--accent)' }}>Machine</span> &nbsp;· 
+            <span style={{ color: 'var(--accent)' }}>Date</span>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -771,6 +799,8 @@ export default function DateCalculatorPage() {
             </div>
           </div>
         )}
+        {/* ── Main ERP Batch Table ── */}
+        {rows.length > 0 && (
         <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 200px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
@@ -838,6 +868,7 @@ export default function DateCalculatorPage() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {showProcessDaysModal && (
