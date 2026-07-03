@@ -470,8 +470,8 @@ export default function DateCalculatorPage() {
   )
 
   return (
-    <div className="content">
-      <div className="card">
+    <div className="content" style={{ height:'100vh', display:'flex', flexDirection:'column', overflow:'hidden', padding:0 }}>
+      <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', margin:0, borderRadius:0, border:'none', borderBottom:'1px solid var(--border-light)' }}>
         <div className="card-header">
           <span className="card-title">Date Calculator Sheet</span>
           <div style={{ display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap' }}>
@@ -501,12 +501,12 @@ export default function DateCalculatorPage() {
         </div>
 
         {showExcelRows && excelRows.length > 0 && (
-          <div style={{ borderTop:'2px solid var(--accent)' }}>
-            <div style={{ padding:'8px 16px',background:'var(--accent-light)',display:'flex',alignItems:'center',gap:12 }}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderTop:'2px solid var(--accent)' }}>
+            <div style={{ padding:'6px 16px', background:'var(--accent-light)', display:'flex', alignItems:'center', gap:12, flexShrink:0 }}>
               <span style={{ fontSize:12,fontWeight:700,color:'var(--accent-dark)' }}>📤 Excel — {excelRows.length} rows from "{excelFileName}"</span>
               <span style={{ fontSize:11,color:'var(--text-tertiary)' }}>Temporary · not saved to ERP</span>
             </div>
-            <div style={{ overflowX:'auto',maxHeight:320 }}>
+            <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
               <table style={{ width:'100%',borderCollapse:'collapse',fontSize:12 }}>
                 <thead>
                   <tr style={{ background:'#EFF6FF',position:'sticky',top:0,zIndex:10 }}>
