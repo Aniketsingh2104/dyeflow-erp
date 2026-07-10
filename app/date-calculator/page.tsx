@@ -68,16 +68,13 @@ const buildHolidaySet = (holidays: any[]): Set<string> => {
   return set
 }
 
-const addDaysSkippingHolidays = (
-  date: Date, days: number, holidaySet: Set<string>, forward = true
-): Date => {
+const addDaysSkippingHolidays = (date: Date, days: number, holidaySet: Set<string>, forward = true): Date => {
   const d = new Date(date.getTime())
   let remaining = Math.abs(days)
   const step = forward ? 1 : -1
   let safety = 0
   while (remaining > 0 && safety < 730) {
-    d.setDate(d.getDate() + step)
-    safety++
+    d.setDate(d.getDate() + step); safety++
     if (!holidaySet.has(dateToStr(d))) remaining--
   }
   return d
@@ -105,6 +102,21 @@ const ALL_PROCESS_CODES = [
   'Add','Level','Rc','Fix','Wash','Dry','B','R','K',
   'QA','Packing','Dispatch','FinalDispatch'
 ]
+
+// Machine process codes in priority order for anchor detection
+// D takes priority over S, S over Wash etc.
+const MACHINE_PROCS_PRIORITY = ['S2','Add','Level','Rc','Fix','Wash','S','D']
+
+// Given a route like ['D','F'] or ['C','H','D','F'] find which process the Excel date belongs to
+const getAnchorProcess = (routeParts: string[]): string => {
+  // Search in REVERSE priority so D wins over S wins over Wash
+  for (const mp of [...MACHINE_PROCS_PRIORITY].reverse()) {
+    if (routeParts.some((p: string) => p.toLowerCase() === mp.toLowerCase())) {
+      return mp
+    }
+  }
+  return routeParts[0] || 'D'
+}
 
 export default function DateCalculatorPage() {
   const [rows, setRows] = useState<any[]>([])
@@ -185,7 +197,7 @@ export default function DateCalculatorPage() {
       const ac = find(['article','art no','design'])
       const kc = find(['qty kg','qty(kg)','qty','kg','weight','quantity'])
       const rc = find(['route','process route','processroute'])
-      const mc = find(['machine','m/c'])
+      const mc = find(['machine','m/c','machine no','machine name'])
       const dc = find(['dye date','dyeing date','start date','planned date','date'])
 
       if (bc < 0) { alert('Batch ID column not found.\nHeaders: ' + headers.join(', ')); return }
@@ -199,7 +211,7 @@ export default function DateCalculatorPage() {
         const color    = cc >= 0 ? String(row[cc] || '').trim() : ''
         const article  = ac >= 0 ? String(row[ac] || '').trim() : ''
         const kg       = kc >= 0 ? parseFloat(String(row[kc]).replace(/[^0-9.]/g,'')) || 0 : 0
-        const machine  = mc >= 0 ? String(row[mc] || '').trim() : ''
+        const machineName = mc >= 0 ? String(row[mc] || '').trim() : ''
         const routeRaw = rc >= 0 ? String(row[rc] || '').trim() : ''
         const dateRaw  = row[dc]
         let dateStr = ''
@@ -211,27 +223,28 @@ export default function DateCalculatorPage() {
         }
         const routeParts = routeRaw ? routeRaw.split(/[/,\\\s>|]+/).map((x:string)=>x.trim()).filter(Boolean) : []
 
-        // Find the machine process in the route (S, D, Wash, S2, Add, Level, Rc, Fix)
-        // The date given in Excel belongs to this machine process
-        const MACHINE_PROCS = ['S2','Add','Level','Rc','Fix','Wash','S','D']
-        const machineInRoute = routeParts.find((p:string) => MACHINE_PROCS.some(m => p.toLowerCase() === m.toLowerCase()))
-        const anchor = machine || machineInRoute || (routeParts[0] || '')
+        // Find which machine process column the date belongs to based on route
+        // D/F → D, C/H/D/F → D, S/F → S, Wash/F → Wash, H/S/Wash → Wash
+        const anchorProcess = getAnchorProcess(routeParts)
 
-        // Normalise anchor to correct case (e.g. 'wash' -> 'Wash', 's' -> 'S')
-        const anchorNorm = MACHINE_PROCS.find(m => m.toLowerCase() === anchor.toLowerCase()) || anchor
         parsed.push({
           order: { id:`xl-${i}`, orderNumber:batchId, article, color, qtyKg:kg,
-            processRoute:routeParts, machine:anchorNorm,
-            processMachines: anchorNorm&&dateStr ? {[anchorNorm]:anchorNorm} : {}, splits:[] },
+            processRoute:routeParts, machine:machineName,
+            processMachines: anchorProcess&&dateStr ? {[anchorProcess]:machineName||anchorProcess} : {},
+            splits:[] },
           batch: { batchId, batchNumber:i, kg, plannedDate:dateStr,
-            dateCalcPlan: anchorNorm&&dateStr ? {[anchorNorm]:dateStr} : {},
+            dateCalcPlan: anchorProcess&&dateStr ? {[anchorProcess]:dateStr} : {},
             dcGeneratedOnce:false, dcRegenerate:false, _fromExcel:true }
         })
       }
       if (!parsed.length) { alert('No valid rows found.'); return }
       setExcelRows(parsed)
       setShowExcelRows(true)
-      alert(`✓ Loaded ${parsed.length} batches!\n\nBatch ID: ${headers[bc]}\nDate: ${headers[dc]}\nRoute: ${rc>=0?headers[rc]:'—'}\n\nDate column mapped to machine process automatically.\n(D/F → D column, S/F → S column, Wash/F → Wash column)\n\nClick ⚙ Generate Dates (Excel) to calculate.`)
+      const anchors = [...new Set(parsed.map(p => {
+        const ap = getAnchorProcess(p.order.processRoute || [])
+        return `${(p.order.processRoute||[]).join('/')}→${ap}`
+      }).filter(Boolean))].slice(0,5)
+      alert(`✓ Loaded ${parsed.length} batches from "${file.name}"\n\nDate column mapped:\n${anchors.join('\n')}\n\nClick ⚙ Generate Dates (Excel) to calculate all process dates.`)
     } catch (err: any) {
       alert('Error: ' + (err?.message || String(err)))
     } finally {
@@ -265,14 +278,14 @@ export default function DateCalculatorPage() {
   const exportExcelWithDates = async () => {
     if (!excelRows.length) return
     const XLSX = await loadXLSX()
-    const headers = ['Batch ID','Color','Article','Qty (Kg)','Route','Machine',...ALL_PROCESS_CODES]
+    const hdrs = ['Batch ID','Color','Article','Qty (Kg)','Route','Machine',...ALL_PROCESS_CODES]
     const dataRows = excelRows.map(({order,batch}) => [
       batch.batchId, order.color, order.article, batch.kg||order.qtyKg,
       (order.processRoute||[]).join('/'), order.machine,
       ...ALL_PROCESS_CODES.map(pc => batch.dateCalcPlan?.[pc]||'')
     ])
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headers,...dataRows]), 'Dates')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdrs,...dataRows]), 'Dates')
     XLSX.writeFile(wb, 'date_calculator_output.xlsx')
   }
 
@@ -284,8 +297,7 @@ export default function DateCalculatorPage() {
     const key = `${orderId}-${batchId}-${pc}`
     if (pendingDateChanges.current[key]) clearTimeout(pendingDateChanges.current[key])
     pendingDateChanges.current[key] = setTimeout(() => {
-      const stored = localStorage.getItem('dyeflow_db')
-      if (!stored) return
+      const stored = localStorage.getItem('dyeflow_db'); if (!stored) return
       const db = JSON.parse(stored)
       const order = (db.orders||[]).find((o:any)=>o.id===orderId)
       if (!order) return
@@ -399,7 +411,7 @@ export default function DateCalculatorPage() {
       localStorage.setItem('dyeflow_db', JSON.stringify(db))
       loadData(); savePlannedDatesToOrders(false); setSaveStatus('saved')
       setTimeout(()=>setSaveStatus('idle'),3000)
-      alert(`✓ Done!\n\nGenerated: ${result.generated}\nRe-generated: ${result.regenerated}\nSkipped: ${result.skipped}`)
+      alert(`✓ Done!\nGenerated: ${result.generated}\nRe-generated: ${result.regenerated}\nSkipped: ${result.skipped}`)
     }, 0)
   }
 
@@ -470,7 +482,8 @@ export default function DateCalculatorPage() {
           <div style={{ fontSize:15,fontWeight:600,color:'var(--text-primary)',marginBottom:8 }}>No split batches in ERP</div>
           <div style={{ fontSize:13,color:'var(--text-tertiary)',marginBottom:20 }}>Upload an Excel file with batch details to calculate dates.</div>
           <div style={{ display:'inline-block',background:'var(--bg-secondary)',borderRadius:10,padding:'12px 18px',fontSize:12,color:'var(--text-secondary)',textAlign:'left' }}>
-            <strong>Your file needs:</strong> Batch ID &nbsp;·&nbsp; Colour &nbsp;·&nbsp; Qty &nbsp;·&nbsp; Route &nbsp;·&nbsp; Date
+            <strong>Required columns:</strong> Batch ID &nbsp;·&nbsp; Colour &nbsp;·&nbsp; Qty &nbsp;·&nbsp; Route &nbsp;·&nbsp; Machine &nbsp;·&nbsp; Date<br/>
+            <span style={{color:'var(--text-tertiary)',marginTop:4,display:'block'}}>Date auto-maps to correct process: D/F→D · S/F→S · Wash/F→Wash</span>
           </div>
         </div>
       </div>
@@ -503,9 +516,9 @@ export default function DateCalculatorPage() {
             </button>
           </div>
         </div>
-        <div style={{ fontSize:'11px',color:'var(--text-tertiary)',padding:'0 20px',marginBottom:'12px' }}>
-          Dates locked after first generation unless <strong>Re-Generate</strong> is checked.
-          Click <strong>⬇ Save to Orders</strong> to push dates to Delay Predictor, Reports, and AI.
+        <div style={{ fontSize:'11px',color:'var(--text-tertiary)',padding:'4px 20px',flexShrink:0 }}>
+          Dates locked after first generation unless <strong>Re-Generate</strong> is checked. &nbsp;·&nbsp;
+          Date auto-mapped: D/F→D col · S/F→S col · Wash/F→Wash col · C/H/D/F→D col
         </div>
 
         {showExcelRows && excelRows.length > 0 && (
@@ -520,7 +533,7 @@ export default function DateCalculatorPage() {
                   <tr style={{ background:'#EFF6FF',position:'sticky',top:0,zIndex:10 }}>
                     <th style={thStyle}>BATCH ID</th><th style={thStyle}>COLOR</th><th style={thStyle}>ARTICLE</th>
                     <th style={thStyle}>KG</th><th style={thStyle}>ROUTE</th><th style={thStyle}>MACHINE</th>
-                    {ALL_PROCESS_CODES.map(pc=><th key={pc} style={thStyle}>{pc}</th>)}
+                    {ALL_PROCESS_CODES.map(pc=><th key={pc} style={{...thStyle, background: MACHINE_PROCS_PRIORITY.includes(pc)?'#DBEAFE':thStyle.background}}>{pc}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -533,7 +546,7 @@ export default function DateCalculatorPage() {
                         <td style={tdStyle}>{order.article||'-'}</td>
                         <td style={{ ...tdStyle,fontWeight:700 }}>{batch.kg||'-'}</td>
                         <td style={tdStyle}>{(order.processRoute||[]).join('/')||'-'}</td>
-                        <td style={tdStyle}>{order.machine||'-'}</td>
+                        <td style={{ ...tdStyle,fontSize:11,color:'#6B7280' }}>{order.machine||'-'}</td>
                         {ALL_PROCESS_CODES.map(pc=>(
                           <td key={pc} style={{ padding:0,borderRight:'1px solid #E5E7EB',background:plan[pc]?'#F0FDF4':'transparent' }}>
                             <input type="text" value={plan[pc]||''} onChange={e=>handleExcelDateChange(batch.batchId,pc,e.target.value)}
@@ -550,7 +563,7 @@ export default function DateCalculatorPage() {
         )}
 
         {rows.length > 0 && (
-          <div style={{ overflowX:'auto',overflowY:'auto',maxHeight:'calc(100vh - 200px)' }}>
+          <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
             <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
               <thead>
                 <tr style={{ background:'#F9FAFB',position:'sticky',top:0,zIndex:10 }}>
@@ -579,8 +592,6 @@ export default function DateCalculatorPage() {
                       {allProcesses.map(pc=>(
                         <td key={pc} style={{ padding:0,borderRight:'1px solid #E5E7EB' }}>
                           <input type="text" value={plan[pc]||''} onChange={e=>handleDateChange(order.id,batch.batchId,pc,e.target.value)}
-                            onDoubleClick={e=>{const inp=e.target as HTMLInputElement;inp.type='date';inp.focus();const cv=plan[pc]||'';if(cv.match(/^\d{2}\/\d{2}\/\d{4}$/)){const[d,m,y]=cv.split('/');inp.value=`${y}-${m}-${d}`}}}
-                            onBlur={e=>{const inp=e.target as HTMLInputElement;if(inp.type==='date'&&inp.value){const[y,m,d]=inp.value.split('-');handleDateChange(order.id,batch.batchId,pc,`${d}/${m}/${y}`)}inp.type='text'}}
                             style={{ width:'100%',minWidth:'110px',height:'36px',border:0,background:'transparent',padding:'4px 8px',fontSize:'12px',textAlign:'center',outline:'none' }} />
                         </td>
                       ))}
@@ -642,10 +653,10 @@ export default function DateCalculatorPage() {
 }
 
 const thStyle: React.CSSProperties = {
-  padding:'10px 14px',textAlign:'left',fontSize:'10px',fontWeight:700,color:'#6B7280',
+  padding:'8px 12px',textAlign:'left',fontSize:'10px',fontWeight:700,color:'#6B7280',
   textTransform:'uppercase',letterSpacing:'0.5px',borderBottom:'2px solid #E5E7EB',
   borderRight:'1px solid #E5E7EB',whiteSpace:'nowrap',background:'#F9FAFB'
 }
 const tdStyle: React.CSSProperties = {
-  padding:'10px 14px',fontSize:'12px',borderRight:'1px solid #E5E7EB',whiteSpace:'nowrap'
+  padding:'8px 12px',fontSize:'12px',borderRight:'1px solid #E5E7EB',whiteSpace:'nowrap'
 }
