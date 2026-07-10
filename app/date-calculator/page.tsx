@@ -41,13 +41,11 @@ const dateToStr = (date: Date | null): string => {
   const d = date instanceof Date ? date : new Date(date)
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
-
 const dateToDisplayStr = (date: Date | null): string => {
   if (!date) return ''
   const d = date instanceof Date ? date : new Date(date)
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`
 }
-
 const normalizeDate = (val: any): Date | null => {
   if (!val) return null
   if (typeof val === 'string' && val.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
@@ -58,25 +56,14 @@ const normalizeDate = (val: any): Date | null => {
   const d = new Date(val)
   return isNaN(d.getTime()) ? null : d
 }
-
 const buildHolidaySet = (holidays: any[]): Set<string> => {
   const set = new Set<string>()
-  for (const h of holidays) {
-    const d = normalizeDate(h.date)
-    if (d) set.add(dateToStr(d))
-  }
+  for (const h of holidays) { const d = normalizeDate(h.date); if (d) set.add(dateToStr(d)) }
   return set
 }
-
 const addDaysSkippingHolidays = (date: Date, days: number, holidaySet: Set<string>, forward = true): Date => {
-  const d = new Date(date.getTime())
-  let remaining = Math.abs(days)
-  const step = forward ? 1 : -1
-  let safety = 0
-  while (remaining > 0 && safety < 730) {
-    d.setDate(d.getDate() + step); safety++
-    if (!holidaySet.has(dateToStr(d))) remaining--
-  }
+  const d = new Date(date.getTime()); let remaining = Math.abs(days); const step = forward ? 1 : -1; let safety = 0
+  while (remaining > 0 && safety < 730) { d.setDate(d.getDate() + step); safety++; if (!holidaySet.has(dateToStr(d))) remaining-- }
   return d
 }
 
@@ -84,9 +71,7 @@ let _processNameCache: Record<string, string> | null = null
 const getProcessName = (code: string): string => {
   if (!_processNameCache) {
     _processNameCache = {}
-    if (typeof window !== 'undefined') {
-      try { loadOrSeedProcessList().forEach(p => { _processNameCache![p.code] = p.name }) } catch {}
-    }
+    if (typeof window !== 'undefined') { try { loadOrSeedProcessList().forEach(p => { _processNameCache![p.code] = p.name }) } catch {} }
   }
   const fallback: Record<string, string> = {
     'C':'CBR','S':'SCQ','H':'Heat-Set','D':'Dyeing','S2':'SCQ2','Rx':'Relax','O':'Opener',
@@ -97,23 +82,13 @@ const getProcessName = (code: string): string => {
   return _processNameCache![code] || fallback[code] || code
 }
 
-const ALL_PROCESS_CODES = [
-  'C','S','H','D','S2','Rx','O','G','F','Co','Tu',
-  'Add','Level','Rc','Fix','Wash','Dry','B','R','K',
-  'QA','Packing','Dispatch','FinalDispatch'
-]
-
-// Machine process codes in priority order for anchor detection
-// D takes priority over S, S over Wash etc.
+const ALL_PROCESS_CODES = ['C','S','H','D','S2','Rx','O','G','F','Co','Tu','Add','Level','Rc','Fix','Wash','Dry','B','R','K','QA','Packing','Dispatch','FinalDispatch']
 const MACHINE_PROCS_PRIORITY = ['S2','Add','Level','Rc','Fix','Wash','S','D']
 
-// Given a route like ['D','F'] or ['C','H','D','F'] find which process the Excel date belongs to
+// Given route parts, find anchor process (D wins over S wins over Wash etc.)
 const getAnchorProcess = (routeParts: string[]): string => {
-  // Search in REVERSE priority so D wins over S wins over Wash
   for (const mp of [...MACHINE_PROCS_PRIORITY].reverse()) {
-    if (routeParts.some((p: string) => p.toLowerCase() === mp.toLowerCase())) {
-      return mp
-    }
+    if (routeParts.some((p: string) => p.toLowerCase() === mp.toLowerCase())) return mp
   }
   return routeParts[0] || 'D'
 }
@@ -134,8 +109,7 @@ export default function DateCalculatorPage() {
   useEffect(() => { loadData() }, [])
 
   const loadData = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
+    const stored = localStorage.getItem('dyeflow_db'); if (!stored) return
     const db = JSON.parse(stored)
     setProcessDurations(db.processDurations || [])
     const splittedOrders = (db.orders || []).filter((o: Order) => Array.isArray(o.splits) && o.splits.length > 0)
@@ -162,7 +136,6 @@ export default function DateCalculatorPage() {
 
   const pendingDateChanges = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
-  // ── SheetJS CDN loader ────────────────────────────────────────────────
   const loadXLSX = (): Promise<any> => new Promise((resolve, reject) => {
     if ((window as any).XLSX) { resolve((window as any).XLSX); return }
     const s = document.createElement('script')
@@ -172,12 +145,9 @@ export default function DateCalculatorPage() {
     document.head.appendChild(s)
   })
 
-  // ── Excel Upload ──────────────────────────────────────────────────────
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setExcelUploading(true)
-    setExcelFileName(file.name)
+    const file = e.target.files?.[0]; if (!file) return
+    setExcelUploading(true); setExcelFileName(file.name)
     try {
       const buf = await file.arrayBuffer()
       const XLSX = await loadXLSX()
@@ -203,61 +173,101 @@ export default function DateCalculatorPage() {
       if (bc < 0) { alert('Batch ID column not found.\nHeaders: ' + headers.join(', ')); return }
       if (dc < 0) { alert('Date column not found.\nHeaders: ' + headers.join(', ')); return }
 
+      // Machine process codes
+      const MPROCS = ['S2','Add','Level','Rc','Fix','Wash','S','D']
+
       const parsed: any[] = []
       for (let i = 1; i < data.length; i++) {
         const row = data[i] as any[]
-        const batchId = String(row[bc] || '').trim()
-        if (!batchId) continue
-        const color    = cc >= 0 ? String(row[cc] || '').trim() : ''
-        const article  = ac >= 0 ? String(row[ac] || '').trim() : ''
-        const kg       = kc >= 0 ? parseFloat(String(row[kc]).replace(/[^0-9.]/g,'')) || 0 : 0
+        const batchId = String(row[bc] || '').trim(); if (!batchId) continue
+        const color      = cc >= 0 ? String(row[cc] || '').trim() : ''
+        const article    = ac >= 0 ? String(row[ac] || '').trim() : ''
+        const kg         = kc >= 0 ? parseFloat(String(row[kc]).replace(/[^0-9.]/g,'')) || 0 : 0
         const machineName = mc >= 0 ? String(row[mc] || '').trim() : ''
-        const routeRaw = rc >= 0 ? String(row[rc] || '').trim() : ''
-        const dateRaw  = row[dc]
-        let dateStr = ''
-        if (dateRaw) {
-          const s = String(dateRaw).trim()
-          const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-          if (mdy) dateStr = `${mdy[2].padStart(2,'0')}/${mdy[1].padStart(2,'0')}/${mdy[3]}`
-          else { const d = normalizeDate(s); if (d) dateStr = dateToDisplayStr(d) }
-        }
-        const routeParts = routeRaw ? routeRaw.split(/[/,\\\s>|]+/).map((x:string)=>x.trim()).filter(Boolean) : []
+        const routeRaw   = rc >= 0 ? String(row[rc] || '').trim() : ''
+        const dateRaw    = row[dc]
 
-        // Find which machine process column the date belongs to based on route
-        // D/F → D, C/H/D/F → D, S/F → S, Wash/F → Wash, H/S/Wash → Wash
-        const anchorProcess = getAnchorProcess(routeParts)
+        // Parse route — split only on / (not comma, since comma separates machines)
+        const routeParts = routeRaw ? routeRaw.split('/').map((x:string)=>x.trim()).filter(Boolean) : []
+
+        // Handle comma-separated machines and dates
+        // e.g. 'LJET-30,LJET-21' + '7/18/2026,7/15/2026' for route C/S/H/D/F
+        // First date -> first machine process in route, second date -> second machine process
+        const machineNames = machineName.split(',').map((m:string) => m.trim()).filter(Boolean)
+        const dateRaws = String(dateRaw || '').split(',').map((d:string) => d.trim()).filter(Boolean)
+
+        // Find machine processes in route (in order they appear)
+        const machineProcInRoute = routeParts
+          .map((p:string) => MPROCS.find(m => m.toLowerCase() === p.toLowerCase()))
+          .filter(Boolean) as string[]
+
+        // Build dateCalcPlan: first date -> first machine proc, second date -> second machine proc
+        const dateCalcPlan: Record<string,string> = {}
+        for (let di = 0; di < dateRaws.length; di++) {
+          const rawD = dateRaws[di]; if (!rawD) continue
+          let ds = ''
+          const mdy = rawD.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+          if (mdy) ds = `${mdy[2].padStart(2,'0')}/${mdy[1].padStart(2,'0')}/${mdy[3]}`
+          else { const d = normalizeDate(rawD); if (d) ds = dateToDisplayStr(d) }
+          if (!ds) continue
+          const proc = machineProcInRoute[di]
+          if (proc) dateCalcPlan[proc] = ds
+        }
+
+        // Fallback: single date, use anchor detection
+        if (Object.keys(dateCalcPlan).length === 0 && dateRaw) {
+          const s = String(dateRaw).trim()
+          let ds = ''
+          const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+          if (mdy) ds = `${mdy[2].padStart(2,'0')}/${mdy[1].padStart(2,'0')}/${mdy[3]}`
+          else { const d = normalizeDate(s); if (d) ds = dateToDisplayStr(d) }
+          if (ds) {
+            const anchor = getAnchorProcess(routeParts)
+            dateCalcPlan[anchor] = ds
+          }
+        }
+
+        // Build processMachines map: each machine proc -> machine name
+        const processMachinesMap: Record<string,string> = {}
+        machineProcInRoute.forEach((proc:string, idx:number) => {
+          processMachinesMap[proc] = machineNames[idx] || machineNames[0] || machineName
+        })
+
+        const primaryMachine = machineNames[0] || machineName
 
         parsed.push({
           order: { id:`xl-${i}`, orderNumber:batchId, article, color, qtyKg:kg,
-            processRoute:routeParts, machine:machineName,
-            processMachines: anchorProcess&&dateStr ? {[anchorProcess]:machineName||anchorProcess} : {},
-            splits:[] },
-          batch: { batchId, batchNumber:i, kg, plannedDate:dateStr,
-            dateCalcPlan: anchorProcess&&dateStr ? {[anchorProcess]:dateStr} : {},
+            processRoute:routeParts, machine:primaryMachine,
+            processMachines: processMachinesMap, splits:[] },
+          batch: { batchId, batchNumber:i, kg,
+            plannedDate: Object.values(dateCalcPlan)[0] || '',
+            dateCalcPlan,
             dcGeneratedOnce:false, dcRegenerate:false, _fromExcel:true }
         })
       }
+
       if (!parsed.length) { alert('No valid rows found.'); return }
       setExcelRows(parsed)
       setShowExcelRows(true)
-      const anchors = [...new Set(parsed.map(p => {
-        const ap = getAnchorProcess(p.order.processRoute || [])
-        return `${(p.order.processRoute||[]).join('/')}→${ap}`
-      }).filter(Boolean))].slice(0,5)
-      alert(`✓ Loaded ${parsed.length} batches from "${file.name}"\n\nDate column mapped:\n${anchors.join('\n')}\n\nClick ⚙ Generate Dates (Excel) to calculate all process dates.`)
+
+      // Show summary of how dates were mapped
+      const multiDateRows = parsed.filter(p => Object.keys(p.batch.dateCalcPlan).length > 1).length
+      const mappingSamples = [...new Set(parsed.slice(0,20).map(p => {
+        const keys = Object.keys(p.batch.dateCalcPlan)
+        return `${(p.order.processRoute||[]).join('/')} → ${keys.join(', ')}`
+      }))].slice(0,5)
+      alert(`✓ Loaded ${parsed.length} batches from "${file.name}"\n\n${multiDateRows} rows have 2 dates (mapped to 2 processes)\n\nDate mapping examples:\n${mappingSamples.join('\n')}\n\nClick ⚙ Generate Dates (Excel) to calculate.`)
+
     } catch (err: any) {
       alert('Error: ' + (err?.message || String(err)))
     } finally {
-      setExcelUploading(false)
-      e.target.value = ''
+      setExcelUploading(false); e.target.value = ''
     }
   }
 
   const handleExcelDateChange = (batchId: string, pc: string, value: string) => {
     setExcelRows(prev => prev.map(r =>
-      r.batch.batchId === batchId
-        ? { ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan, [pc]: value } } }
-        : r
+      r.batch.batchId === batchId ? { ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan, [pc]: value } } } : r
     ))
   }
 
@@ -317,8 +327,7 @@ export default function DateCalculatorPage() {
     const batch = order&&(order.splits||[]).find((b:any)=>b.batchId===batchId)
     if (!batch) return
     batch.dcRegenerate = checked
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadData()
+    localStorage.setItem('dyeflow_db', JSON.stringify(db)); loadData()
   }
 
   const handleBatchSelection = (batchId: string, checked: boolean) => {
@@ -329,8 +338,7 @@ export default function DateCalculatorPage() {
     if (!selectedBatches.size) { alert('Select batches first'); return }
     if (!confirm(`Clear dates for ${selectedBatches.size} batch(es)?`)) return
     const stored = localStorage.getItem('dyeflow_db'); if (!stored) return
-    const db = JSON.parse(stored)
-    let cleared = 0
+    const db = JSON.parse(stored); let cleared = 0
     selectedBatches.forEach(batchId => {
       for (const order of db.orders||[]) {
         const batch = (order.splits||[]).find((b:any)=>b.batchId===batchId)
@@ -341,9 +349,7 @@ export default function DateCalculatorPage() {
         }
       }
     })
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setSelectedBatches(new Set())
-    loadData()
+    localStorage.setItem('dyeflow_db', JSON.stringify(db)); setSelectedBatches(new Set()); loadData()
     alert(`✓ Cleared ${cleared} batch(es)`)
   }
 
@@ -364,7 +370,7 @@ export default function DateCalculatorPage() {
     const addLoad=(code:string,ds:string,qty:number)=>{ if(!capacityMap[code]||!ds||!qty) return; if(!loadMap[code]) loadMap[code]={}; loadMap[code][ds]=(loadMap[code][ds]||0)+qty }
     const fitDate=(code:string,candidate:string,qty:number)=>{ const base=normalizeDate(candidate); if(!base) return ''; const cap=capacityMap[code]; if(!cap||!qty) return dateToStr(base); let cur=new Date(base.getTime()); for(let i=0;i<365;i++){const ds=dateToStr(cur);if((loadMap[code]?.[ds]||0)+qty<=cap+1e-9){addLoad(code,ds,qty);return ds}cur=addDaysSkippingHolidays(cur,1,holidaySet,true)} return dateToStr(base) }
     const toDisplay=(ymd:string)=>{ const p=ymd.split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0]}`:ymd }
-    const tasks=(db.orders||[]).flatMap((o:any)=>(o.splits||[]).map((b:any)=>({o,b,regen:!!b.dcRegenerate,done:!!b.dcGeneratedOnce,go:!(!!b.dcGeneratedOnce&&!b.dcRegenerate)})))
+    const tasks=(db.orders||[]).flatMap((o:any)=>(o.splits||[]).map((b:any)=>({o,b,go:!(!!b.dcGeneratedOnce&&!b.dcRegenerate),done:!!b.dcGeneratedOnce})))
     for (const t of tasks) { if(t.go) continue; const plan=t.b?.dateCalcPlan||{}; const qty=getQty(t.o,t.b); for(const code of Object.keys(capacityMap)){const ds=dateToStr(normalizeDate(plan[code])||new Date(0)); if(ds) addLoad(code,ds,qty)} result.skipped++ }
     for (const t of tasks) {
       if (!t.go) continue
@@ -375,30 +381,55 @@ export default function DateCalculatorPage() {
       const seq = [...new Set([...routeSeq,...EXTRA_TAIL])].filter((c:string)=>allProcesses.includes(c))
       if (!seq.length) continue
       let anchorCode='', anchorDate:Date|null=null
-      for (const c of seq) { if(!MACHINE_REQUIRED.includes(c)) continue; const d=normalizeDate(plan[c]); if(d&&(!anchorDate||d>anchorDate)){anchorDate=d;anchorCode=c} }
+      // Find anchor: prefer highest-priority machine process that has a date
+      for (const mp of [...MACHINE_PROCS_PRIORITY].reverse()) {
+        const d = normalizeDate(plan[mp])
+        if (d) { anchorDate=d; anchorCode=mp; break }
+      }
       if (!anchorDate) { for(const c of seq){const d=normalizeDate(plan[c]);if(d){anchorDate=d;anchorCode=c;break}} }
       if (!anchorDate) { for(const [c,ds] of Object.entries(plan)){const d=normalizeDate(ds as string);if(d){anchorDate=d;anchorCode=c;break}} }
       if (!anchorDate||!anchorCode) continue
       let workSeq=[...seq]; if(!workSeq.includes(anchorCode)) workSeq=[anchorCode,...workSeq]
       const anchorIdx=workSeq.indexOf(anchorCode); if(anchorIdx<0) continue
-      const planned:Record<string,string>={[anchorCode]:dateToStr(anchorDate)}
-      let back=new Date(anchorDate.getTime()); for(let i=anchorIdx-1;i>=0;i--){back=addDaysSkippingHolidays(back,Math.max(1,dayMap[workSeq[i]]||1),holidaySet,false);planned[workSeq[i]]=dateToStr(back)}
-      let fwd=new Date(anchorDate.getTime()); for(let i=anchorIdx+1;i<workSeq.length;i++){fwd=addDaysSkippingHolidays(fwd,Math.max(1,dayMap[workSeq[i-1]]||1),holidaySet,true);planned[workSeq[i]]=dateToStr(fwd)}
+      const planned:Record<string,string>={...plan,[anchorCode]:dateToStr(anchorDate)}
+      // For processes that already have a date (multi-anchor), keep them
+      const fixedAnchors = new Set(Object.keys(plan).filter(k => normalizeDate(plan[k])))
+      let back=new Date(anchorDate.getTime())
+      for(let i=anchorIdx-1;i>=0;i--){
+        const c=workSeq[i]
+        if(fixedAnchors.has(c)){back=normalizeDate(plan[c])||back;continue}
+        back=addDaysSkippingHolidays(back,Math.max(1,dayMap[c]||1),holidaySet,false)
+        planned[c]=dateToStr(back)
+      }
+      let fwd=new Date(anchorDate.getTime())
+      for(let i=anchorIdx+1;i<workSeq.length;i++){
+        const c=workSeq[i]
+        if(fixedAnchors.has(c)){fwd=normalizeDate(plan[c])||fwd;continue}
+        fwd=addDaysSkippingHolidays(fwd,Math.max(1,dayMap[workSeq[i-1]]||1),holidaySet,true)
+        planned[c]=dateToStr(fwd)
+      }
       const firstCode=workSeq[0]; const firstDt=normalizeDate(planned[firstCode]); let useFwdRule=false
-      if (firstDt&&today&&firstDt<today) {
+      if (firstDt&&today&&firstDt<today&&!fixedAnchors.has(firstCode)) {
         useFwdRule=true; const start=addDaysSkippingHolidays(today,Math.max(1,dayMap[firstCode]||1),holidaySet,true)
         planned[firstCode]=dateToStr(start); let cur=new Date(start.getTime())
-        for(let i=1;i<workSeq.length;i++){cur=addDaysSkippingHolidays(cur,Math.max(1,dayMap[workSeq[i]]||1),holidaySet,true);planned[workSeq[i]]=dateToStr(cur)}
+        for(let i=1;i<workSeq.length;i++){
+          const c=workSeq[i]
+          if(fixedAnchors.has(c)) continue
+          cur=addDaysSkippingHolidays(cur,Math.max(1,dayMap[workSeq[i]]||1),holidaySet,true)
+          planned[c]=dateToStr(cur)
+        }
       }
-      workSeq.forEach((c:string)=>{plan[c]=planned[c]?toDisplay(planned[c]):''})
+      workSeq.forEach((c:string)=>{if(!fixedAnchors.has(c)) plan[c]=planned[c]?toDisplay(planned[c]):''})
+      // Set fixed anchor dates in display format
+      fixedAnchors.forEach(c=>{ const d=normalizeDate(plan[c]); if(d) plan[c]=dateToDisplayStr(d) })
       const qty=getQty(o,b); const fa=normalizeDate(plan[firstCode])
-      if (fa) {
+      if (fa&&!fixedAnchors.has(firstCode)) {
         const ff=fitDate(firstCode,dateToStr(fa),qty); if(ff) plan[firstCode]=toDisplay(ff)
         let prev=normalizeDate(plan[firstCode])||fa
-        for(let i=1;i<workSeq.length;i++){const c=workSeq[i];const pc=workSeq[i-1];const days=Math.max(1,dayMap[useFwdRule?c:pc]||1);const cand=addDaysSkippingHolidays(prev,days,holidaySet,true);const finalDs=fitDate(c,dateToStr(cand),qty);if(finalDs){plan[c]=toDisplay(finalDs);prev=normalizeDate(finalDs)||cand}else prev=cand}
+        for(let i=1;i<workSeq.length;i++){const c=workSeq[i];if(fixedAnchors.has(c)){prev=normalizeDate(plan[c])||prev;continue}const pc=workSeq[i-1];const days=Math.max(1,dayMap[useFwdRule?c:pc]||1);const cand=addDaysSkippingHolidays(prev,days,holidaySet,true);const finalDs=fitDate(c,dateToStr(cand),qty);if(finalDs){plan[c]=toDisplay(finalDs);prev=normalizeDate(finalDs)||cand}else prev=cand}
       }
-      if(t.done&&t.regen) result.regenerated++; else result.generated++
-      b.dcGeneratedOnce=true; if(b.dcRegenerate) b.dcRegenerate=false
+      if(t.done) result.regenerated++; else result.generated++
+      b.dcGeneratedOnce=true; b.dcRegenerate=false
     }
     return result
   }
@@ -417,8 +448,7 @@ export default function DateCalculatorPage() {
 
   const savePlannedDatesToOrders = (showAlert=true) => {
     const stored = localStorage.getItem('dyeflow_db'); if (!stored) return
-    const db = JSON.parse(stored)
-    let updatedOrders=0,updatedBatches=0
+    const db = JSON.parse(stored); let updatedOrders=0,updatedBatches=0
     const toISO=(s:string)=>{ if(!s) return ''; if(s.match(/^\d{2}\/\d{2}\/\d{4}$/)){const[d,m,y]=s.split('/');return`${y}-${m}-${d}`} if(s.match(/^\d{4}-\d{2}-\d{2}$/)) return s; const p=new Date(s); return isNaN(p.getTime())?'':dateToStr(p) }
     for (const order of (db.orders||[])) {
       if (!Array.isArray(order.splits)||!order.splits.length) continue
@@ -436,8 +466,7 @@ export default function DateCalculatorPage() {
       }
       if(touched) updatedOrders++
     }
-    localStorage.setItem('dyeflow_db',JSON.stringify(db))
-    window.dispatchEvent(new Event('dyeflow-db-updated'))
+    localStorage.setItem('dyeflow_db',JSON.stringify(db)); window.dispatchEvent(new Event('dyeflow-db-updated'))
     if(showAlert) alert(`✅ Saved to ${updatedOrders} orders / ${updatedBatches} batches.`)
     return {updatedOrders,updatedBatches}
   }
@@ -480,10 +509,11 @@ export default function DateCalculatorPage() {
         <div style={{ padding:'40px',textAlign:'center' }}>
           <div style={{ fontSize:40,marginBottom:12 }}>📅</div>
           <div style={{ fontSize:15,fontWeight:600,color:'var(--text-primary)',marginBottom:8 }}>No split batches in ERP</div>
-          <div style={{ fontSize:13,color:'var(--text-tertiary)',marginBottom:20 }}>Upload an Excel file with batch details to calculate dates.</div>
-          <div style={{ display:'inline-block',background:'var(--bg-secondary)',borderRadius:10,padding:'12px 18px',fontSize:12,color:'var(--text-secondary)',textAlign:'left' }}>
-            <strong>Required columns:</strong> Batch ID &nbsp;·&nbsp; Colour &nbsp;·&nbsp; Qty &nbsp;·&nbsp; Route &nbsp;·&nbsp; Machine &nbsp;·&nbsp; Date<br/>
-            <span style={{color:'var(--text-tertiary)',marginTop:4,display:'block'}}>Date auto-maps to correct process: D/F→D · S/F→S · Wash/F→Wash</span>
+          <div style={{ fontSize:13,color:'var(--text-tertiary)',marginBottom:16 }}>Upload an Excel file with batch details to calculate dates.</div>
+          <div style={{ display:'inline-block',background:'var(--bg-secondary)',borderRadius:10,padding:'12px 18px',fontSize:12,color:'var(--text-secondary)',textAlign:'left',lineHeight:1.8 }}>
+            <strong>Required columns:</strong> Batch ID · Colour · Qty · Route · Machine · Date<br/>
+            <strong>Single date:</strong> D/F → D col · S/F → S col · Wash/F → Wash col<br/>
+            <strong>Two dates:</strong> C/S/H/D/F + <em>7/18,7/15</em> → S=7/18, D=7/15
           </div>
         </div>
       </div>
@@ -492,7 +522,7 @@ export default function DateCalculatorPage() {
 
   return (
     <div className="content" style={{ height:'100vh', display:'flex', flexDirection:'column', overflow:'hidden', padding:0 }}>
-      <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', margin:0, borderRadius:0, border:'none', borderBottom:'1px solid var(--border-light)' }}>
+      <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', margin:0, borderRadius:0, border:'none' }}>
         <div className="card-header">
           <span className="card-title">Date Calculator Sheet</span>
           <div style={{ display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap' }}>
@@ -516,16 +546,15 @@ export default function DateCalculatorPage() {
             </button>
           </div>
         </div>
-        <div style={{ fontSize:'11px',color:'var(--text-tertiary)',padding:'4px 20px',flexShrink:0 }}>
-          Dates locked after first generation unless <strong>Re-Generate</strong> is checked. &nbsp;·&nbsp;
-          Date auto-mapped: D/F→D col · S/F→S col · Wash/F→Wash col · C/H/D/F→D col
+        <div style={{ fontSize:'11px',color:'var(--text-tertiary)',padding:'3px 16px',flexShrink:0,background:'var(--bg-secondary)' }}>
+          Two-date rows: C/S/H/D/F + <em>date1,date2</em> → first date to S, second date to D &nbsp;·&nbsp; Single date auto-maps by route
         </div>
 
         {showExcelRows && excelRows.length > 0 && (
           <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderTop:'2px solid var(--accent)' }}>
             <div style={{ padding:'6px 16px', background:'var(--accent-light)', display:'flex', alignItems:'center', gap:12, flexShrink:0 }}>
               <span style={{ fontSize:12,fontWeight:700,color:'var(--accent-dark)' }}>📤 Excel — {excelRows.length} rows from "{excelFileName}"</span>
-              <span style={{ fontSize:11,color:'var(--text-tertiary)' }}>Temporary · not saved to ERP</span>
+              <span style={{ fontSize:11,color:'var(--text-tertiary)' }}>Temporary · not saved to ERP &nbsp;·&nbsp; 🔵 = machine process columns</span>
             </div>
             <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
               <table style={{ width:'100%',borderCollapse:'collapse',fontSize:12 }}>
@@ -533,7 +562,9 @@ export default function DateCalculatorPage() {
                   <tr style={{ background:'#EFF6FF',position:'sticky',top:0,zIndex:10 }}>
                     <th style={thStyle}>BATCH ID</th><th style={thStyle}>COLOR</th><th style={thStyle}>ARTICLE</th>
                     <th style={thStyle}>KG</th><th style={thStyle}>ROUTE</th><th style={thStyle}>MACHINE</th>
-                    {ALL_PROCESS_CODES.map(pc=><th key={pc} style={{...thStyle, background: MACHINE_PROCS_PRIORITY.includes(pc)?'#DBEAFE':thStyle.background}}>{pc}</th>)}
+                    {ALL_PROCESS_CODES.map(pc=>(
+                      <th key={pc} style={{...thStyle, background: MACHINE_PROCS_PRIORITY.includes(pc)?'#BFDBFE':'#F9FAFB', color: MACHINE_PROCS_PRIORITY.includes(pc)?'#1D4ED8':'#6B7280'}}>{pc}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -548,7 +579,8 @@ export default function DateCalculatorPage() {
                         <td style={tdStyle}>{(order.processRoute||[]).join('/')||'-'}</td>
                         <td style={{ ...tdStyle,fontSize:11,color:'#6B7280' }}>{order.machine||'-'}</td>
                         {ALL_PROCESS_CODES.map(pc=>(
-                          <td key={pc} style={{ padding:0,borderRight:'1px solid #E5E7EB',background:plan[pc]?'#F0FDF4':'transparent' }}>
+                          <td key={pc} style={{ padding:0,borderRight:'1px solid #E5E7EB',
+                            background: plan[pc] ? (MACHINE_PROCS_PRIORITY.includes(pc)?'#DBEAFE':'#F0FDF4') : 'transparent' }}>
                             <input type="text" value={plan[pc]||''} onChange={e=>handleExcelDateChange(batch.batchId,pc,e.target.value)}
                               style={{ width:'100%',minWidth:100,height:32,border:0,background:'transparent',padding:'2px 6px',fontSize:11,textAlign:'center',outline:'none' }} />
                           </td>
@@ -562,7 +594,7 @@ export default function DateCalculatorPage() {
           </div>
         )}
 
-        {rows.length > 0 && (
+        {rows.length > 0 && !showExcelRows && (
           <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
             <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
               <thead>
