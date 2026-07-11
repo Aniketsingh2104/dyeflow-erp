@@ -1,267 +1,225 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-
-interface SplitBatch {
-  id: string
-  batchNumber: number
-  quantity: number
-  meters: number
-  supervisor: string
-  machine: string
-  priority: 'normal' | 'high' | 'urgent'
-  dueDate: string
-  notes: string
-  status: 'valid' | 'invalid'
-  errors: string[]
-}
-
-interface Order {
-  id: string
-  orderNumber: string
-  party: string
-  subParty: string
-  article: string
-  color: string
-  blend: string
-  width: string
-  gsm: string
-  qtyKg: number
-  qtyMtr: number
-  process: string
-}
+import { getOrders, getSupervisors, getMachines, createSplits } from '@/lib/db'
 
 function SplitOrderContent() {
   const searchParams = useSearchParams()
-  const router = useRouter()
-  const orderId = searchParams.get('id')
+  const router       = useRouter()
+  const orderId      = searchParams.get('id')
 
-  const [order, setOrder] = useState<Order | null>(null)
-  const [splits, setSplits] = useState<SplitBatch[]>([
-    {
-      id: 'split-1', batchNumber: 1, quantity: 0, meters: 0,
-      supervisor: '', machine: '', priority: 'normal', dueDate: '', notes: '',
-      status: 'invalid', errors: ['Quantity required', 'Supervisor required', 'Machine required']
+  const [order,       setOrder]       = useState<any>(null)
+  const [supervisors, setSupervisors] = useState<any[]>([])
+  const [machines,    setMachines]    = useState<any[]>([])
+  const [saving,      setSaving]      = useState(false)
+  const [parts,       setParts]       = useState([{ kg: 0, mtr: 0, machine_id: '' }])
+
+  const loadAll = useCallback(async () => {
+    const [supRes, machRes] = await Promise.all([getSupervisors(), getMachines()])
+    setSupervisors(supRes.data || [])
+    setMachines(machRes.data   || [])
+
+    if (!orderId) return
+    const { data: orders } = await getOrders({ limit: 1000 })
+    const found = (orders || []).find((o: any) => o.id === orderId || o.order_number === orderId)
+    if (found) {
+      setOrder(found)
+      setParts([{ kg: parseFloat(found.qty_kg) || 0, mtr: parseFloat(found.qty_mtr) || 0, machine_id: found.machine_id || '' }])
     }
-  ])
-
-  useEffect(() => {
-    if (orderId) loadOrder(orderId)
   }, [orderId])
 
-  const loadOrder = (id: string) => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-    const db = JSON.parse(stored)
-    const foundOrder = db.orders?.find((o: any) => o.id === id || o.orderNumber === id)
-    if (foundOrder) {
-      setOrder({
-        id: foundOrder.id, orderNumber: foundOrder.orderNumber || '-',
-        party: foundOrder.party || '', subParty: foundOrder.subParty || '',
-        article: foundOrder.article || '', color: foundOrder.color || '',
-        blend: foundOrder.blend || '', width: foundOrder.width || '',
-        gsm: foundOrder.gsm || '', qtyKg: foundOrder.qtyKg || 0,
-        qtyMtr: foundOrder.qtyMtr || 0, process: foundOrder.process || 'C→S→H→D→F'
-      })
-      setSplits([{
-        id: 'split-1', batchNumber: 1, quantity: foundOrder.qtyKg || 0,
-        meters: foundOrder.qtyMtr || 0, supervisor: '', machine: '', priority: 'normal',
-        dueDate: new Date().toISOString().split('T')[0], notes: '',
-        status: 'invalid', errors: ['Supervisor required', 'Machine required']
-      }])
-    }
+  useEffect(() => { loadAll() }, [loadAll])
+
+  // ── Computations ────────────────────────────────────────────────────────────
+
+  const totalKg  = parts.reduce((s, p) => s + (parseFloat(String(p.kg))  || 0), 0)
+  const totalMtr = parts.reduce((s, p) => s + (parseFloat(String(p.mtr)) || 0), 0)
+  const remKg    = (parseFloat(order?.qty_kg)  || 0) - totalKg
+  const remMtr   = (parseFloat(order?.qty_mtr) || 0) - totalMtr
+  const ok       = Math.abs(remKg) < 0.5
+
+  // ── Handlers ─────────────────────────────────────────────────────────────────
+
+  const add = () => setParts(p => [...p, { kg: Math.max(0, remKg), mtr: Math.max(0, remMtr), machine_id: '' }])
+
+  const remove = (i: number) => {
+    if (parts.length <= 1) { alert('Cannot remove the last batch'); return }
+    setParts(p => p.filter((_, j) => j !== i))
   }
 
-  const totalSplitQty = splits.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0)
-  const totalSplitMeters = splits.reduce((sum, s) => sum + (Number(s.meters) || 0), 0)
-  const remainingQty = (order?.qtyKg || 0) - totalSplitQty
-  const remainingMeters = (order?.qtyMtr || 0) - totalSplitMeters
-  const isValid = remainingQty === 0 && splits.every(s => s.status === 'valid')
+  const upd = (i: number, field: string, val: any) =>
+    setParts(p => p.map((b, j) => j === i ? { ...b, [field]: val } : b))
 
-  const handleAddSplit = () => {
-    setSplits([...splits, {
-      id: `split-${Date.now()}`, batchNumber: splits.length + 1,
-      quantity: Math.max(0, remainingQty), meters: Math.max(0, remainingMeters),
-      supervisor: '', machine: '', priority: 'normal',
-      dueDate: new Date().toISOString().split('T')[0], notes: '',
-      status: 'invalid', errors: ['Supervisor required', 'Machine required']
-    }])
-  }
-
-  const handleDistributeEqually = () => {
+  const balance = () => {
     if (!order) return
-    const count = splits.length
-    const qtyPerSplit = Math.floor(order.qtyKg / count)
-    const metersPerSplit = Math.floor(order.qtyMtr / count)
-    const remainderQty = order.qtyKg - (qtyPerSplit * count)
-    const remainderMeters = order.qtyMtr - (metersPerSplit * count)
-    setSplits(prev => prev.map((split, idx) => ({
-      ...split,
-      quantity: idx === count - 1 ? qtyPerSplit + remainderQty : qtyPerSplit,
-      meters: idx === count - 1 ? metersPerSplit + remainderMeters : metersPerSplit
-    })))
+    const n  = parts.length
+    const kg = (parseFloat(order.qty_kg)  || 0) / n
+    const mt = (parseFloat(order.qty_mtr) || 0) / n
+    setParts(parts.map(() => ({ ...parts[0], kg: parseFloat(kg.toFixed(2)), mtr: parseFloat(mt.toFixed(2)) })))
   }
 
-  const handleCloneSplit = (splitId: string) => {
-    const s = splits.find(s => s.id === splitId)
-    if (!s) return
-    setSplits([...splits, { ...s, id: `split-${Date.now()}`, batchNumber: splits.length + 1, quantity: 0, meters: 0 }])
-  }
-
-  const handleDeleteSplit = (splitId: string) => {
-    if (splits.length <= 1) { alert('Cannot delete the last split'); return }
-    setSplits(splits.filter(s => s.id !== splitId))
-  }
-
-  const handleUpdateSplit = (splitId: string, field: keyof SplitBatch, value: any) => {
-    setSplits(prev => prev.map(split => {
-      if (split.id !== splitId) return split
-      const updated = { ...split, [field]: value }
-      const errors: string[] = []
-      if (!updated.quantity || updated.quantity <= 0) errors.push('Quantity required')
-      if (!updated.supervisor) errors.push('Supervisor required')
-      if (!updated.machine) errors.push('Machine required')
-      updated.status = errors.length === 0 ? 'valid' : 'invalid'
-      updated.errors = errors
-      return updated
-    }))
-  }
-
-  const handleSaveSplits = () => {
-    if (!order || !isValid) { alert('Please fix all validation errors before saving'); return }
-    if (remainingQty !== 0) { alert(`Total split quantity (${totalSplitQty}) must equal order quantity (${order.qtyKg})`); return }
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-    const db = JSON.parse(stored)
-    const orderIndex = db.orders?.findIndex((o: any) => o.id === order.id)
-    if (orderIndex !== -1) {
-      db.orders[orderIndex].splits = splits.map(s => ({
-        batchNumber: s.batchNumber, quantity: s.quantity, meters: s.meters,
-        supervisor: s.supervisor, machine: s.machine, priority: s.priority,
-        dueDate: s.dueDate, notes: s.notes
+  const handleSave = async () => {
+    if (!order) return
+    if (!ok && !confirm(`Remaining ${remKg.toFixed(1)} Kg. Save anyway?`)) return
+    setSaving(true)
+    try {
+      const batches = parts.map((p, i) => ({
+        batch_id:   `${order.order_number}-B${i + 1}`,
+        kg:          parseFloat(String(p.kg)) || 0,
+        machine_id:  p.machine_id || null,
       }))
-      db.orders[orderIndex].splitOn = new Date().toISOString()
-      db.orders[orderIndex].splitBy = 'Admin'
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+      const { error } = await createSplits(order.id, batches, order.process_route || [])
+      if (error) { alert('Error: ' + error); return }
       alert('✓ Order split successfully!')
       router.push('/orders')
-    }
+    } finally { setSaving(false) }
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────────
+
   if (!order) return (
-    <div className="content">
-      <div className="card">
-        <div className="empty-state">Order not found. <Link href="/orders">Go back</Link></div>
+    <div className="content" style={{ padding: 20 }}>
+      <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>
+        {orderId ? 'Order not found.' : 'No order selected.'}{' '}
+        <button className="xs" onClick={() => router.push('/orders')}>← Back to Orders</button>
       </div>
     </div>
   )
 
   return (
-    <div className="content">
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Split Order: {order.orderNumber}</span>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <Link href="/orders"><button className="small">← Back</button></Link>
-            <button className="small primary" onClick={handleSaveSplits} disabled={!isValid}>💾 Save Splits</button>
-          </div>
-        </div>
+    <div className="content" style={{ padding: '16px 20px' }}>
 
-        <div style={{ background: 'linear-gradient(to right, #e6f1fb, #f0f7fc)', border: '1px solid rgba(24,95,165,0.2)', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '16px', marginBottom: '12px' }}>
-            {[['PARTY', order.party], ['ARTICLE', order.article], ['COLOR', order.color], ['PROCESS', order.process]].map(([label, val]) => (
-              <div key={label}><div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: '4px' }}>{label}</div><div style={{ fontSize: '14px', fontWeight: 600 }}>{val}</div></div>
-            ))}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '16px' }}>
-            <div><div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: '4px' }}>TOTAL QTY (KG)</div><div style={{ fontSize: '18px', fontWeight: 700, color: '#185FA5' }}>{order.qtyKg}</div></div>
-            <div><div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: '4px' }}>TOTAL QTY (MTR)</div><div style={{ fontSize: '18px', fontWeight: 700, color: '#185FA5' }}>{order.qtyMtr}</div></div>
-            <div><div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: '4px' }}>BLEND</div><div style={{ fontSize: '14px' }}>{order.blend || '-'}</div></div>
-            <div><div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: '4px' }}>WIDTH / GSM</div><div style={{ fontSize: '14px' }}>{order.width || '-'} / {order.gsm || '-'}</div></div>
-          </div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+          Split Order — {order.order_number}
         </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: '12px', marginBottom: '20px' }}>
-          <div className="stat-card"><div className="stat-label">Total Splits</div><div className="stat-value">{splits.length}</div></div>
-          <div className="stat-card"><div className="stat-label">Split Qty (Kg)</div><div className="stat-value" style={{ color: '#185FA5' }}>{totalSplitQty}</div></div>
-          <div className="stat-card"><div className="stat-label">Split Qty (Mtr)</div><div className="stat-value" style={{ color: '#185FA5' }}>{totalSplitMeters}</div></div>
-          <div className="stat-card" style={{ background: remainingQty !== 0 ? '#ffe9e9' : '#e9f8ee', border: `2px solid ${remainingQty !== 0 ? '#A32D2D' : '#27500A'}` }}>
-            <div className="stat-label">Remaining Kg</div><div className="stat-value" style={{ color: remainingQty !== 0 ? '#A32D2D' : '#27500A' }}>{remainingQty}</div>
-          </div>
-          <div className="stat-card" style={{ background: remainingMeters !== 0 ? '#ffe9e9' : '#e9f8ee', border: `2px solid ${remainingMeters !== 0 ? '#A32D2D' : '#27500A'}` }}>
-            <div className="stat-label">Remaining Mtr</div><div className="stat-value" style={{ color: remainingMeters !== 0 ? '#A32D2D' : '#27500A' }}>{remainingMeters}</div>
-          </div>
-          <div className="stat-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {isValid ? <span className="badge badge-success" style={{ fontSize: '13px', padding: '6px 12px' }}>✓ Valid</span>
-              : <span className="badge badge-danger" style={{ fontSize: '13px', padding: '6px 12px' }}>⚠ Invalid</span>}
-          </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="small" onClick={() => router.push('/orders')}>← Back</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : '💾 Save Splits'}
+          </button>
         </div>
+      </div>
 
-        {remainingQty !== 0 && (
-          <div style={{ background: '#FAEEDA', border: '1px solid rgba(99,56,6,0.2)', borderRadius: '6px', padding: '12px', marginBottom: '16px', display: 'flex', gap: '12px' }}>
-            <span style={{ fontSize: '18px' }}>⚠️</span>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: '14px', color: '#633806', marginBottom: '4px' }}>Quantity Mismatch</div>
-              <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Total split quantity ({totalSplitQty} kg) must equal order quantity ({order.qtyKg} kg).</div>
+      {/* Order summary */}
+      <div style={{ background: 'var(--accent-light)', border: '1px solid var(--accent)',
+        borderRadius: 10, padding: '14px 18px', marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px,1fr))', gap: '10px 20px' }}>
+          {[
+            ['Party',      order.party],
+            ['Article',    order.article],
+            ['Color',      order.color],
+            ['Blend',      order.blend],
+            ['Qty (Kg)',   order.qty_kg],
+            ['Qty (Mtr)',  order.qty_mtr],
+            ['Process',    (order.process_route || []).join(' → ')],
+          ].map(([label, val]) => (
+            <div key={label}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)',
+                textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{val || '-'}</div>
             </div>
-          </div>
-        )}
-
-        <div style={{ marginBottom: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button className="small" onClick={handleAddSplit}>+ Add Split Batch</button>
-          <button className="small" onClick={handleDistributeEqually} disabled={splits.length === 0}>⚖️ Distribute Equally</button>
+          ))}
         </div>
+      </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Batch #</th><th>Qty (Kg)</th><th>Qty (Mtr)</th><th>Supervisor</th>
-                <th>Machine</th><th>Priority</th><th>Due Date</th><th>Notes</th><th>Status</th><th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {splits.map(split => (
-                <tr key={split.id}>
-                  <td style={{ textAlign: 'center' }}>
-                    <span className="badge" style={{ background: '#185FA5', color: 'white', fontWeight: 600 }}>Batch {split.batchNumber}</span>
+      {/* Stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+        {[
+          { label: 'Batches',      value: parts.length,        color: 'var(--text-primary)' },
+          { label: 'Allocated Kg', value: totalKg.toFixed(1),  color: 'var(--accent)' },
+          { label: 'Remaining Kg', value: remKg.toFixed(1),    color: ok ? 'var(--success)' : 'var(--danger)' },
+          { label: 'Status',       value: ok ? '✓ Ready' : '⚠ Check', color: ok ? 'var(--success)' : 'var(--danger)' },
+        ].map(s => (
+          <div key={s.label} style={{ background: 'var(--bg-secondary)',
+            border: `1px solid ${s.color === 'var(--danger)' ? 'var(--danger)' : 'var(--border-light)'}`,
+            borderRadius: 8, padding: '12px 14px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)',
+              textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{s.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {!ok && (
+        <div style={{ background: 'var(--warning-light)', border: '1px solid var(--warning)',
+          borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13,
+          color: 'var(--warning)' }}>
+          ⚠ Total allocated ({totalKg.toFixed(1)} Kg) doesn't match order qty ({order.qty_kg} Kg).
+          Remaining: {remKg.toFixed(1)} Kg.
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        <button className="small" onClick={add}>➕ Add Batch</button>
+        <button className="small" onClick={balance} disabled={parts.length < 2}>⚖ Auto-Balance</button>
+      </div>
+
+      {/* Batch rows */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 10, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ background: 'var(--bg-secondary)' }}>
+            <tr>
+              {['Batch','Batch ID','Qty (Kg)','Qty (Mtr)','Machine',''].map(h => (
+                <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10,
+                  fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {parts.map((part, i) => {
+              const batchId = `${order.order_number}-B${i + 1}`
+              return (
+                <tr key={i} style={{ borderBottom: '1px solid var(--border-light)',
+                  background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)' }}>
+                  <td style={td}>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px',
+                      background: 'var(--accent)', color: '#fff', borderRadius: 4 }}>
+                      #{i + 1}
+                    </span>
                   </td>
-                  <td><input type="number" value={split.quantity} onChange={e => handleUpdateSplit(split.id, 'quantity', Number(e.target.value))} style={{ width: '100%', padding: '6px', textAlign: 'right' }} min="1" /></td>
-                  <td><input type="number" value={split.meters} onChange={e => handleUpdateSplit(split.id, 'meters', Number(e.target.value))} style={{ width: '100%', padding: '6px', textAlign: 'right' }} min="1" /></td>
-                  <td>
-                    <select value={split.supervisor} onChange={e => handleUpdateSplit(split.id, 'supervisor', e.target.value)} style={{ width: '100%', padding: '6px' }}>
-                      <option value="">Select...</option>
-                      {['Kundan M.','Nandlal M.','Urvesh M.','Gyaneshwar M.','Jitesh M.'].map(s => <option key={s} value={s}>{s}</option>)}
+                  <td style={{ ...td, fontWeight: 600, color: 'var(--accent)' }}>{batchId}</td>
+                  <td style={td}>
+                    <input type="number" value={part.kg} min={0} step={0.1}
+                      onChange={e => upd(i, 'kg', e.target.value)}
+                      style={{ width: 90, padding: '5px 8px', textAlign: 'right',
+                        border: '1px solid var(--border-medium)', borderRadius: 4,
+                        background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13 }} />
+                  </td>
+                  <td style={td}>
+                    <input type="number" value={part.mtr} min={0} step={0.1}
+                      onChange={e => upd(i, 'mtr', e.target.value)}
+                      style={{ width: 90, padding: '5px 8px', textAlign: 'right',
+                        border: '1px solid var(--border-medium)', borderRadius: 4,
+                        background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13 }} />
+                  </td>
+                  <td style={td}>
+                    <select value={part.machine_id}
+                      onChange={e => upd(i, 'machine_id', e.target.value)}
+                      style={{ padding: '5px 8px', border: '1px solid var(--border-medium)',
+                        borderRadius: 4, background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)', fontSize: 13, minWidth: 160 }}>
+                      <option value="">— Select machine —</option>
+                      {machines.map((m: any) => (
+                        <option key={m.id} value={m.id}>{m.name} ({m.capacity} Kg)</option>
+                      ))}
                     </select>
                   </td>
-                  <td>
-                    <select value={split.machine} onChange={e => handleUpdateSplit(split.id, 'machine', e.target.value)} style={{ width: '100%', padding: '6px' }}>
-                      <option value="">Select...</option>
-                      {['Machine 1','Machine 2','Machine 3','Machine 4','Machine 7'].map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </td>
-                  <td>
-                    <select value={split.priority} onChange={e => handleUpdateSplit(split.id, 'priority', e.target.value as any)} style={{ width: '100%', padding: '6px' }}>
-                      <option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option>
-                    </select>
-                  </td>
-                  <td><input type="date" value={split.dueDate} onChange={e => handleUpdateSplit(split.id, 'dueDate', e.target.value)} style={{ width: '100%', padding: '6px' }} /></td>
-                  <td><input type="text" value={split.notes} onChange={e => handleUpdateSplit(split.id, 'notes', e.target.value)} placeholder="Add notes..." style={{ width: '100%', padding: '6px' }} /></td>
-                  <td>
-                    {split.status === 'valid' ? <span className="badge badge-success">✓ Valid</span>
-                      : <div><span className="badge badge-danger">⚠ Invalid</span>{split.errors[0] && <div style={{ fontSize: '10px', color: '#A32D2D' }}>{split.errors[0]}</div>}</div>}
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <button onClick={() => handleCloneSplit(split.id)} style={{ padding: '4px 8px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#185FA5', fontSize: '16px', marginRight: '4px' }} title="Clone">📋</button>
-                    <button onClick={() => handleDeleteSplit(split.id)} disabled={splits.length <= 1} style={{ padding: '4px 8px', background: 'transparent', border: 'none', cursor: splits.length <= 1 ? 'not-allowed' : 'pointer', color: '#A32D2D', fontSize: '18px' }} title="Delete">🗑️</button>
+                  <td style={td}>
+                    {parts.length > 1 && (
+                      <button className="xs danger" onClick={() => remove(i)}>✕</button>
+                    )}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              )
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -269,8 +227,17 @@ function SplitOrderContent() {
 
 export default function SplitOrderPage() {
   return (
-    <Suspense fallback={<div className="content"><div className="card"><div className="empty-state">Loading...</div></div></div>}>
+    <Suspense fallback={
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
+        Loading…
+      </div>
+    }>
       <SplitOrderContent />
     </Suspense>
   )
+}
+
+const td: React.CSSProperties = {
+  padding: '10px 14px', fontSize: 13, color: 'var(--text-primary)',
 }
