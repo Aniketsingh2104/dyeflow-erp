@@ -41,7 +41,7 @@ export default function DbProvider({ children }: { children: React.ReactNode }) 
   const pathname = usePathname()
   const isLogin  = pathname === '/login'
 
-  const [authState, setAuthState] = useState<'checking' | 'authed' | 'login'>('checking')
+  const [authState, setAuthState] = useState<'checking' | 'authed' | 'login'>('authed')
 
   useEffect(() => {
     if (isLogin) {
