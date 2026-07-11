@@ -1,333 +1,119 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState, useCallback } from 'react'
 
-interface Supervisor {
-  id: string
-  name: string
-  email?: string
-  phone?: string
-  createdAt: string
-}
-
-// Initialize supervisors from existing orders if supervisors array is empty
-const initializeSupervisors = () => {
-  const stored = localStorage.getItem('dyeflow_db')
-  if (!stored) return
-
-  const db = JSON.parse(stored)
-  
-  // If supervisors already exist, don't initialize
-  if (db.supervisors && db.supervisors.length > 0) return
-
-  // Extract unique supervisor names from orders
-  const supervisorNames = new Set<string>()
-  if (db.orders && Array.isArray(db.orders)) {
-    db.orders.forEach((order: any) => {
-      if (order.supervisor && order.supervisor.trim()) {
-        supervisorNames.add(order.supervisor.trim())
-      }
-    })
-  }
-
-  // Create supervisor objects
-  if (supervisorNames.size > 0) {
-    db.supervisors = Array.from(supervisorNames).map((name, idx) => ({
-      id: `SUP-${Date.now()}-${idx}`,
-      name: name,
-      email: '',
-      phone: '',
-      createdAt: new Date().toISOString()
-    }))
-
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    console.log(`Initialized ${db.supervisors.length} supervisors from existing orders`)
-  }
-}
+interface Supervisor { id: string; name: string; email?: string; phone?: string; created_at?: string }
 
 export default function SupervisorMasterPage() {
-  const router = useRouter()
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
-  const [showModal, setShowModal] = useState(false)
-  const [editingSupervisor, setEditingSupervisor] = useState<Supervisor | null>(null)
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: ''
-  })
-  const [searchTerm, setSearchTerm] = useState('')
+  const [loading,     setLoading]     = useState(true)
+  const [showModal,   setShowModal]   = useState(false)
+  const [editing,     setEditing]     = useState<Supervisor | null>(null)
+  const [form,        setForm]        = useState({ name: '', email: '', phone: '' })
+  const [search,      setSearch]      = useState('')
+  const [saving,      setSaving]      = useState(false)
 
-  useEffect(() => {
-    // Initialize supervisors from orders on first load
-    initializeSupervisors()
-    loadSupervisors()
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res  = await fetch('/api/supervisors', { cache: 'no-store' })
+      const data = await res.json()
+      if (data.ok) setSupervisors(data.data || [])
+    } finally { setLoading(false) }
   }, [])
 
-  const loadSupervisors = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) {
-      // Initialize with empty supervisors array
-      const db = { supervisors: [] }
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      setSupervisors([])
-      return
-    }
+  useEffect(() => { load() }, [load])
 
-    const db = JSON.parse(stored)
-    if (!db.supervisors || !Array.isArray(db.supervisors)) {
-      db.supervisors = []
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    }
+  const openAdd  = () => { setEditing(null); setForm({ name: '', email: '', phone: '' }); setShowModal(true) }
+  const openEdit = (s: Supervisor) => { setEditing(s); setForm({ name: s.name, email: s.email || '', phone: s.phone || '' }); setShowModal(true) }
 
-    setSupervisors(db.supervisors)
-  }
-
-  const generateId = () => {
-    return `SUP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-  }
-
-  const openNewModal = () => {
-    setEditingSupervisor(null)
-    setFormData({ name: '', email: '', phone: '' })
-    setShowModal(true)
-  }
-
-  const openEditModal = (supervisor: Supervisor) => {
-    setEditingSupervisor(supervisor)
-    setFormData({
-      name: supervisor.name,
-      email: supervisor.email || '',
-      phone: supervisor.phone || ''
+  const apiCall = async (action: string, payload: Record<string, any>) => {
+    const res = await fetch('/api/supervisors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload }),
     })
-    setShowModal(true)
+    return res.json()
   }
 
-  const saveSupervisor = () => {
-    if (!formData.name.trim()) {
-      alert('Please enter supervisor name.')
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    const db = stored ? JSON.parse(stored) : { supervisors: [] }
-
-    if (!db.supervisors) {
-      db.supervisors = []
-    }
-
-    if (editingSupervisor) {
-      // Update existing supervisor
-      const index = db.supervisors.findIndex((s: Supervisor) => s.id === editingSupervisor.id)
-      if (index !== -1) {
-        db.supervisors[index] = {
-          ...db.supervisors[index],
-          name: formData.name.trim(),
-          email: formData.email.trim(),
-          phone: formData.phone.trim()
-        }
-      }
-    } else {
-      // Create new supervisor
-      const newSupervisor: Supervisor = {
-        id: generateId(),
-        name: formData.name.trim(),
-        email: formData.email.trim(),
-        phone: formData.phone.trim(),
-        createdAt: new Date().toISOString()
-      }
-      db.supervisors.push(newSupervisor)
-    }
-
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setShowModal(false)
-    setEditingSupervisor(null)
-    loadSupervisors()
+  const save = async () => {
+    if (!form.name.trim()) { alert('Name required.'); return }
+    setSaving(true)
+    try {
+      const data = editing
+        ? await apiCall('update', { id: editing.id, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() })
+        : await apiCall('create', { name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim(), is_active: true })
+      if (!data.ok) throw new Error(data.error)
+      setShowModal(false)
+      load()
+    } catch (err) { alert(`Save failed: ${err}`) }
+    finally { setSaving(false) }
   }
 
-  const deleteSupervisor = (id: string) => {
-    if (!confirm('Are you sure you want to delete this supervisor? This action cannot be undone.')) {
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    const db = stored ? JSON.parse(stored) : { supervisors: [] }
-
-    if (!db.supervisors) return
-
-    db.supervisors = db.supervisors.filter((s: Supervisor) => s.id !== id)
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadSupervisors()
+  const del = async (id: string, name: string) => {
+    if (!confirm(`Delete supervisor "${name}"?`)) return
+    const data = await apiCall('delete', { id })
+    if (!data.ok) alert(`Delete failed: ${data.error}`)
+    else load()
   }
 
-  const filteredSupervisors = supervisors.filter(supervisor =>
-    supervisor.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (supervisor.email && supervisor.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (supervisor.phone && supervisor.phone.includes(searchTerm))
+  const filtered = supervisors.filter(s =>
+    s.name.toLowerCase().includes(search.toLowerCase()) ||
+    (s.email || '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.phone || '').includes(search)
   )
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+    <div style={{ padding: '16px 20px', maxWidth: 1100, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1F2937', margin: 0 }}>Supervisor Master</h1>
-          <p style={{ fontSize: '14px', color: '#6B7280', marginTop: '4px' }}>Manage supervisor details and assignments</p>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>Supervisor Master</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Manage supervisor details · {supervisors.length} total
+          </div>
         </div>
-        <button 
-          onClick={() => router.push('/setup')}
-          style={{
-            padding: '8px 16px',
-            fontSize: '14px',
-            border: '1px solid #D1D5DB',
-            borderRadius: '6px',
-            background: 'white',
-            color: '#374151',
-            cursor: 'pointer'
-          }}
-        >
-          ← Back to Setup
-        </button>
       </div>
 
-      {/* Search and Add Button */}
-      <div style={{ 
-        display: 'flex', 
-        gap: '12px', 
-        marginBottom: '20px',
-        background: '#F9FAFB',
-        padding: '16px',
-        borderRadius: '8px',
-        border: '1px solid #E5E7EB'
-      }}>
-        <input
-          type="text"
-          placeholder="Search supervisors..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={{
-            flex: 1,
-            padding: '8px 12px',
-            fontSize: '14px',
-            border: '1px solid #D1D5DB',
-            borderRadius: '6px',
-            outline: 'none'
-          }}
-        />
-        <button
-          onClick={openNewModal}
-          style={{
-            padding: '8px 20px',
-            fontSize: '14px',
-            fontWeight: 600,
-            border: 'none',
-            borderRadius: '6px',
-            background: '#3B82F6',
-            color: 'white',
-            cursor: 'pointer',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          + Add Supervisor
-        </button>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+        <input type="text" placeholder="Search supervisors…" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ flex: 1, maxWidth: 320, padding: '7px 10px', fontSize: 13,
+            border: '1px solid var(--border-medium)', borderRadius: 6,
+            background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+        <button className="primary" onClick={openAdd}>+ Add Supervisor</button>
       </div>
 
-      {/* Supervisors Table */}
-      <div style={{
-        background: 'white',
-        borderRadius: '8px',
-        border: '1px solid #E5E7EB',
-        overflow: 'hidden'
-      }}>
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
-              <th style={headerStyle}>Supervisor Name</th>
-              <th style={headerStyle}>Email</th>
-              <th style={headerStyle}>Phone</th>
-              <th style={headerStyle}>Created Date</th>
-              <th style={{ ...headerStyle, width: '150px' }}>Actions</th>
+          <thead style={{ background: 'var(--bg-secondary)' }}>
+            <tr>
+              {['Name','Email','Phone','Created','Actions'].map(h => (
+                <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
+                  color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
+                  borderBottom: '1px solid var(--border-light)' }}>{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {filteredSupervisors.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ 
-                  padding: '48px', 
-                  textAlign: 'center', 
-                  color: '#9CA3AF',
-                  fontSize: '14px'
-                }}>
-                  {supervisors.length === 0 
-                    ? 'No supervisors yet. Click "+ Add Supervisor" to create one.'
-                    : 'No supervisors match your search.'}
-                </td>
-              </tr>
+            {loading ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                {supervisors.length === 0 ? 'No supervisors yet. Click "+ Add Supervisor" to create one.' : 'No results.'}
+              </td></tr>
             ) : (
-              filteredSupervisors.map((supervisor, idx) => (
-                <tr 
-                  key={supervisor.id}
-                  style={{ 
-                    background: idx % 2 === 0 ? 'white' : '#FAFAFA',
-                    borderBottom: '1px solid #F3F4F6'
-                  }}
-                >
-                  <td style={cellStyle}>
-                    <span style={{ fontWeight: 600, color: '#1F2937' }}>
-                      {supervisor.name}
-                    </span>
+              filtered.map((s, i) => (
+                <tr key={s.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
+                  borderBottom: '1px solid var(--border-light)' }}>
+                  <td style={{ padding: '12px 14px', fontWeight: 600, fontSize: 13 }}>{s.name}</td>
+                  <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>{s.email || '-'}</td>
+                  <td style={{ padding: '12px 14px', fontSize: 12 }}>{s.phone || '-'}</td>
+                  <td style={{ padding: '12px 14px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {s.created_at ? new Date(s.created_at).toLocaleDateString('en-GB') : '-'}
                   </td>
-                  <td style={cellStyle}>
-                    <span style={{ color: '#6B7280' }}>
-                      {supervisor.email || '-'}
-                    </span>
-                  </td>
-                  <td style={cellStyle}>
-                    <span style={{ color: '#6B7280' }}>
-                      {supervisor.phone || '-'}
-                    </span>
-                  </td>
-                  <td style={cellStyle}>
-                    <span style={{ fontSize: '13px', color: '#9CA3AF' }}>
-                      {supervisor.createdAt 
-                        ? new Date(supervisor.createdAt).toLocaleDateString('en-GB', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric'
-                          })
-                        : '-'}
-                    </span>
-                  </td>
-                  <td style={cellStyle}>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={() => openEditModal(supervisor)}
-                        style={{
-                          padding: '6px 12px',
-                          fontSize: '12px',
-                          border: '1px solid #D1D5DB',
-                          borderRadius: '4px',
-                          background: 'white',
-                          color: '#374151',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => deleteSupervisor(supervisor.id)}
-                        style={{
-                          padding: '6px 12px',
-                          fontSize: '12px',
-                          border: '1px solid #FCA5A5',
-                          borderRadius: '4px',
-                          background: 'white',
-                          color: '#DC2626',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Delete
-                      </button>
+                  <td style={{ padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="xs" onClick={() => openEdit(s)}>Edit</button>
+                      <button className="xs danger" onClick={() => del(s.id, s.name)}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -337,191 +123,39 @@ export default function SupervisorMasterPage() {
         </table>
       </div>
 
-      {/* Summary Stats */}
-      <div style={{ 
-        marginTop: '20px', 
-        padding: '12px 16px', 
-        background: '#F9FAFB', 
-        borderRadius: '6px',
-        fontSize: '13px',
-        color: '#6B7280'
-      }}>
-        Total Supervisors: <strong style={{ color: '#1F2937' }}>{supervisors.length}</strong>
-        {searchTerm && (
-          <span style={{ marginLeft: '16px' }}>
-            Showing: <strong style={{ color: '#1F2937' }}>{filteredSupervisors.length}</strong>
-          </span>
-        )}
-      </div>
-
-      {/* Modal */}
       {showModal && (
-        <div style={modalOverlayStyle}>
-          <div style={modalContentStyle}>
-            <div style={modalHeaderStyle}>
-              <span style={{ fontSize: '18px', fontWeight: 700 }}>
-                {editingSupervisor ? 'Edit Supervisor' : 'Add New Supervisor'}
-              </span>
-              <button 
-                onClick={() => setShowModal(false)} 
-                style={closeButtonStyle}
-              >
-                ✕
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <div className="modal-header">
+              <span className="modal-title">{editing ? 'Edit Supervisor' : 'Add New Supervisor'}</span>
+              <button className="small" onClick={() => setShowModal(false)}>✕</button>
+            </div>
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="form-group">
+                <label>Supervisor Name *</label>
+                <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                  placeholder="Enter supervisor name" autoFocus />
+              </div>
+              <div className="form-group">
+                <label>Email (Optional)</label>
+                <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
+                  placeholder="supervisor@example.com" />
+              </div>
+              <div className="form-group">
+                <label>Phone (Optional)</label>
+                <input type="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })}
+                  placeholder="+91 XXXXX XXXXX" />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <button className="primary" onClick={save} disabled={saving} style={{ flex: 1 }}>
+                {saving ? 'Saving…' : editing ? '✓ Update' : '✓ Add Supervisor'}
               </button>
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={labelStyle}>Supervisor Name *</label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="Enter supervisor name"
-                style={inputStyle}
-                autoFocus
-              />
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={labelStyle}>Email (Optional)</label>
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder="supervisor@example.com"
-                style={inputStyle}
-              />
-            </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <label style={labelStyle}>Phone (Optional)</label>
-              <input
-                type="tel"
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                placeholder="+91 XXXXX XXXXX"
-                style={inputStyle}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button 
-                onClick={saveSupervisor} 
-                style={primaryButtonStyle}
-              >
-                {editingSupervisor ? '✓ Update Supervisor' : '✓ Add Supervisor'}
-              </button>
-              <button 
-                onClick={() => setShowModal(false)} 
-                style={secondaryButtonStyle}
-              >
-                Cancel
-              </button>
+              <button onClick={() => setShowModal(false)} style={{ flex: 1 }}>Cancel</button>
             </div>
           </div>
         </div>
       )}
     </div>
   )
-}
-
-// Styles
-const headerStyle: React.CSSProperties = {
-  padding: '12px 16px',
-  textAlign: 'left',
-  fontSize: '12px',
-  fontWeight: 700,
-  color: '#6B7280',
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px'
-}
-
-const cellStyle: React.CSSProperties = {
-  padding: '14px 16px',
-  fontSize: '14px'
-}
-
-const modalOverlayStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  background: 'rgba(0, 0, 0, 0.5)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000
-}
-
-const modalContentStyle: React.CSSProperties = {
-  background: 'white',
-  borderRadius: '12px',
-  padding: '24px',
-  maxWidth: '500px',
-  width: '90%',
-  maxHeight: '90vh',
-  overflow: 'auto'
-}
-
-const modalHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  marginBottom: '24px',
-  paddingBottom: '16px',
-  borderBottom: '2px solid #E5E7EB'
-}
-
-const closeButtonStyle: React.CSSProperties = {
-  padding: '6px 12px',
-  fontSize: '16px',
-  border: 'none',
-  background: '#F3F4F6',
-  borderRadius: '6px',
-  cursor: 'pointer',
-  fontWeight: 600,
-  color: '#6B7280'
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '13px',
-  fontWeight: 600,
-  color: '#374151',
-  marginBottom: '6px'
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  border: '1px solid #D1D5DB',
-  borderRadius: '6px',
-  fontSize: '14px',
-  outline: 'none',
-  transition: 'border-color 0.2s'
-}
-
-const primaryButtonStyle: React.CSSProperties = {
-  flex: 1,
-  padding: '10px 16px',
-  fontSize: '14px',
-  fontWeight: 600,
-  border: 'none',
-  borderRadius: '6px',
-  background: '#3B82F6',
-  color: 'white',
-  cursor: 'pointer'
-}
-
-const secondaryButtonStyle: React.CSSProperties = {
-  flex: 1,
-  padding: '10px 16px',
-  fontSize: '14px',
-  fontWeight: 500,
-  border: '1px solid #D1D5DB',
-  borderRadius: '6px',
-  background: 'white',
-  color: '#374151',
-  cursor: 'pointer'
 }

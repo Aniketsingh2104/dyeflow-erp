@@ -1,412 +1,219 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 
-interface Customer {
-  name: string
-  email?: string
-  phone?: string
-}
+interface Customer { id: string; name: string; contact?: string; phone?: string; created_at?: string }
 
 export default function CustomerMasterPage() {
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [editingIndex, setEditingIndex] = useState<number>(-1)
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' })
+  const [customers,    setCustomers]    = useState<Customer[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [showModal,    setShowModal]    = useState(false)
+  const [editing,      setEditing]      = useState<Customer | null>(null)
+  const [form,         setForm]         = useState({ name: '', contact: '', phone: '' })
   const [importStatus, setImportStatus] = useState('')
+  const [saving,       setSaving]       = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    loadCustomers()
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res  = await fetch('/api/masters?table=customers', { cache: 'no-store' })
+      const data = await res.json()
+      if (data.ok) setCustomers(data.data || [])
+    } finally { setLoading(false) }
   }, [])
 
-  const loadCustomers = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (stored) {
-      const db = JSON.parse(stored)
-      setCustomers(db.customers || [])
+  useEffect(() => { load() }, [load])
+
+  const api = async (action: string, payload: Record<string, any>) => {
+    const res = await fetch('/api/masters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table: 'customers', action, ...payload }),
+    })
+    return res.json()
+  }
+
+  const openAdd  = () => { setEditing(null); setForm({ name: '', contact: '', phone: '' }); setShowModal(true) }
+  const openEdit = (c: Customer) => { setEditing(c); setForm({ name: c.name, contact: c.contact || '', phone: c.phone || '' }); setShowModal(true) }
+
+  const save = async () => {
+    if (!form.name.trim()) { alert('Customer name is required.'); return }
+    setSaving(true)
+    try {
+      const payload = { name: form.name.trim(), contact: form.contact.trim(), phone: form.phone.trim(), is_active: true }
+      const data = editing
+        ? await api('update', { id: editing.id, ...payload })
+        : await api('upsert', payload)
+      if (!data.ok) throw new Error(data.error)
+      setShowModal(false)
+      load()
+    } catch (err) { alert(`Save failed: ${err}`) }
+    finally { setSaving(false) }
+  }
+
+  const del = async (id: string, name: string) => {
+    if (!confirm(`Delete customer "${name}"?`)) return
+    const data = await api('delete', { id })
+    if (!data.ok) alert(`Delete failed: ${data.error}`)
+    else load()
+  }
+
+  const processImportRows = async (rows: any[]) => {
+    if (rows.length < 2) { setImportStatus('❌ File appears empty.'); return }
+    const header = rows[0].map((h: any) => String(h || '').toLowerCase().trim())
+    const nameIdx  = header.findIndex((h: string) => h.includes('party') || h.includes('name') || h.includes('customer'))
+    const emailIdx = header.findIndex((h: string) => h.includes('email') || h.includes('mail'))
+    const phoneIdx = header.findIndex((h: string) => h.includes('phone') || h.includes('mobile') || h.includes('contact') || h.includes('tel'))
+    if (nameIdx < 0) { setImportStatus('❌ No "Party" or "Name" column found.'); return }
+
+    const existing = new Set(customers.map(c => c.name.trim().toLowerCase()))
+    let added = 0, skipped = 0
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i]
+      const get = (idx: number) => idx >= 0 && row[idx] != null ? String(row[idx]).trim() : ''
+      const name = get(nameIdx)
+      if (!name || existing.has(name.toLowerCase())) { skipped++; continue }
+      await api('upsert', { name, contact: get(emailIdx), phone: get(phoneIdx), is_active: true })
+      existing.add(name.toLowerCase())
+      added++
     }
+    setImportStatus(`✅ Imported ${added} customers${skipped > 0 ? `, ${skipped} skipped` : ''}`)
+    load()
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    setTimeout(() => setImportStatus(''), 5000)
   }
 
-  const saveCustomer = () => {
-    if (!formData.name.trim()) {
-      alert('Customer name is required.')
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    const db = stored ? JSON.parse(stored) : { customers: [] }
-    if (!db.customers) db.customers = []
-
-    const customerObj = {
-      name: formData.name.trim(),
-      email: formData.email.trim(),
-      phone: formData.phone.trim()
-    }
-
-    if (editingIndex >= 0) {
-      db.customers[editingIndex] = customerObj
-    } else {
-      db.customers.push(customerObj)
-    }
-
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadCustomers()
-    closeModal()
-  }
-
-  const deleteCustomer = (index: number) => {
-    if (!confirm('Delete this customer?')) return
-
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    db.customers.splice(index, 1)
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadCustomers()
-  }
-
-  const openAddModal = () => {
-    setEditingIndex(-1)
-    setFormData({ name: '', email: '', phone: '' })
-    setIsModalOpen(true)
-  }
-
-  const openEditModal = (index: number) => {
-    setEditingIndex(index)
-    setFormData({ ...customers[index] })
-    setIsModalOpen(true)
-  }
-
-  const closeModal = () => {
-    setIsModalOpen(false)
-    setEditingIndex(-1)
-  }
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
     if (!file) return
-
-    setImportStatus('Reading file...')
-
-    const processData = (rows: any[]) => {
-      if (rows.length < 2) {
-        setImportStatus('File appears empty.')
-        return
-      }
-
-      const header = rows[0]
-      
-      const findColumnIndex = (keywords: string[]) => {
-        return header.findIndex((h: any) => {
-          const headerStr = String(h || '').toLowerCase().trim()
-          return keywords.some(keyword => headerStr.includes(keyword))
-        })
-      }
-
-      const nameIdx = findColumnIndex(['party', 'name', 'customer'])
-      const emailIdx = findColumnIndex(['email', 'mail'])
-      const phoneIdx = findColumnIndex(['phone', 'mobile', 'contact', 'tel'])
-
-      if (nameIdx < 0) {
-        setImportStatus('❌ No "Party" or "Name" column found in header.')
-        return
-      }
-
-      const stored = localStorage.getItem('dyeflow_db')
-      const db = stored ? JSON.parse(stored) : { customers: [] }
-      if (!db.customers) db.customers = []
-
-      const existing = new Set(db.customers.map((c: Customer) => c.name.trim().toLowerCase()))
-      let added = 0
-      let skipped = 0
-
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i]
-        const get = (idx: number) => {
-          if (idx < 0 || idx >= row.length) return ''
-          const val = row[idx]
-          return val ? String(val).trim() : ''
-        }
-
-        const name = get(nameIdx)
-        if (!name) continue
-
-        if (existing.has(name.toLowerCase())) {
-          skipped++
-          continue
-        }
-
-        db.customers.push({
-          name,
-          email: get(emailIdx),
-          phone: get(phoneIdx)
-        })
-        existing.add(name.toLowerCase())
-        added++
-      }
-
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      setImportStatus(`✅ Imported ${added} customers${skipped > 0 ? `. ${skipped} skipped (already exist)` : ''}.`)
-      loadCustomers()
-      
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-
-      setTimeout(() => setImportStatus(''), 5000)
-    }
-
+    setImportStatus('Reading file…')
     if (file.name.endsWith('.csv')) {
       const reader = new FileReader()
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          const csvText = e.target.result as string
-          const lines = csvText.split(/\r?\n/).filter(l => l.trim())
-          const rows = lines.map(line => {
-            return line.match(/(".*?"|[^,]+|(?<=,)(?=,)|^(?=,)|(?<=,)$)/g)?.map(v => v.replace(/^"|"$/g, '').trim()) || []
-          })
-          processData(rows)
-        }
-      }
-      reader.onerror = () => {
-        setImportStatus('❌ Error reading file.')
+      reader.onload = (ev) => {
+        const lines = (ev.target?.result as string).split(/\r?\n/).filter(l => l.trim())
+        const rows  = lines.map(line => line.split(',').map(c => c.replace(/^"|"$/g, '').trim()))
+        processImportRows(rows)
       }
       reader.readAsText(file)
-    } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+    } else {
       const reader = new FileReader()
-      reader.onload = (e) => {
-        try {
-          if (!e.target?.result) {
-            setImportStatus('❌ Error reading file.')
-            return
-          }
-
-          const data = new Uint8Array(e.target.result as ArrayBuffer)
-          const workbook = XLSX.read(data, { type: 'array' })
-          
-          const firstSheetName = workbook.SheetNames[0]
-          const worksheet = workbook.Sheets[firstSheetName]
-          
-          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[]
-          
-          processData(rows)
-        } catch (error) {
-          console.error('Excel parsing error:', error)
-          setImportStatus('❌ Error parsing Excel file.')
-        }
-      }
-      reader.onerror = () => {
-        setImportStatus('❌ Error reading file.')
+      reader.onload = (ev) => {
+        const wb   = XLSX.read(new Uint8Array(ev.target?.result as ArrayBuffer), { type: 'array' })
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 }) as any[]
+        processImportRows(rows)
       }
       reader.readAsArrayBuffer(file)
-    } else {
-      setImportStatus('❌ Please use Excel (.xlsx, .xls) or CSV format.')
     }
   }
 
   return (
-    <div className="content">
-      {/* Import Section - COMPACT VERSION */}
-      <div className="card" style={{ marginBottom: '14px' }}>
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'flex-start',
-          marginBottom: '10px'
-        }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-              <span style={{ fontSize: '16px', fontWeight: 600 }}>📄 Import Customers from Excel / CSV</span>
-            </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', maxWidth: '700px' }}>
-              Upload an Excel or CSV file with columns: <strong>Party</strong> (or Name), <strong>Email</strong> (or Mail ID), <strong>Phone</strong> (header row required). Existing customers with the same name will be skipped.
-            </p>
-            <div style={{
-              background: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontFamily: 'monospace',
-              display: 'inline-block'
-            }}>
-              Party &nbsp;|&nbsp; Mail ID &nbsp;|&nbsp; Phone
-            </div>
+    <div className="content" style={{ padding: '16px 20px' }}>
+      {/* Import */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10,
+        padding: '14px 18px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>📄 Import from Excel / CSV</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Columns: <strong>Party</strong> (or Name), <strong>Email</strong> (or Mail ID), <strong>Phone</strong>. Existing names are skipped.
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
-            {importStatus && (
-              <span style={{ 
-                fontSize: '12px', 
-                color: importStatus.startsWith('✅') ? 'var(--success)' : importStatus.startsWith('❌') ? 'var(--danger)' : 'var(--text-secondary)',
-                fontWeight: 500
-              }}>
-                {importStatus}
-              </span>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              onChange={handleFileUpload}
-              style={{ display: 'none' }}
-            />
-            <button 
-              onClick={() => fileInputRef.current?.click()} 
-              style={{ 
-                background: '#137E43',
-                color: 'white',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '6px',
-                fontSize: '14px',
-                fontWeight: 500,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              📄 Choose File
-            </button>
-          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+          {importStatus && (
+            <span style={{ fontSize: 12, fontWeight: 500,
+              color: importStatus.startsWith('✅') ? 'var(--success)' : importStatus.startsWith('❌') ? 'var(--danger)' : 'var(--text-secondary)' }}>
+              {importStatus}
+            </span>
+          )}
+          <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} style={{ display: 'none' }} />
+          <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
+            borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+            onClick={() => fileInputRef.current?.click()}>
+            📄 Choose File
+          </button>
         </div>
       </div>
 
-      {/* Customer Master Table - FIXED HEADER + SCROLLABLE BODY */}
-      <div className="card" style={{ border: '2px solid #3b82f6', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 280px)' }}>
-        {/* Fixed Header Section */}
-        <div className="card-header" style={{ paddingBottom: '16px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span className="card-title">Customer Master</span>
-            <span style={{ 
-              fontSize: '11px', 
-              color: 'var(--text-tertiary)',
-              background: 'var(--bg-secondary)',
-              padding: '3px 10px',
-              borderRadius: '11px',
-              fontWeight: 500
-            }}>
-              {customers.length} customers
-            </span>
+      {/* Table */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '12px 16px', borderBottom: '1px solid var(--border-light)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Customer Master</span>
+            <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)',
+              padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{customers.length}</span>
           </div>
-          <button 
-            onClick={openAddModal} 
-            style={{ 
-              background: '#137E43',
-              color: 'white',
-              border: 'none',
-              padding: '8px 16px',
-              borderRadius: '6px',
-              fontSize: '14px',
-              fontWeight: 500,
-              cursor: 'pointer'
-            }}
-          >
+          <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
+            borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }} onClick={openAdd}>
             + Add Customer
           </button>
         </div>
 
-        {customers.length === 0 ? (
-          <div className="empty-state" style={{ padding: '40px 24px', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            No customers added yet. Click "+ Add Customer" or import from Excel.
-          </div>
-        ) : (
-          <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
-            {/* Fixed Table Header */}
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'white' }}>
-                <tr style={{ background: 'var(--bg-secondary)' }}>
-                  <th style={{ width: '60px', padding: '12px 16px', textAlign: 'left', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--border-light)' }}>#</th>
-                  <th style={{ width: '400px', padding: '12px 16px', textAlign: 'left', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--border-light)' }}>Customer / Party Name</th>
-                  <th style={{ width: '350px', padding: '12px 16px', textAlign: 'left', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--border-light)' }}>Email</th>
-                  <th style={{ width: '200px', padding: '12px 16px', textAlign: 'left', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--border-light)' }}>Phone</th>
-                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--border-light)' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {customers.map((customer, index) => (
-                  <tr key={index} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: '13px' }}>{index + 1}</td>
-                    <td style={{ padding: '12px 16px', fontWeight: 600, fontSize: '13px' }}>{customer.name}</td>
-                    <td style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      {customer.email || '-'}
-                    </td>
-                    <td style={{ padding: '12px 16px', fontSize: '12px' }}>{customer.phone || '-'}</td>
-                    <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
-                      <button className="xs" onClick={() => openEditModal(index)} style={{ marginRight: '8px' }}>
-                        Edit
-                      </button>
-                      <button
-                        className="xs danger"
-                        onClick={() => deleteCustomer(index)}
-                      >
-                        Delete
-                      </button>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead style={{ background: 'var(--bg-secondary)', position: 'sticky', top: 0, zIndex: 5 }}>
+              <tr>
+                <th style={th}>#</th>
+                <th style={th}>Customer / Party Name</th>
+                <th style={th}>Email</th>
+                <th style={th}>Phone</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+              ) : customers.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                  No customers yet. Click "+ Add Customer" or import from Excel.
+                </td></tr>
+              ) : (
+                customers.map((c, i) => (
+                  <tr key={c.id} style={{ borderBottom: '1px solid var(--border-light)',
+                    background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)' }}>
+                    <td style={td}>{i + 1}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{c.name}</td>
+                    <td style={{ ...td, color: 'var(--text-secondary)' }}>{c.contact || '-'}</td>
+                    <td style={td}>{c.phone || '-'}</td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="xs" onClick={() => openEdit(c)}>Edit</button>
+                        <button className="xs danger" onClick={() => del(c.id, c.name)}>Delete</button>
+                      </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Add/Edit Customer Modal */}
-      {isModalOpen && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">
-                {editingIndex >= 0 ? 'Edit Customer' : 'Add Customer'}
-              </span>
-              <button className="small" onClick={closeModal}>✕</button>
+              <span className="modal-title">{editing ? 'Edit Customer' : 'Add Customer'}</span>
+              <button className="small" onClick={() => setShowModal(false)}>✕</button>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
               <div className="form-group">
-                <label>Customer / Party Name <span style={{ color: 'var(--danger)' }}>*</span></label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Enter customer name"
-                />
+                <label>Customer / Party Name *</label>
+                <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} autoFocus />
               </div>
               <div className="form-group">
                 <label>Email</label>
-                <input
-                  type="text"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="Enter email address"
-                />
+                <input type="text" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
               </div>
               <div className="form-group">
                 <label>Phone</label>
-                <input
-                  type="text"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  placeholder="Enter phone number"
-                />
+                <input type="text" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
               </div>
             </div>
-            <button 
-              onClick={saveCustomer} 
-              style={{ 
-                width: '100%',
-                background: '#137E43',
-                color: 'white',
-                border: 'none',
-                padding: '10px',
-                borderRadius: '6px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              ✓ Save
+            <button className="primary" onClick={save} disabled={saving} style={{ width: '100%', marginTop: 8 }}>
+              {saving ? 'Saving…' : '✓ Save'}
             </button>
           </div>
         </div>
@@ -414,3 +221,8 @@ export default function CustomerMasterPage() {
     </div>
   )
 }
+
+const th: React.CSSProperties = { padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700,
+  color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
+  borderBottom: '1px solid var(--border-light)' }
+const td: React.CSSProperties = { padding: '11px 14px', fontSize: 13, color: 'var(--text-primary)' }
