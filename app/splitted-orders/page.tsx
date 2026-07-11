@@ -1,505 +1,283 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { getBatches, getOrders, markProcessDone } from '@/lib/db'
 
-// Helper functions
-const getProcObj = (code: string) => {
-  const stored = localStorage.getItem('dyeflow_db')
-  if (!stored) return null
-  const db = JSON.parse(stored)
-  const processes = db.processes || []
-  const found = processes.find((p: any) => p.code === code)
-  
-  if (found) return found
-  
-  const codeToName: { [key: string]: string } = {
-    'S': 'Scouring', 'D': 'Dyeing', 'F': 'Finishing', 'C': 'Compacting',
-    'H': 'Heat Setting', 'W': 'Washing', 'P': 'Printing', 'R': 'Raising',
-    'SH': 'Shearing', 'ST': 'Stentering', 'B': 'Bleaching', 'M': 'Mercerizing',
-    'Add': 'Addition', 'Level': 'Leveling', 'S2': 'Second Scouring',
-    'Rc': 'Reactive', 'Fixing': 'Fixing'
-  }
-  
-  return { code, name: codeToName[code] || code, machine: null }
+const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> = {
+  new:          { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'New' },
+  pending:      { bg: 'var(--warning-light)',  color: 'var(--warning)',  label: 'Pending' },
+  'in-process': { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'In Process' },
+  done:         { bg: 'var(--success-light)',  color: 'var(--success)',  label: 'Done' },
+  faulty:       { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'Faulty' },
+  hold:         { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'On Hold' },
 }
 
-const getMachineShortName = (name: string) => {
-  return (name || '').replace(/^Machine\s*/i, 'M ').trim()
+function Badge({ status }: { status: string }) {
+  const b = STATUS_MAP[status] || { bg: 'var(--bg-secondary)', color: 'var(--text-tertiary)', label: status }
+  return (
+    <span style={{ padding: '3px 9px', borderRadius: 4, fontSize: 11,
+      fontWeight: 600, background: b.bg, color: b.color, whiteSpace: 'nowrap' }}>
+      {b.label}
+    </span>
+  )
 }
 
-const getMachineName = (machineId: string) => {
-  const stored = localStorage.getItem('dyeflow_db')
-  if (!stored) return machineId
-  const db = JSON.parse(stored)
-  const machine = (db.machines || []).find((m: any) => m.id === machineId)
-  return machine ? getMachineShortName(machine.name) : machineId
-}
-
-const getPrimaryMachine = (order: any) => {
-  if (order.machine) return order.machine
-  if (order.processMachines) {
-    const machines = Object.values(order.processMachines)
-    if (machines.length > 0 && Array.isArray(machines[0])) {
-      return machines[0][0] || ''
-    }
-  }
-  return ''
-}
-
-const formatDateTime = (date: Date | string) => {
-  if (!date) return 'N/A'
-  const d = new Date(date)
-  const day = String(d.getDate()).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year = d.getFullYear()
-  const hours = String(d.getHours()).padStart(2, '0')
-  const minutes = String(d.getMinutes()).padStart(2, '0')
-  return `${day}/${month}/${year} ${hours}:${minutes}`
-}
-
-// Column definitions
-const COLUMNS = [
-  { id: 'batchCreated', label: 'BATCH CREATED', defaultWidth: 150, visible: true },
-  { id: 'orderNo', label: 'ORDER #', defaultWidth: 120, visible: true },
-  { id: 'party', label: 'PARTY', defaultWidth: 150, visible: true },
-  { id: 'subParty', label: 'SUB PARTY', defaultWidth: 150, visible: true },
-  { id: 'salesPerson', label: 'SALES PERSON', defaultWidth: 120, visible: true },
-  { id: 'article', label: 'ARTICLE', defaultWidth: 180, visible: true },
-  { id: 'blend', label: 'BLEND', defaultWidth: 100, visible: false },
-  { id: 'width', label: 'WIDTH', defaultWidth: 80, visible: false },
-  { id: 'gsm', label: 'GSM', defaultWidth: 80, visible: true },
-  { id: 'color', label: 'COLOR', defaultWidth: 150, visible: true },
-  { id: 'labNo', label: 'LAB NO.', defaultWidth: 120, visible: true },
-  { id: 'lotNo', label: 'LOT NO.', defaultWidth: 120, visible: true },
-  { id: 'challanNo', label: 'CHALLAN NO.', defaultWidth: 120, visible: true },
-  { id: 'orderQty', label: 'ORDER QTY (KG)', defaultWidth: 120, visible: false },
-  { id: 'qtyMtr', label: 'QTY (MTR)', defaultWidth: 100, visible: false },
-  { id: 'taka', label: 'TAKA', defaultWidth: 80, visible: false },
-  { id: 'finish', label: 'FINISH', defaultWidth: 150, visible: false },
-  { id: 'packing', label: 'PACKING', defaultWidth: 100, visible: false },
-  { id: 'remarks', label: 'REMARKS', defaultWidth: 200, visible: false },
-  { id: 'holdApproval', label: 'HOLD/APPROVAL', defaultWidth: 130, visible: false },
-  { id: 'holdRemark', label: 'HOLD REMARK', defaultWidth: 150, visible: false },
-  { id: 'supervisor', label: 'SUPERVISOR', defaultWidth: 120, visible: true },
-  { id: 'routeTemplate', label: 'ROUTE TEMPLATE', defaultWidth: 150, visible: false },
-  { id: 'processRoute', label: 'PROCESS ROUTE', defaultWidth: 200, visible: true },
-  { id: 'machine', label: 'MACHINE', defaultWidth: 150, visible: true },
-  { id: 'orderStatus', label: 'ORDER STATUS', defaultWidth: 130, visible: false },
-  { id: 'batchId', label: 'BATCH ID', defaultWidth: 140, visible: true },
-  { id: 'batchQty', label: 'BATCH QTY (KG)', defaultWidth: 120, visible: true },
-  { id: 'batchStatus', label: 'BATCH STATUS', defaultWidth: 130, visible: true },
-  { id: 'currentProcess', label: 'CURRENT PROCESS', defaultWidth: 150, visible: true },
-  { id: 'actions', label: 'ACTIONS', defaultWidth: 160, visible: true }
+const COLS = [
+  { id: 'created_at',      label: 'BATCH CREATED',    w: 150, on: true  },
+  { id: 'order_number',    label: 'ORDER #',           w: 120, on: true  },
+  { id: 'party',           label: 'PARTY',             w: 150, on: true  },
+  { id: 'article',         label: 'ARTICLE',           w: 150, on: true  },
+  { id: 'color',           label: 'COLOR',             w: 130, on: true  },
+  { id: 'blend',           label: 'BLEND',             w: 100, on: false },
+  { id: 'qty_kg',          label: 'ORDER QTY (KG)',    w: 120, on: false },
+  { id: 'supervisor',      label: 'SUPERVISOR',        w: 120, on: true  },
+  { id: 'process_route',   label: 'PROCESS ROUTE',     w: 200, on: true  },
+  { id: 'machine',         label: 'MACHINE',           w: 130, on: true  },
+  { id: 'batch_id',        label: 'BATCH ID',          w: 140, on: true  },
+  { id: 'kg',              label: 'BATCH QTY (KG)',    w: 120, on: true  },
+  { id: 'batch_status',    label: 'BATCH STATUS',      w: 120, on: true  },
+  { id: 'current_process', label: 'CURRENT PROCESS',   w: 140, on: true  },
+  { id: 'actions',         label: 'ACTIONS',           w: 160, on: true  },
 ]
 
 export default function SplittedOrdersPage() {
-  const [orders, setOrders] = useState<any[]>([])
-  const [rows, setRows] = useState<any[]>([])
-  const [columns, setColumns] = useState(COLUMNS)
-  const [showColumnMenu, setShowColumnMenu] = useState(false)
-  const [resizing, setResizing] = useState<{ colId: string; startX: number; startWidth: number } | null>(null)
+  const [rows,     setRows]     = useState<any[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [toast,    setToast]    = useState('')
+  const [cols,     setCols]     = useState(COLS)
+  const [showCols, setShowCols] = useState(false)
+  const [resizing, setResizing] = useState<{ id: string; startX: number; startW: number } | null>(null)
 
-  useEffect(() => {
-    loadData()
-    
-    // Load saved column preferences
-    const saved = localStorage.getItem('splittedOrders_columnPrefs')
-    if (saved) {
-      try {
-        const prefs = JSON.parse(saved)
-        setColumns(cols => cols.map(col => ({
-          ...col,
-          visible: prefs[col.id]?.visible ?? col.visible,
-          defaultWidth: prefs[col.id]?.width ?? col.defaultWidth
-        })))
-      } catch (e) {}
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000) }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [batchRes, orderRes] = await Promise.all([
+        getBatches(),
+        getOrders({ limit: 1000 }),
+      ])
+      const batches: any[] = batchRes.data  || []
+      const orders:  any[] = orderRes.data  || []
+      const oMap: Record<string, any> = {}
+      for (const o of orders) oMap[o.id] = o
+
+      const enriched = batches.map(b => ({
+        ...b,
+        order_number:   oMap[b.order_id]?.order_number   || '-',
+        party:          oMap[b.order_id]?.party           || '-',
+        article:        oMap[b.order_id]?.article         || '-',
+        color:          oMap[b.order_id]?.color           || '-',
+        blend:          oMap[b.order_id]?.blend           || '',
+        qty_kg:         oMap[b.order_id]?.qty_kg          || '',
+        process_route:  oMap[b.order_id]?.process_route   || [],
+        supervisor:     oMap[b.order_id]?.supervisors?.name || '-',
+        machine_name:   b.machines?.name || '-',
+      }))
+
+      setRows(enriched)
+    } finally {
+      setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (resizing) {
-      const handleMouseMove = (e: MouseEvent) => {
-        const delta = e.clientX - resizing.startX
-        const newWidth = Math.max(50, resizing.startWidth + delta)
-        setColumns(cols => cols.map(col => 
-          col.id === resizing.colId ? { ...col, defaultWidth: newWidth } : col
-        ))
-      }
-      
-      const handleMouseUp = () => {
-        setResizing(null)
-        saveColumnPreferences()
-      }
-      
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
+    load()
+    const h = () => load()
+    window.addEventListener('dyeflow-db-updated', h)
+    return () => window.removeEventListener('dyeflow-db-updated', h)
+  }, [load])
+
+  // Column resize
+  useEffect(() => {
+    if (!resizing) return
+    const onMove = (e: MouseEvent) => {
+      const w = Math.max(60, resizing.startW + e.clientX - resizing.startX)
+      setCols(p => p.map(c => c.id === resizing.id ? { ...c, w } : c))
     }
+    const onUp = () => { setResizing(null); document.body.style.cursor = document.body.style.userSelect = '' }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
   }, [resizing])
 
-  const saveColumnPreferences = () => {
-    const prefs: any = {}
-    columns.forEach(col => {
-      prefs[col.id] = { visible: col.visible, width: col.defaultWidth }
-    })
-    localStorage.setItem('splittedOrders_columnPrefs', JSON.stringify(prefs))
+  const handleDone = async (row: any) => {
+    const route: string[] = row.process_route || []
+    const idx  = route.findIndex((c: string) => c === row.current_process)
+    const next = idx >= 0 ? route[idx + 1] : undefined
+    if (!confirm(`Mark ${row.batch_id} done in ${row.current_process}?`)) return
+    const { error } = await markProcessDone(row.id, row.current_process, next)
+    if (error) { alert('Error: ' + error); return }
+    showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'complete'}`)
+    load()
   }
 
-  const toggleColumn = (colId: string) => {
-    setColumns(cols => cols.map(col => 
-      col.id === colId ? { ...col, visible: !col.visible } : col
-    ))
-    setTimeout(saveColumnPreferences, 100)
-  }
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
+      Loading batches…
+    </div>
+  )
 
-  const loadData = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    const splitted = (db.orders || []).filter((o: any) => o.splits && o.splits.length > 0)
-    setOrders(splitted)
-
-    const rowData = splitted.flatMap((o: any) => 
-      (o.splits || []).map((b: any) => {
-        const totalSplitKg = o.splits.reduce((s: number, x: any) => s + (parseFloat(x.kg) || 0), 0)
-        const batchTimestamp = b.createdAt || b.timestamp || o.supervisorConfirmedAt || o.timestamp || 'N/A'
-        return { order: o, batch: b, totalSplitKg, batchTimestamp }
-      })
-    )
-    setRows(rowData)
-  }
-
-  const getStatusBadge = (status: string) => {
-    const badges: any = {
-      new: { bg: '#DBEAFE', color: '#1E40AF', label: 'New' },
-      assigned: { bg: '#FEF3C7', color: '#92400E', label: 'Assigned' },
-      splitting: { bg: '#E9D5FF', color: '#6B21A8', label: 'Split & Planned' },
-      'in-process': { bg: '#DBEAFE', color: '#1E40AF', label: 'In Process' },
-      done: { bg: '#D1FAE5', color: '#065F46', label: 'Done' },
-      hold: { bg: '#FEE2E2', color: '#991B1B', label: 'On Hold' }
-    }
-    
-    const badge = badges[status] || { bg: '#F3F4F6', color: '#6B7280', label: status }
-    
-    return (
-      <span style={{
-        padding: '4px 10px',
-        borderRadius: '4px',
-        fontSize: '11px',
-        fontWeight: 600,
-        background: badge.bg,
-        color: badge.color,
-        whiteSpace: 'nowrap'
-      }}>
-        {badge.label}
-      </span>
-    )
-  }
-
-  const renderCell = (colId: string, row: any) => {
-    const { order, batch } = row
-    
-    switch(colId) {
-      case 'batchCreated':
-        return <div style={{ fontSize: '11px', color: '#10B981', fontWeight: 600 }}>{formatDateTime(row.batchTimestamp)}</div>
-      case 'orderNo':
-        return <div style={{ fontWeight: 700, color: '#2563EB' }}>{order.orderNumber}</div>
-      case 'party':
-        return order.party || '-'
-      case 'subParty':
-        return order.subParty || order.subparty || '-'
-      case 'salesPerson':
-        return order.salesPerson || order.salesperson || '-'
-      case 'article':
-        return <div style={{ fontWeight: 500 }}>{order.article || '-'}</div>
-      case 'blend':
-        return <div style={{ fontSize: '11px', color: '#6B7280' }}>{order.blend || '-'}</div>
-      case 'width':
-        return order.width || '-'
-      case 'gsm':
-        return order.gsm || '-'
-      case 'color':
-        return order.color || '-'
-      case 'labNo':
-        return <div style={{ fontSize: '11px' }}>{order.labNo || order.labno || '-'}</div>
-      case 'lotNo':
-        return <div style={{ fontSize: '11px' }}>{order.lotNo || order.lotno || '-'}</div>
-      case 'challanNo':
-        return <div style={{ fontSize: '11px' }}>{order.challanNo || order.challannumber || '-'}</div>
-      case 'orderQty':
-        return <div style={{ fontWeight: 600 }}>{order.qtyKg || order.qtykg || '-'}</div>
-      case 'qtyMtr':
-        return order.qtyMtr || order.qtymtr || '-'
-      case 'taka':
-        return order.noOfTaka || order.nooftaka || '-'
-      case 'finish':
-        return order.typeOfFinish || order.typeoffinish || '-'
-      case 'packing':
-        return order.typeOfPacking || order.typeofpacking || '-'
-      case 'remarks':
-        return <div style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={order.remarks || ''}>{order.remarks || '-'}</div>
-      case 'holdApproval':
-        return order.holdApproval === 'Hold' ? (
-          <span style={{ padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, background: '#FEE2E2', color: '#991B1B' }}>Hold</span>
-        ) : order.holdApproval === '1st Batch Approval' ? (
-          <span style={{ padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, background: '#FEF3C7', color: '#92400E' }}>1st Batch Approval</span>
-        ) : '-'
-      case 'holdRemark':
-        return <div style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={order.holdReason || ''}>{order.holdReason || '-'}</div>
-      case 'supervisor':
-        return order.supervisor || '-'
-      case 'routeTemplate':
-        return order.routeTemplateName ? (
-          <span style={{ background: '#DBEAFE', color: '#1E40AF', padding: '2px 8px', borderRadius: '20px', fontSize: '11px', fontWeight: 600, display: 'inline-block' }}>{order.routeTemplateName}</span>
-        ) : null
-      case 'processRoute':
-        return order.supervisorConfirmed && order.processRoute && order.processRoute.length > 0 ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center' }}>
-            {order.processRoute.map((code: string, idx: number) => {
-              const proc = getProcObj(code) || { code, name: code }
-              return (
-                <span key={idx} style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                  <span title={proc.name} style={{ background: '#DBEAFE', color: '#1E40AF', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{proc.name}</span>
-                  {idx < order.processRoute.length - 1 && <span style={{ color: '#9CA3AF', fontSize: '11px', fontWeight: 600 }}>→</span>}
-                </span>
-              )
-            })}
-          </div>
-        ) : null
-      case 'machine':
-        return order.supervisorConfirmed && getPrimaryMachine(order) ? (
-          <span style={{ background: '#E9D5FF', color: '#6B21A8', padding: '3px 9px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{getMachineName(getPrimaryMachine(order))}</span>
-        ) : null
-      case 'orderStatus':
-        return getStatusBadge(order.status || 'new')
-      case 'batchId':
-        return <div style={{ fontWeight: 700, color: '#2563EB' }}>{batch.batchId || '-'}</div>
-      case 'batchQty':
-        return <div style={{ fontWeight: 700 }}>{batch.kg || '-'}</div>
-      case 'batchStatus':
-        return getStatusBadge(batch.status || 'new')
-      case 'currentProcess':
-        return batch.currentProcess ? (
-          <span style={{ background: '#DBEAFE', color: '#1E40AF', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{batch.currentProcess}</span>
-        ) : '-'
-      case 'actions':
-        return (
-          <div style={{ whiteSpace: 'nowrap' }}>
-            <button onClick={() => alert('View batch')} style={{ padding: '5px 10px', fontSize: '11px', border: '1px solid #D1D5DB', borderRadius: '4px', background: 'white', cursor: 'pointer', marginRight: '4px' }}>View</button>
-            {batch.status !== 'done' && (
-              <button onClick={() => alert('Mark done')} style={{ padding: '5px 10px', fontSize: '11px', border: 'none', borderRadius: '4px', background: '#10B981', color: 'white', cursor: 'pointer', fontWeight: 600 }}>Mark Done</button>
-            )}
-          </div>
-        )
-      default:
-        return '-'
-    }
-  }
-
-  if (orders.length === 0) {
-    return (
-      <div className="content">
-        <div className="card">
-          <div className="empty-state" style={{ padding: '60px' }}>
-            <div style={{ fontSize: '36px', marginBottom: '10px' }}>✂</div>
-            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '6px' }}>No Splitted Orders Yet</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginBottom: '20px' }}>Once orders are split into batches they will appear here.</div>
-            <button className="primary" onClick={() => window.location.href = '/orders'}>Go to Orders →</button>
-          </div>
+  if (rows.length === 0) return (
+    <div className="content" style={{ padding: 20 }}>
+      <div style={{ textAlign: 'center', padding: 60 }}>
+        <div style={{ fontSize: 36, marginBottom: 10 }}>✂</div>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>No Split Batches Yet</div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 20 }}>
+          Split orders from the Orders page to see batches here.
         </div>
+        <button className="primary" onClick={() => window.location.href = '/orders'}>Go to Orders →</button>
       </div>
-    )
-  }
+    </div>
+  )
 
-  const visibleColumns = columns.filter(col => col.visible)
+  const visible = cols.filter(c => c.on)
+
+  const renderCell = (col: typeof COLS[number], row: any) => {
+    switch (col.id) {
+      case 'created_at':      return <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{row.created_at ? new Date(row.created_at).toLocaleString('en-GB') : '-'}</span>
+      case 'order_number':    return <strong style={{ color: 'var(--accent)' }}>{row.order_number}</strong>
+      case 'party':           return row.party
+      case 'article':         return <span style={{ fontWeight: 500 }}>{row.article}</span>
+      case 'color':           return row.color
+      case 'blend':           return <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{row.blend || '-'}</span>
+      case 'qty_kg':          return <strong>{row.qty_kg}</strong>
+      case 'supervisor':      return row.supervisor
+      case 'process_route':   return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+          {(row.process_route as string[]).map((c: string, i: number) => (
+            <span key={i} style={{ fontSize: 10, fontWeight: 600, padding: '1px 5px',
+              background: c === row.current_process ? 'var(--accent)' : 'var(--accent-light)',
+              color: c === row.current_process ? '#fff' : 'var(--accent)', borderRadius: 3 }}>
+              {c}
+            </span>
+          ))}
+        </div>
+      )
+      case 'machine':         return row.machine_name !== '-' ? (
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px',
+          background: 'var(--purple-light)', color: 'var(--purple)', borderRadius: 4 }}>
+          {row.machine_name}
+        </span>
+      ) : '-'
+      case 'batch_id':        return <strong style={{ color: 'var(--accent)' }}>{row.batch_id}</strong>
+      case 'kg':              return <strong>{row.kg} Kg</strong>
+      case 'batch_status':    return <Badge status={row.status || 'pending'} />
+      case 'current_process': return row.current_process ? (
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px',
+          background: 'var(--accent)', color: '#fff', borderRadius: 4 }}>
+          {row.current_process}
+        </span>
+      ) : <span style={{ color: 'var(--text-tertiary)' }}>—</span>
+      case 'actions': return (
+        <div style={{ display: 'flex', gap: 4 }}>
+          {row.current_process && (
+            <button className="xs"
+              onClick={() => window.location.href = `/fms/${row.current_process}`}>
+              FMS →
+            </button>
+          )}
+          {row.status !== 'done' && row.current_process && (
+            <button className="xs" style={{ background: 'var(--success)', color: '#fff',
+              border: 'none', cursor: 'pointer' }}
+              onClick={() => handleDone(row)}>
+              ✓ Done
+            </button>
+          )}
+        </div>
+      )
+      default: return '-'
+    }
+  }
 
   return (
-    <div className="content">
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 100px)' }}>
-        {/* FROZEN HEADER - Card header stays at top */}
-        <div className="card-header" style={{ 
-          position: 'sticky', 
-          top: 0, 
-          zIndex: 200, 
-          background: 'white',
-          borderBottom: '1px solid #E5E7EB'
-        }}>
-          <span className="card-title">Splitted Orders</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-              {orders.length} orders • {rows.length} batches
-            </span>
-            <button
-              onClick={() => setShowColumnMenu(!showColumnMenu)}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                border: '1px solid #D1D5DB',
-                borderRadius: '6px',
-                background: 'white',
-                cursor: 'pointer',
-                fontWeight: 600,
-                color: '#374151'
-              }}
-            >
-              ⚙️ Columns ({visibleColumns.length}/{columns.length})
-            </button>
-          </div>
-        </div>
+    <div className="content" style={{ display: 'flex', flexDirection: 'column',
+      height: 'calc(100vh - 42px)', padding: '12px 16px 0' }}>
 
-        {showColumnMenu && (
-          <div style={{
-            position: 'absolute',
-            right: '20px',
-            top: '100px',
-            background: 'white',
-            border: '1px solid #E5E7EB',
-            borderRadius: '8px',
-            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
-            padding: '12px',
-            zIndex: 1000,
-            maxHeight: '400px',
-            overflowY: 'auto',
-            minWidth: '250px'
-          }}>
-            <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '10px', color: '#111827' }}>
-              Show/Hide Columns
-            </div>
-            {columns.map(col => (
-              <label key={col.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', fontSize: '12px' }}>
-                <input
-                  type="checkbox"
-                  checked={col.visible}
-                  onChange={() => toggleColumn(col.id)}
-                  style={{ marginRight: '8px', cursor: 'pointer' }}
-                />
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: 10, flexShrink: 0 }}>
+        <div>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>Splitted Orders</span>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 10 }}>
+            {rows.length} batch{rows.length !== 1 ? 'es' : ''}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="small" onClick={() => setShowCols(v => !v)}>
+            ⚙ Columns ({visible.length}/{cols.length})
+          </button>
+          <button className="small" onClick={load}>⟳ Refresh</button>
+        </div>
+      </div>
+
+      {toast && (
+        <div style={{ flexShrink: 0, background: 'var(--success-light)', color: 'var(--success)',
+          border: '1px solid var(--success)', borderRadius: 8, padding: '8px 14px',
+          marginBottom: 8, fontSize: 13, fontWeight: 600 }}>
+          {toast}
+        </div>
+      )}
+
+      {/* Column picker */}
+      {showCols && (
+        <div style={{ flexShrink: 0, padding: '10px 14px', background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-light)', borderRadius: 8, marginBottom: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px,1fr))', gap: 6 }}>
+            {cols.map(col => (
+              <label key={col.id} style={{ display: 'flex', alignItems: 'center',
+                gap: 6, fontSize: 12, cursor: 'pointer' }}>
+                <input type="checkbox" checked={col.on}
+                  onChange={() => setCols(p => p.map(c => c.id === col.id ? { ...c, on: !c.on } : c))}
+                  style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
                 {col.label}
               </label>
             ))}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* TABLE WITH FROZEN COLUMN HEADERS */}
-        <div style={{
-          flex: 1,
-          overflowX: 'auto',
-          overflowY: 'auto',
-          position: 'relative',
-          scrollbarWidth: 'auto',
-          WebkitOverflowScrolling: 'touch',
-          border: '1px solid #E5E7EB',
-          borderTop: 'none',
-          borderRadius: '0 0 8px 8px'
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-            <thead>
-              <tr style={{ background: '#F9FAFB' }}>
-                {visibleColumns.map(col => (
-                  <th
-                    key={col.id}
-                    style={{
-                      ...thStyle,
-                      width: col.defaultWidth,
-                      minWidth: col.defaultWidth,
-                      position: 'relative'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span>{col.label}</span>
-                      {/* Resize handle */}
-                      <div
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          setResizing({
-                            colId: col.id,
-                            startX: e.clientX,
-                            startWidth: col.defaultWidth
-                          })
-                        }}
-                        style={{
-                          position: 'absolute',
-                          right: 0,
-                          top: 0,
-                          bottom: 0,
-                          width: '4px',
-                          cursor: 'col-resize',
-                          background: resizing?.colId === col.id ? '#3B82F6' : 'transparent',
-                          borderRight: '1px solid #E5E7EB'
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!resizing) e.currentTarget.style.background = '#E5E7EB'
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!resizing) e.currentTarget.style.background = 'transparent'
-                        }}
-                      />
-                    </div>
-                  </th>
+      {/* Table */}
+      <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-primary)',
+        border: '1px solid var(--border-light)', borderRadius: 8, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <colgroup>{visible.map(c => <col key={c.id} style={{ width: c.w }} />)}</colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
+            <tr style={{ background: 'var(--bg-secondary)' }}>
+              {visible.map(col => (
+                <th key={col.id} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
+                  fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                  letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)',
+                  width: col.w, position: 'relative', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                  {col.label}
+                  <div onMouseDown={e => { e.preventDefault(); setResizing({ id: col.id, startX: e.clientX, startW: col.w }) }}
+                    style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6,
+                      cursor: 'col-resize', zIndex: 1 }} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={row.id || i} style={{
+                background: row.status === 'done' ? 'var(--success-light)'
+                          : i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
+                borderBottom: '1px solid var(--border-light)' }}>
+                {visible.map(col => (
+                  <td key={col.id} style={{ padding: '10px 12px', fontSize: 12,
+                    color: 'var(--text-primary)', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: col.w }}>
+                    {renderCell(col, row)}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, idx) => (
-                <tr
-                  key={idx}
-                  style={{
-                    background: row.batch.status === 'done' ? '#D1FAE5' : (idx % 2 === 0 ? 'white' : '#FAFAFA'),
-                    borderBottom: '1px solid #F3F4F6'
-                  }}
-                >
-                  {visibleColumns.map(col => (
-                    <td
-                      key={col.id}
-                      style={{
-                        ...tdStyle,
-                        width: col.defaultWidth,
-                        minWidth: col.defaultWidth,
-                        maxWidth: col.defaultWidth
-                      }}
-                    >
-                      {renderCell(col.id, row)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
-}
-
-const thStyle: React.CSSProperties = {
-  padding: '10px 14px',
-  textAlign: 'left',
-  fontSize: '10px',
-  fontWeight: 700,
-  color: '#6B7280',
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
-  borderBottom: '2px solid #E5E7EB',
-  borderRight: '1px solid #E5E7EB',
-  whiteSpace: 'nowrap',
-  position: 'sticky',
-  top: 0,
-  background: '#F9FAFB',
-  zIndex: 150,
-  userSelect: 'none',
-  boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-}
-
-const tdStyle: React.CSSProperties = {
-  padding: '12px 14px',
-  fontSize: '12px',
-  color: '#1F2937',
-  borderRight: '1px solid #F3F4F6',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis'
 }

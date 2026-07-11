@@ -1,383 +1,260 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useEffect, useState, useCallback } from 'react'
+import { updateOrder } from '@/lib/db'
 
-interface EditedOrder {
-  id: string
-  sheetId: string
-  linkedOrderId: string
-  rowId: string
-  requestedBy: string
-  requestedAt: string
-  oldValues: Record<string, any>
-  newValues: Record<string, any>
-  status: 'pending' | 'approved' | 'rejected'
-  rejectionReason?: string
-  reviewedBy?: string
-  reviewedAt?: string
+async function getSheets() {
+  const res = await fetch('/api/order-sheets', { cache: 'no-store' })
+  return res.json()
 }
 
-interface FieldChange {
-  field: string
-  oldValue: any
-  newValue: any
+async function updateSheetRows(id: string, rows: any[]) {
+  const res = await fetch('/api/order-sheets', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'update_rows', id, rows }),
+  })
+  return res.json()
 }
 
 export default function EditedOrdersPage() {
-  const [editedOrders, setEditedOrders] = useState<EditedOrder[]>([])
-  const [showRejectModal, setShowRejectModal] = useState(false)
-  const [rejectingId, setRejectingId] = useState<string | null>(null)
-  const [rejectionReason, setRejectionReason] = useState('')
+  const [items,        setItems]        = useState<any[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [saving,       setSaving]       = useState(false)
+  const [rejectModal,  setRejectModal]  = useState<any>(null)
+  const [rejectReason, setRejectReason] = useState('')
 
-  useEffect(() => {
-    loadEditedOrders()
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      // Edit requests are stored in sheet rows with requestEdit=true
+      const res = await getSheets()
+      if (!res.ok) return
+      const pending: any[] = []
+      for (const sheet of (res.data || [])) {
+        for (let i = 0; i < (sheet.rows || []).length; i++) {
+          const row = sheet.rows[i]
+          if (!row.requestEdit) continue
+          if (!row.editHistory || Object.keys(row.editHistory).length === 0) continue
+          pending.push({ sheet, row, rowIndex: i })
+        }
+      }
+      setItems(pending)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  const loadEditedOrders = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
+  useEffect(() => { load() }, [load])
 
-    const db = JSON.parse(stored)
-    const pending = (db.editedOrders || []).filter((e: EditedOrder) => e.status === 'pending')
-    setEditedOrders(pending)
-  }
+  const getChanges = (history: Record<string, { old: any; new: any }>) =>
+    Object.entries(history).map(([field, { old: oldVal, new: newVal }]) => ({
+      field, oldVal, newVal,
+    }))
 
-  const getChangedFields = (oldValues: Record<string, any>, newValues: Record<string, any>): FieldChange[] => {
-    const changes: FieldChange[] = []
-    const allKeys = new Set([...Object.keys(oldValues), ...Object.keys(newValues)])
-
-    allKeys.forEach(key => {
-      const oldVal = oldValues[key]
-      const newVal = newValues[key]
-      
-      if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
-        changes.push({
-          field: key,
-          oldValue: oldVal,
-          newValue: newVal
-        })
-      }
-    })
-
-    return changes
-  }
-
-  const formatValue = (value: any): string => {
-    if (value === null || value === undefined) return '-'
-    if (typeof value === 'object') return JSON.stringify(value)
-    return String(value)
-  }
-
-  const formatDateTime = (dateStr: string) => {
-    if (!dateStr) return '-'
+  const handleApprove = async (item: any) => {
+    if (!confirm('Approve this edit and update the order?')) return
+    setSaving(true)
     try {
-      const date = new Date(dateStr)
-      const pad = (n: number) => n.toString().padStart(2, '0')
-      return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-    } catch {
-      return '-'
-    }
-  }
+      const { row } = item
+      const history: Record<string, { old: any; new: any }> = row.editHistory || {}
 
-  const handleApprove = (editId: string) => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    const rec = (db.editedOrders || []).find((e: EditedOrder) => e.id === editId && e.status === 'pending')
-    
-    if (!rec) {
-      alert('Edit request not found.')
-      return
-    }
-
-    // ✅ FIX: Try to find order by both ID and orderNumber
-    // linkedOrderId might be the orderNumber field, not the id field
-    const order = (db.orders || []).find((o: any) => o.id === rec.linkedOrderId || o.orderNumber === rec.linkedOrderId)
-    
-    if (!order) {
-      alert('Linked order not found.')
-      return
-    }
-
-    // Apply new values to order
-    Object.keys(rec.newValues || {}).forEach(key => {
-      order[key] = rec.newValues[key]
-    })
-
-    // Update edit record
-    rec.status = 'approved'
-    rec.reviewedBy = 'Admin'
-    rec.reviewedAt = new Date().toISOString()
-
-    // Update sheet row
-    const sheet = (db.orderSheets || []).find((s: any) => s.id === rec.sheetId)
-    if (sheet) {
-      const row = (sheet.rows || []).find((r: any) => r.rowId === rec.rowId)
-      if (row) {
-        Object.keys(rec.newValues || {}).forEach(key => {
-          row[key] = rec.newValues[key]
-        })
-        row.requestEdit = false
-        row.submitForApproval = false
-        row.approvalStatus = 'edit-accepted'
-        row.rejectionReason = ''
-        row.receivedAt = rec.reviewedAt
-        
-        // Clear edit history after approval
-        row.editHistory = {}
-        row.editRequestedOn = ''
-        row.editRequestedBy = ''
-        row.editReason = ''
+      // Build patch from new values in editHistory
+      const patch: Record<string, any> = {}
+      for (const [field, { new: newVal }] of Object.entries(history)) {
+        // Map camelCase sheet fields to snake_case order fields
+        const fieldMap: Record<string, string> = {
+          party: 'party', subParty: 'sub_party', salesPerson: 'sales_person',
+          article: 'article', color: 'color', blend: 'blend',
+          qtyKg: 'qty_kg', qtyMtr: 'qty_mtr', remarks: 'remarks',
+          labNo: 'lab_no', lotNo: 'lot_no', challanNo: 'challan_no',
+        }
+        const dbField = fieldMap[field] || field
+        patch[dbField] = newVal
       }
-    }
 
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    alert('✓ Edit request approved successfully!')
-    loadEditedOrders()
-  }
-
-  const handleReject = () => {
-    if (!rejectionReason.trim()) {
-      alert('Please enter rejection reason.')
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    const rec = (db.editedOrders || []).find((e: EditedOrder) => e.id === rejectingId && e.status === 'pending')
-    
-    if (!rec) {
-      alert('Edit request not found.')
-      return
-    }
-
-    // Update edit record
-    rec.status = 'rejected'
-    rec.reviewedBy = 'Admin'
-    rec.reviewedAt = new Date().toISOString()
-    rec.rejectionReason = rejectionReason
-
-    // Update sheet row
-    const sheet = (db.orderSheets || []).find((s: any) => s.id === rec.sheetId)
-    if (sheet) {
-      const row = (sheet.rows || []).find((r: any) => r.rowId === rec.rowId)
-      if (row) {
-        // Revert to old values
-        Object.keys(rec.oldValues || {}).forEach(key => {
-          row[key] = rec.oldValues[key]
-        })
-        row.requestEdit = false
-        row.submitForApproval = false
-        row.approvalStatus = 'rejected'
-        row.rejectionReason = rejectionReason
-        row.receivedAt = rec.reviewedAt
-        
-        // Clear edit history after rejection
-        row.editHistory = {}
-        row.editRequestedOn = ''
-        row.editRequestedBy = ''
-        row.editReason = ''
+      // Find linked order by order number
+      if (row.orderNumber) {
+        const ordersRes = await fetch('/api/orders', { cache: 'no-store' }).then(r => r.json())
+        const order = (ordersRes.data || []).find((o: any) => o.order_number === row.orderNumber)
+        if (order) {
+          const { error } = await updateOrder(order.id, patch)
+          if (error) { alert('Error updating order: ' + error); return }
+        }
       }
-    }
 
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setShowRejectModal(false)
-    setRejectingId(null)
-    setRejectionReason('')
-    alert('✓ Edit request rejected.')
-    loadEditedOrders()
+      // Update sheet row
+      const updatedRows = [...item.sheet.rows]
+      updatedRows[item.rowIndex] = {
+        ...row,
+        ...Object.fromEntries(Object.entries(history).map(([f, { new: v }]) => [f, v])),
+        requestEdit:    false,
+        editHistory:    {},
+        approvalStatus: 'edit-accepted',
+        rejectionReason: '',
+        receivedAt:     new Date().toISOString(),
+      }
+      await updateSheetRows(item.sheet.id, updatedRows)
+      alert('✓ Edit approved and order updated!')
+      load()
+    } finally { setSaving(false) }
   }
 
-  const openRejectModal = (editId: string) => {
-    setRejectingId(editId)
-    setRejectionReason('')
-    setShowRejectModal(true)
+  const handleReject = async () => {
+    if (!rejectReason.trim()) { alert('Please enter a rejection reason'); return }
+    if (!rejectModal) return
+    setSaving(true)
+    try {
+      const { row } = rejectModal
+      const history: Record<string, { old: any; new: any }> = row.editHistory || {}
+
+      // Revert row to old values
+      const updatedRows = [...rejectModal.sheet.rows]
+      updatedRows[rejectModal.rowIndex] = {
+        ...row,
+        ...Object.fromEntries(Object.entries(history).map(([f, { old: v }]) => [f, v])),
+        requestEdit:    false,
+        editHistory:    {},
+        approvalStatus: 'rejected',
+        rejectionReason: rejectReason,
+        receivedAt:     new Date().toISOString(),
+      }
+      await updateSheetRows(rejectModal.sheet.id, updatedRows)
+      setRejectModal(null)
+      setRejectReason('')
+      alert('✓ Edit rejected.')
+      load()
+    } finally { setSaving(false) }
   }
+
+  const fmtDate = (d?: string) => {
+    if (!d) return '-'
+    try { return new Date(d).toLocaleString('en-GB') } catch { return d }
+  }
+
+  const fmtVal = (v: any) => {
+    if (v === null || v === undefined) return '-'
+    if (typeof v === 'object') return JSON.stringify(v)
+    return String(v)
+  }
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
+      Loading edit requests…
+    </div>
+  )
 
   return (
-    <div className="content">
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <span className="card-title">Pending Edited Orders</span>
-            <span className="badge badge-pending" style={{ marginLeft: '8px' }}>
-              {editedOrders.length}
-            </span>
-          </div>
-          <button onClick={loadEditedOrders}>Refresh</button>
+    <div className="content" style={{ padding: '16px 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>Pending Edited Orders</span>
+          <span style={{ fontSize: 13, fontWeight: 700, padding: '3px 10px', borderRadius: 10,
+            background: items.length > 0 ? 'var(--warning-light)' : 'var(--bg-secondary)',
+            color: items.length > 0 ? 'var(--warning)' : 'var(--text-tertiary)' }}>
+            {items.length}
+          </span>
         </div>
+        <button className="small" onClick={load}>⟳ Refresh</button>
+      </div>
 
-        {editedOrders.length === 0 ? (
-          <div className="empty-state">
-            No pending edit requests.
-          </div>
-        ) : (
-          editedOrders.map(edit => {
-            const changes = getChangedFields(edit.oldValues || {}, edit.newValues || {})
-            
-            return (
-              <div 
-                key={edit.id}
-                style={{
-                  border: '1px solid var(--border-light)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '12px',
-                  marginBottom: '10px'
-                }}
-              >
-                {/* Header */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  gap: '8px',
-                  flexWrap: 'wrap',
-                  marginBottom: '8px'
-                }}>
-                  <div style={{ fontSize: '12px' }}>
-                    <strong>{edit.id}</strong>
-                    &nbsp;|&nbsp; Order: {edit.linkedOrderId || '-'}
-                    &nbsp;|&nbsp; Sheet: {edit.sheetId || '-'}
-                    <div style={{ color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                      Requested by {edit.requestedBy || '-'} on {formatDateTime(edit.requestedAt)}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '4px', flex: '0 0 auto' }}>
-                    <button 
-                      className="xs success" 
-                      onClick={() => handleApprove(edit.id)}
-                    >
-                      Approve
-                    </button>
-                    <button 
-                      className="xs danger" 
-                      onClick={() => openRejectModal(edit.id)}
-                    >
-                      Reject
-                    </button>
+      {items.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--success)', fontSize: 15, fontWeight: 600 }}>
+          ✓ No pending edit requests.
+        </div>
+      ) : (
+        items.map((item, idx) => {
+          const changes = getChanges(item.row.editHistory || {})
+          return (
+            <div key={idx} style={{ background: 'var(--bg-primary)',
+              border: '1px solid var(--border-light)', borderRadius: 10,
+              marginBottom: 12, overflow: 'hidden' }}>
+
+              {/* Header */}
+              <div style={{ padding: '12px 16px', background: 'var(--bg-secondary)',
+                borderBottom: '1px solid var(--border-light)',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{item.row.orderNumber || '—'}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 8 }}>
+                    Sheet: {item.sheet.title} · Row {item.rowIndex + 1}
+                  </span>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                    Requested: {fmtDate(item.row.editRequestedOn)}
+                    {item.row.editReason && <> · Reason: <em>{item.row.editReason}</em></>}
                   </div>
                 </div>
-
-                {/* Changes Table */}
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Field</th>
-                        <th>Old Value</th>
-                        <th>New Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {changes.length === 0 ? (
-                        <tr>
-                          <td colSpan={3}>No difference detected.</td>
-                        </tr>
-                      ) : (
-                        changes.map((change, idx) => (
-                          <tr key={idx}>
-                            <td>{change.field}</td>
-                            <td>{formatValue(change.oldValue)}</td>
-                            <td>{formatValue(change.newValue)}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Footer Buttons */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  gap: '6px',
-                  marginTop: '10px'
-                }}>
-                  <button 
-                    className="small success" 
-                    onClick={() => handleApprove(edit.id)}
-                  >
-                    Approve This Edit
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="xs" style={{ background: 'var(--success)', color: '#fff',
+                    border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                    disabled={saving} onClick={() => handleApprove(item)}>
+                    Approve
                   </button>
-                  <button 
-                    className="small danger" 
-                    onClick={() => openRejectModal(edit.id)}
-                  >
-                    Reject This Edit
+                  <button className="xs danger"
+                    onClick={() => { setRejectModal(item); setRejectReason('') }}>
+                    Reject
                   </button>
                 </div>
               </div>
-            )
-          })
-        )}
-      </div>
 
-      {/* Reject Modal */}
-      {showRejectModal && (
-        <div 
-          className="modal-overlay"
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000
-          }}
-          onClick={() => setShowRejectModal(false)}
-        >
-          <div 
-            className="modal-content"
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '20px',
-              maxWidth: '500px',
-              width: '90%'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header" style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '16px'
-            }}>
+              {/* Changes table */}
+              <div style={{ padding: '12px 16px' }}>
+                {changes.length === 0 ? (
+                  <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>No changes detected.</div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg-secondary)' }}>
+                        {['Field','Old Value','New Value'].map(h => (
+                          <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10,
+                            fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                            letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changes.map((c, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                          <td style={{ ...td, fontWeight: 600 }}>{c.field}</td>
+                          <td style={{ ...td, color: 'var(--danger)', textDecoration: 'line-through' }}>{fmtVal(c.oldVal)}</td>
+                          <td style={{ ...td, color: 'var(--success)', fontWeight: 600 }}>{fmtVal(c.newVal)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )
+        })
+      )}
+
+      {rejectModal && (
+        <div className="modal-overlay" onClick={() => setRejectModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
               <span className="modal-title">Reject Edit Request</span>
-              <button 
-                className="small" 
-                onClick={() => setShowRejectModal(false)}
-              >
-                ✕
+              <button className="small" onClick={() => setRejectModal(null)}>✕</button>
+            </div>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label>Rejection reason *</label>
+              <textarea value={rejectReason} rows={4} autoFocus
+                onChange={e => setRejectReason(e.target.value)}
+                placeholder="Why is this edit being rejected?" />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={{ background: 'var(--danger)', color: '#fff', border: 'none',
+                padding: '8px 16px', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}
+                disabled={saving} onClick={handleReject}>
+                {saving ? 'Rejecting…' : 'Reject'}
               </button>
+              <button onClick={() => setRejectModal(null)}>Cancel</button>
             </div>
-            <div className="form-group" style={{ marginBottom: '12px' }}>
-              <label>Reason</label>
-              <textarea
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                placeholder="Enter rejection reason"
-                rows={4}
-                style={{ width: '100%' }}
-              />
-            </div>
-            <button 
-              className="danger" 
-              onClick={handleReject}
-            >
-              Reject
-            </button>
           </div>
         </div>
       )}
     </div>
   )
 }
+
+const td: React.CSSProperties = { padding: '9px 10px', fontSize: 12, color: 'var(--text-primary)' }
