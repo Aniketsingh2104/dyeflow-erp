@@ -1,1112 +1,428 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import {
+  labApi, labPost, StatCard, IssuesModal,
+  LAB_UNIT_OPTIONS, LAB_ORDER_STATUS, LAB_LIGHT_SOURCE, LAB_BRANCHES, LAB_FASTNESS_TYPES,
+  genIndentId, genRequestId, genIssueId, fmtDateTime,
+} from '../_shared'
 
-const LAB_UNIT_OPTIONS = ['UDHNA', 'CKU', 'EMB', 'EYEHOOK', 'WWF', 'VAU', 'Others (external)']
-const LAB_ORDER_STATUS_OPTIONS = ['Order in System', 'Order Pending', 'Self Development', 'Self Approval']
-const LAB_LIGHT_SOURCE_OPTIONS = ['D-65', 'TL-84', 'CWF', 'Other']
-const LAB_BRANCH_OPTIONS = ['Delhi', 'Mumbai', 'Ludhiana', 'Ulhasnagar', 'Bangalore', 'Tirupur', 'Udhna', 'KDC', 'Kolkatta', 'EMB', 'Ahmedabad', 'Sadar Bazar', 'Tirupur Showroom', 'Other']
-const LAB_FASTNESS_TYPE_OPTIONS = ['Normal', 'High']
+const BLANK_INDENT = {
+  unit: '', partyName: '', quality: '', numberOfLabDip: '',
+  requestGivenBy: '', orderStatus: '', branch: '', lightSource: '',
+  lightSourceOther: '', remarks: '', requestImage: '',
+}
+
+const BLANK_REQUEST = {
+  yarnDesign: '', shadePantone: '', fastnessType: '', fastnessRemark: '', otherRemark: '',
+}
 
 export default function LabIndentPage() {
-  const [indents, setIndents] = useState<any[]>([])
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false)
-  const [editingId, setEditingId] = useState('')
-  const [selectedIndent, setSelectedIndent] = useState<any>(null)
-  const [formData, setFormData] = useState({
-    unit: '',
-    partyName: '',
-    quality: '',
-    numberOfLabDip: '',
-    requestGivenBy: '',
-    orderStatus: '',
-    branch: '',
-    lightSource: '',
-    lightSourceOther: '',
-    remarks: '',
-    requestImage: ''
-  })
-  const [requestFormData, setRequestFormData] = useState({
-    yarnDesign: '',
-    shadePantone: '',
-    fastnessType: '',
-    fastnessRemark: '',
-    otherRemark: ''
-  })
-  const [imagePreview, setImagePreview] = useState('')
-  const [recentParties, setRecentParties] = useState<string[]>([])
-  const [filteredParties, setFilteredParties] = useState<string[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [indents,   setIndents]   = useState<any[]>([])
+  const [requests,  setRequests]  = useState<any[]>([])
+  const [issues,    setIssues]    = useState<any[]>([])
+  const [customers, setCustomers] = useState<string[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [saving,    setSaving]    = useState(false)
+  const [toast,     setToast]     = useState('')
 
-  useEffect(() => {
-    loadData()
+  // Modals
+  const [indentModal,  setIndentModal]  = useState(false)
+  const [requestModal, setRequestModal] = useState<any>(null) // selected indent
+  const [issuesModal,  setIssuesModal]  = useState<string|null>(null) // requestId
+  const [editingId,    setEditingId]    = useState('')
+  const [form,         setForm]         = useState({ ...BLANK_INDENT })
+  const [reqForm,      setReqForm]      = useState({ ...BLANK_REQUEST })
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [res, custRes] = await Promise.all([
+        labApi(),
+        fetch('/api/masters?table=customers', { cache: 'no-store' }).then(r => r.json()),
+      ])
+      if (res.ok) { setIndents(res.indents || []); setRequests(res.requests || []) }
+      const allIssuesRes = await labApi({ type: 'issues' })
+      if (allIssuesRes.ok) setIssues(allIssuesRes.data || [])
+      const custNames = (custRes.data || []).map((c: any) => c.name || c).filter(Boolean)
+      setCustomers(custNames)
+    } finally { setLoading(false) }
   }, [])
 
-  // Filter parties when partyName changes
-  useEffect(() => {
-    if (!formData.partyName.trim()) {
-      setFilteredParties([])
-      return
-    }
+  useEffect(() => { load() }, [load])
 
-    const searchTerm = formData.partyName.toLowerCase().trim()
-    const filtered = recentParties.filter(party => 
-      party.toLowerCase().includes(searchTerm)
-    ).slice(0, 10) // Limit to 10 suggestions
-
-    setFilteredParties(filtered)
-  }, [formData.partyName, recentParties])
-
-  const loadData = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    if (!db.labIndents) db.labIndents = []
-    
-    setIndents(db.labIndents)
-
-    // Get recent parties from customers, labIndents, and orders
-    const parties = [...new Set([
-      ...(db.customers || []).map((c: any) => c.name),
-      ...(db.labIndents || []).map((i: any) => i.partyName),
-      ...(db.orders || []).map((o: any) => o.party)
-    ].filter(Boolean))]
-    setRecentParties(parties)
-  }
-
-  const nextId = () => {
-    if (indents.length === 0) return 'LAB-IND-001'
-    const nums = indents.map(indent => {
-      const match = indent.id.match(/(\d+)/)
-      return match ? parseInt(match[1]) : 0
-    })
-    return 'LAB-IND-' + String(Math.max(0, ...nums) + 1).padStart(3, '0')
-  }
-
-  const nextLabRequestId = () => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return 'LR-0001'
-    const db = JSON.parse(stored)
-    if (!db.labRequests || db.labRequests.length === 0) return 'LR-0001'
-    const nums = db.labRequests.map((r: any) => {
-      const match = r.id.match(/(\d+)/)
-      return match ? parseInt(match[1]) : 0
-    })
-    return 'LR-' + String(Math.max(0, ...nums) + 1).padStart(4, '0')
-  }
-
-  const getLabRequestCount = (indentId: string) => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return 0
-    const db = JSON.parse(stored)
-    if (!db.labRequests) return 0
-    return db.labRequests.filter((r: any) => r.indentId === indentId).length
-  }
-
-  const getLabPendingCount = (indent: any) => {
+  const reqCount   = (indentId: string) => requests.filter(r => r.indent_id === indentId).length
+  const pendingCnt = (indent: any) => {
     if (indent.closed) return 0
-    const requested = getLabRequestCount(indent.id)
-    const labdipCount = parseInt(indent.numberOfLabDip) || 0
-    return Math.max(0, labdipCount - requested)
+    return Math.max(0, (parseInt(indent.num_lab_dip) || 0) - reqCount(indent.id))
+  }
+  const openIssues = (reqId: string) => issues.filter(i => i.request_id === reqId && !i.solved).length
+
+  const stats = {
+    total:    indents.length,
+    today:    indents.filter(i => new Date(i.created_at).toDateString() === new Date().toDateString()).length,
+    withImg:  indents.filter(i => i.request_image).length,
+    pending:  indents.reduce((s, i) => s + pendingCnt(i), 0),
   }
 
-  const getTodayCount = () => {
-    const todayStr = new Date().toDateString()
-    return indents.filter(e => new Date(e.createdAt).toDateString() === todayStr).length
-  }
+  // ── Save indent ────────────────────────────────────────────────────────────
 
-  const getWithImagesCount = () => {
-    return indents.filter(e => e.requestImage).length
-  }
-
-  const getPendingRequestsTotal = () => {
-    return indents.reduce((sum, e) => sum + getLabPendingCount(e), 0)
-  }
-
-  const getPendingOrderCount = () => {
-    return indents.filter(e => e.orderStatus === 'Order Pending').length
-  }
-
-  const saveIndent = () => {
-    // Validation
-    if (!formData.unit) {
-      alert('Please select Unit.')
-      return
+  const saveIndent = async () => {
+    if (!form.unit || !form.partyName.trim() || !form.quality.trim() ||
+        !form.numberOfLabDip || !form.requestGivenBy || !form.orderStatus ||
+        !form.branch || !form.lightSource) {
+      alert('Please fill all required fields.'); return
     }
-    if (!formData.partyName.trim()) {
-      alert('Please enter Party Name.')
-      return
+    if (form.lightSource === 'Other' && !form.lightSourceOther.trim()) {
+      alert('Please enter Other Light Source.'); return
     }
-    if (!formData.quality.trim()) {
-      alert('Please enter Quality.')
-      return
-    }
-    if (!formData.numberOfLabDip || parseInt(formData.numberOfLabDip) < 1) {
-      alert('Please enter Number of LabDIP (minimum 1).')
-      return
-    }
-    if (!formData.requestGivenBy) {
-      alert('Please select Request Given By.')
-      return
-    }
-    if (!formData.orderStatus) {
-      alert('Please select Order Status.')
-      return
-    }
-    if (!formData.branch) {
-      alert('Please select Branch.')
-      return
-    }
-    if (!formData.lightSource) {
-      alert('Please select Light Source.')
-      return
-    }
-    if (formData.lightSource === 'Other' && !formData.lightSourceOther.trim()) {
-      alert('Please enter Other Light Source.')
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    const db = stored ? JSON.parse(stored) : { labIndents: [] }
-    if (!db.labIndents) db.labIndents = []
-
-    const nowTs = new Date().toISOString()
-
-    if (editingId) {
-      const index = db.labIndents.findIndex((x: any) => x.id === editingId)
-      if (index >= 0) {
-        db.labIndents[index] = {
-          ...db.labIndents[index],
-          unit: formData.unit,
-          partyName: formData.partyName.trim(),
-          quality: formData.quality.trim(),
-          numberOfLabDip: formData.numberOfLabDip,
-          requestGivenBy: formData.requestGivenBy,
-          orderStatus: formData.orderStatus,
-          branch: formData.branch,
-          lightSource: formData.lightSource,
-          lightSourceOther: formData.lightSourceOther.trim(),
-          remarks: formData.remarks.trim(),
-          requestImage: formData.requestImage,
-          updatedAt: nowTs
-        }
+    setSaving(true)
+    try {
+      if (editingId) {
+        const res = await labPost({ action: 'update_indent', id: editingId, ...form })
+        if (!res.ok) { alert('Error: ' + res.error); return }
+        showToast('✓ Indent updated')
+      } else {
+        const newId = genIndentId(indents)
+        const res = await labPost({ action: 'create_indent', id: newId, ...form })
+        if (!res.ok) { alert('Error: ' + res.error); return }
+        showToast(`✓ Indent ${newId} created`)
       }
-    } else {
-      db.labIndents.push({
-        id: nextId(),
-        unit: formData.unit,
-        partyName: formData.partyName.trim(),
-        quality: formData.quality.trim(),
-        numberOfLabDip: formData.numberOfLabDip,
-        requestGivenBy: formData.requestGivenBy,
-        orderStatus: formData.orderStatus,
-        branch: formData.branch,
-        lightSource: formData.lightSource,
-        lightSourceOther: formData.lightSourceOther.trim(),
-        remarks: formData.remarks.trim(),
-        requestImage: formData.requestImage,
-        closed: false,
-        createdAt: nowTs,
-        updatedAt: ''
+      setIndentModal(false)
+      setEditingId('')
+      setForm({ ...BLANK_INDENT })
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const closeIndent = async (id: string) => {
+    if (!confirm('Close this indent? No further requests can be added.')) return
+    await labPost({ action: 'update_indent', id, closed: true })
+    showToast('✓ Indent closed')
+    load()
+  }
+
+  // ── Save request ───────────────────────────────────────────────────────────
+
+  const saveRequest = async () => {
+    if (!reqForm.yarnDesign.trim() || !reqForm.shadePantone.trim() || !reqForm.fastnessType) {
+      alert('Please fill all required fields.'); return
+    }
+    if (!requestModal) return
+    setSaving(true)
+    try {
+      const allReqsRes = await labApi({ type: 'requests' })
+      const allReqs = allReqsRes.data || []
+      const newId = genRequestId(allReqs)
+      const res = await labPost({
+        action:    'create_request',
+        id:        newId,
+        indentId:  requestModal.id,
+        unit:      requestModal.unit,
+        party:     requestModal.party_name,
+        quality:   requestModal.quality,
+        lightSource: requestModal.light_source,
+        lightSourceOther: requestModal.light_source_other || '',
+        ...reqForm,
       })
-    }
-
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadData()
-    closeModal()
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast(`✓ Request ${newId} created`)
+      setRequestModal(null)
+      setReqForm({ ...BLANK_REQUEST })
+      load()
+    } finally { setSaving(false) }
   }
 
-  const closeIndent = (id: string) => {
-    if (!confirm('Close this lab indent? No further requests can be added.')) return
+  // ── Issue actions ──────────────────────────────────────────────────────────
 
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    const index = db.labIndents.findIndex((x: any) => x.id === id)
-    if (index >= 0) {
-      db.labIndents[index].closed = true
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      loadData()
-    }
+  const toggleIssue = async (issueId: string) => {
+    await labPost({ action: 'toggle_issue', id: issueId })
+    const res = await labApi({ type: 'issues' })
+    if (res.ok) setIssues(res.data || [])
   }
 
-  const openNewRequestModal = (indent: any) => {
-    setSelectedIndent(indent)
-    setRequestFormData({
-      yarnDesign: '',
-      shadePantone: '',
-      fastnessType: '',
-      fastnessRemark: '',
-      otherRemark: ''
-    })
-    setIsRequestModalOpen(true)
+  const addIssue = async (requestId: string, desc: string, priority: string) => {
+    const allIssuesRes = await labApi({ type: 'issues' })
+    const allIssues = allIssuesRes.data || []
+    const newId = genIssueId(allIssues)
+    await labPost({ action: 'create_issue', id: newId, requestId, description: desc, priority })
+    const res = await labApi({ type: 'issues' })
+    if (res.ok) setIssues(res.data || [])
+    showToast('✓ Issue raised')
   }
 
-  const saveLabRequest = () => {
-    if (!selectedIndent) return
-
-    // Validation
-    if (!requestFormData.yarnDesign.trim()) {
-      alert('Yarn Design is required.')
-      return
-    }
-    if (!requestFormData.shadePantone.trim()) {
-      alert('Shade or Pantone is required.')
-      return
-    }
-    if (!requestFormData.fastnessType) {
-      alert('Fastness Type is required.')
-      return
-    }
-
-    const stored = localStorage.getItem('dyeflow_db')
-    const db = stored ? JSON.parse(stored) : {}
-    if (!db.labRequests) db.labRequests = []
-
-    const nowTs = new Date().toISOString()
-    const reqId = nextLabRequestId()
-
-    db.labRequests.unshift({
-      id: reqId,
-      createdAt: nowTs,
-      indentId: selectedIndent.id,
-      indentNo: selectedIndent.id,
-      unit: selectedIndent.unit,
-      party: selectedIndent.partyName,
-      quality: selectedIndent.quality,
-      lightSource: selectedIndent.lightSource,
-      lightSourceOther: selectedIndent.lightSourceOther || '',
-      yarnDesign: requestFormData.yarnDesign.trim(),
-      shadePantone: requestFormData.shadePantone.trim(),
-      fastnessType: requestFormData.fastnessType,
-      fastnessRemark: requestFormData.fastnessRemark.trim(),
-      otherRemark: requestFormData.otherRemark.trim(),
-      confirmed: false,
-      confirmedAt: ''
-    })
-
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    closeRequestModal()
-    loadData()
-    
-    setTimeout(() => {
-      alert(`✓ Lab request ${reqId} created against ${selectedIndent.id}.`)
-    }, 120)
-  }
-
-  const openAddModal = () => {
-    setEditingId('')
-    setFormData({
-      unit: '',
-      partyName: '',
-      quality: '',
-      numberOfLabDip: '',
-      requestGivenBy: '',
-      orderStatus: '',
-      branch: '',
-      lightSource: '',
-      lightSourceOther: '',
-      remarks: '',
-      requestImage: ''
-    })
-    setImagePreview('')
-    setFilteredParties([])
-    setIsModalOpen(true)
-  }
-
-  const openEditModal = (id: string) => {
-    const indent = indents.find(x => x.id === id)
-    if (!indent) return
-
-    setEditingId(id)
-    setFormData({
-      unit: indent.unit,
-      partyName: indent.partyName,
-      quality: indent.quality,
-      numberOfLabDip: indent.numberOfLabDip,
-      requestGivenBy: indent.requestGivenBy,
-      orderStatus: indent.orderStatus,
-      branch: indent.branch,
-      lightSource: indent.lightSource,
-      lightSourceOther: indent.lightSourceOther || '',
-      remarks: indent.remarks || '',
-      requestImage: indent.requestImage || ''
-    })
-    setImagePreview(indent.requestImage || '')
-    setFilteredParties([])
-    setIsModalOpen(true)
-  }
-
-  const closeModal = () => {
-    setIsModalOpen(false)
-    setEditingId('')
-    setFilteredParties([])
-  }
-
-  const closeRequestModal = () => {
-    setIsRequestModalOpen(false)
-    setSelectedIndent(null)
-    setRequestFormData({
-      yarnDesign: '',
-      shadePantone: '',
-      fastnessType: '',
-      fastnessRemark: '',
-      otherRemark: ''
-    })
-  }
-
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) {
-      setImagePreview('')
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const result = e.target?.result as string
-      setImagePreview(result)
-      setFormData({ ...formData, requestImage: result })
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const resetForm = () => {
-    setFormData({
-      unit: '',
-      partyName: '',
-      quality: '',
-      numberOfLabDip: '',
-      requestGivenBy: '',
-      orderStatus: '',
-      branch: '',
-      lightSource: '',
-      lightSourceOther: '',
-      remarks: '',
-      requestImage: ''
-    })
-    setImagePreview('')
-    setFilteredParties([])
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    const date = new Date(dateStr)
-    return date.toLocaleString('en-GB')
-  }
-
-  const todayCount = getTodayCount()
-  const withImages = getWithImagesCount()
-  const totalPendingRequests = getPendingRequestsTotal()
-  const pendingOrderCount = getPendingOrderCount()
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
+      Loading lab indents…
+    </div>
+  )
 
   return (
-    <div className="content">
-      {/* Compact Stats Grid with Button on Same Line */}
-      <div style={{ 
-        display: 'flex',
-        alignItems: 'stretch',
-        gap: '12px',
-        marginBottom: '16px',
-        flexWrap: 'wrap'
-      }}>
-        {/* Total Indents - Green Theme */}
-        <div style={{
-          background: 'white',
-          borderRadius: '10px',
-          padding: '14px',
-          border: '2px solid #EAF3DE',
-          position: 'relative',
-          overflow: 'hidden',
-          transition: 'all 0.2s',
-          flex: '1 1 160px',
-          minWidth: '160px',
-          maxWidth: '200px'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = '0 6px 16px rgba(19, 126, 67, 0.12)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)'
-          e.currentTarget.style.boxShadow = 'none'
-        }}>
-          <div style={{
-            position: 'absolute',
-            top: -10,
-            right: -10,
-            width: '70px',
-            height: '70px',
-            background: 'linear-gradient(135deg, rgba(19, 126, 67, 0.08) 0%, rgba(19, 126, 67, 0) 100%)',
-            borderRadius: '50%'
-          }} />
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ fontSize: '18px' }}>📋</div>
-            <div style={{
-              background: '#EAF3DE',
-              color: '#137E43',
-              fontSize: '8px',
-              fontWeight: 800,
-              padding: '2px 6px',
-              borderRadius: '8px',
-              letterSpacing: '0.5px'
-            }}>
-              TOTAL
-            </div>
-          </div>
-          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            Total Indents
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#137E43', lineHeight: 1 }}>
-            {indents.length}
-          </div>
-          <div style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 500, marginTop: '4px' }}>
-            All saved requests
-          </div>
-        </div>
+    <div className="content" style={{ padding: '16px 20px' }}>
 
-        {/* Created Today - Blue Theme */}
-        <div style={{
-          background: 'white',
-          borderRadius: '10px',
-          padding: '14px',
-          border: '2px solid #E0F2FE',
-          position: 'relative',
-          overflow: 'hidden',
-          transition: 'all 0.2s',
-          flex: '1 1 160px',
-          minWidth: '160px',
-          maxWidth: '200px'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = '0 6px 16px rgba(3, 105, 161, 0.12)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)'
-          e.currentTarget.style.boxShadow = 'none'
-        }}>
-          <div style={{
-            position: 'absolute',
-            top: -10,
-            right: -10,
-            width: '70px',
-            height: '70px',
-            background: 'linear-gradient(135deg, #E0F2FE 0%, transparent 100%)',
-            borderRadius: '50%'
-          }} />
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ fontSize: '18px' }}>✨</div>
-            <div style={{
-              background: '#E0F2FE',
-              color: '#0369A1',
-              fontSize: '8px',
-              fontWeight: 800,
-              padding: '2px 6px',
-              borderRadius: '8px',
-              letterSpacing: '0.5px'
-            }}>
-              TODAY
-            </div>
-          </div>
-          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            Created Today
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#0369A1', lineHeight: 1 }}>
-            {todayCount}
-          </div>
-          <div style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 500, marginTop: '4px' }}>
-            Today's new entries
-          </div>
-        </div>
-
-        {/* With Image - Orange Theme */}
-        <div style={{
-          background: 'white',
-          borderRadius: '10px',
-          padding: '14px',
-          border: '2px solid #FFF4E6',
-          position: 'relative',
-          overflow: 'hidden',
-          transition: 'all 0.2s',
-          flex: '1 1 160px',
-          minWidth: '160px',
-          maxWidth: '200px'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = '0 6px 16px rgba(217, 119, 6, 0.12)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)'
-          e.currentTarget.style.boxShadow = 'none'
-        }}>
-          <div style={{
-            position: 'absolute',
-            top: -10,
-            right: -10,
-            width: '70px',
-            height: '70px',
-            background: 'linear-gradient(135deg, #FFF4E6 0%, transparent 100%)',
-            borderRadius: '50%'
-          }} />
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ fontSize: '18px' }}>📷</div>
-            <div style={{
-              background: '#FFF4E6',
-              color: '#D97706',
-              fontSize: '8px',
-              fontWeight: 800,
-              padding: '2px 6px',
-              borderRadius: '8px',
-              letterSpacing: '0.5px'
-            }}>
-              IMAGE
-            </div>
-          </div>
-          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            With Image
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#D97706', lineHeight: 1 }}>
-            {withImages}
-          </div>
-          <div style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 500, marginTop: '4px' }}>
-            Request image attached
-          </div>
-        </div>
-
-        {/* Pending Requests - Purple Theme */}
-        <div style={{
-          background: 'white',
-          borderRadius: '10px',
-          padding: '14px',
-          border: '2px solid #F3E8FF',
-          position: 'relative',
-          overflow: 'hidden',
-          transition: 'all 0.2s',
-          flex: '1 1 160px',
-          minWidth: '160px',
-          maxWidth: '200px'
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = '0 6px 16px rgba(124, 58, 237, 0.12)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)'
-          e.currentTarget.style.boxShadow = 'none'
-        }}>
-          <div style={{
-            position: 'absolute',
-            top: -10,
-            right: -10,
-            width: '70px',
-            height: '70px',
-            background: 'linear-gradient(135deg, #F3E8FF 0%, transparent 100%)',
-            borderRadius: '50%'
-          }} />
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <div style={{ fontSize: '18px' }}>⏳</div>
-            <div style={{
-              background: '#F3E8FF',
-              color: '#7C3AED',
-              fontSize: '8px',
-              fontWeight: 800,
-              padding: '2px 6px',
-              borderRadius: '8px',
-              letterSpacing: '0.5px'
-            }}>
-              PENDING
-            </div>
-          </div>
-          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-            Pending Requests
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: totalPendingRequests > 0 ? '#7C3AED' : '#64748B', lineHeight: 1 }}>
-            {totalPendingRequests}
-          </div>
-          <div style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 500, marginTop: '4px' }}>
-            {pendingOrderCount} indent{pendingOrderCount !== 1 ? 's' : ''} pending
-          </div>
-        </div>
-
-        {/* New Indent Button - Aligned on Same Line */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          marginLeft: 'auto'
-        }}>
-          <button 
-            onClick={openAddModal}
-            style={{ 
-              background: 'linear-gradient(135deg, #137E43 0%, #0F6835 100%)',
-              color: 'white',
-              border: 'none',
-              padding: '12px 24px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(19, 126, 67, 0.2)',
-              transition: 'all 0.2s',
-              whiteSpace: 'nowrap',
-              height: 'fit-content'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)'
-              e.currentTarget.style.boxShadow = '0 6px 20px rgba(19, 126, 67, 0.3)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)'
-              e.currentTarget.style.boxShadow = '0 4px 12px rgba(19, 126, 67, 0.2)'
-            }}
-          >
+      {/* Stats + New button */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        <StatCard label="Total Indents"     value={stats.total}   color="var(--success)" />
+        <StatCard label="Created Today"     value={stats.today}   color="var(--accent)" />
+        <StatCard label="With Image"        value={stats.withImg} color="var(--warning)" />
+        <StatCard label="Pending Requests"  value={stats.pending} color="var(--purple)" />
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+          <button className="primary" onClick={() => { setEditingId(''); setForm({ ...BLANK_INDENT }); setIndentModal(true) }}>
             + New Indent
           </button>
         </div>
       </div>
 
-      {/* Saved Lab Indents */}
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Saved Lab Indents</span>
-          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-            {indents.length} entries
-          </span>
+      {toast && (
+        <div style={{ background: 'var(--success-light)', color: 'var(--success)',
+          border: '1px solid var(--success)', borderRadius: 8, padding: '8px 14px',
+          marginBottom: 10, fontSize: 13, fontWeight: 600 }}>
+          {toast}
         </div>
+      )}
 
+      {/* Table */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 10, overflow: 'auto' }}>
         {indents.length === 0 ? (
-          <div className="empty-state" style={{ padding: '32px' }}>
-            <div style={{ fontSize: '28px', marginBottom: '8px' }}>📋</div>
-            <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '6px' }}>
-              No lab indent entries yet
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginBottom: '14px' }}>
-              Start with a clean entry from the New Indent button.
-            </div>
-            <button 
-              onClick={openAddModal}
-              style={{ 
-                background: 'linear-gradient(135deg, #137E43 0%, #0F6835 100%)',
-                color: 'white',
-                border: 'none',
-                padding: '10px 20px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                boxShadow: '0 4px 12px rgba(19, 126, 67, 0.2)'
-              }}
-            >
+          <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>
+            <div style={{ fontSize: 32, marginBottom: 10 }}>📋</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>No lab indents yet</div>
+            <button className="primary" style={{ marginTop: 14 }}
+              onClick={() => { setEditingId(''); setForm({ ...BLANK_INDENT }); setIndentModal(true) }}>
               + Create First Indent
             </button>
           </div>
         ) : (
-          <div className="table-wrap">
-            <table style={{ minWidth: '1250px' }}>
-              <thead>
-                <tr>
-                  <th>Indent No</th>
-                  <th>Time</th>
-                  <th>Unit</th>
-                  <th>Party Name</th>
-                  <th>Quality</th>
-                  <th>LabDIP</th>
-                  <th>Requested</th>
-                  <th>Pending</th>
-                  <th>Status</th>
-                  <th>Request Given By</th>
-                  <th>Order Status</th>
-                  <th>Branch</th>
-                  <th>Light Source</th>
-                  <th>Remarks</th>
-                  <th>Image</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {indents.map(indent => {
-                  const requested = getLabRequestCount(indent.id)
-                  const pending = getLabPendingCount(indent)
-                  return (
-                    <tr key={indent.id}>
-                      <td style={{ fontWeight: 700, color: '#3366CC' }}>{indent.id}</td>
-                      <td style={{ whiteSpace: 'nowrap', fontSize: '11px' }}>
-                        {formatDate(indent.createdAt)}
-                      </td>
-                      <td>{indent.unit}</td>
-                      <td>{indent.partyName}</td>
-                      <td>{indent.quality}</td>
-                      <td style={{ textAlign: 'center' }}>{indent.numberOfLabDip}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button className="xs">{requested}</button>
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: pending > 0 ? 'var(--warning)' : 'var(--success)' }}>
-                        {pending}
-                      </td>
-                      <td>
-                        {indent.closed ? (
-                          <span className="badge badge-done">Closed</span>
-                        ) : (
-                          <span className="badge badge-assigned">Open</span>
-                        )}
-                      </td>
-                      <td>{indent.requestGivenBy}</td>
-                      <td>{indent.orderStatus}</td>
-                      <td>{indent.branch}</td>
-                      <td>{indent.lightSource === 'Other' ? (indent.lightSourceOther || 'Other') : indent.lightSource}</td>
-                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                        {indent.remarks || '-'}
-                      </td>
-                      <td>
-                        {indent.requestImage ? (
-                          <a href={indent.requestImage} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
-                            <img src={indent.requestImage} alt="Lab Request" style={{ width: '38px', height: '38px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border-light)' }} />
-                            <span>View</span>
-                          </a>
-                        ) : (
-                          <span style={{ color: 'var(--text-tertiary)' }}>-</span>
-                        )}
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        <button 
-                          className="xs primary" 
-                          style={{ opacity: indent.closed || pending === 0 ? 0.45 : 1, cursor: indent.closed || pending === 0 ? 'not-allowed' : 'pointer' }}
-                          disabled={indent.closed || pending === 0}
-                          onClick={() => openNewRequestModal(indent)}
-                        >
-                          New Request
-                        </button>
-                        <button className="xs" style={{ marginLeft: '3px' }} onClick={() => openEditModal(indent.id)}>
-                          Edit
-                        </button>
-                        <button 
-                          className="xs danger" 
-                          style={{ marginLeft: '3px', opacity: indent.closed ? 0.45 : 1, cursor: indent.closed ? 'not-allowed' : 'pointer' }}
-                          onClick={() => closeIndent(indent.id)}
-                          disabled={indent.closed}
-                        >
-                          Close
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+            <thead style={{ background: 'var(--bg-secondary)' }}>
+              <tr>
+                {['Indent No','Date','Unit','Party','Quality','LabDIP','Requested','Pending','Status','Branch','Light','Remarks','Actions'].map(h => (
+                  <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
+                    fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                    letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
+                    whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {indents.map((indent, i) => {
+                const requested = reqCount(indent.id)
+                const pending   = pendingCnt(indent)
+                return (
+                  <tr key={indent.id} style={{
+                    background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
+                    borderBottom: '1px solid var(--border-light)' }}>
+                    <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{indent.id}</td>
+                    <td style={{ ...td, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(indent.created_at)}</td>
+                    <td style={td}>{indent.unit}</td>
+                    <td style={{ ...td, fontWeight: 500 }}>{indent.party_name}</td>
+                    <td style={td}>{indent.quality}</td>
+                    <td style={{ ...td, textAlign: 'center', fontWeight: 700 }}>{indent.num_lab_dip}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>{requested}</td>
+                    <td style={{ ...td, textAlign: 'center', fontWeight: 700,
+                      color: pending > 0 ? 'var(--warning)' : 'var(--success)' }}>{pending}</td>
+                    <td style={td}>
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 4,
+                        background: indent.closed ? 'var(--bg-secondary)' : 'var(--success-light)',
+                        color: indent.closed ? 'var(--text-tertiary)' : 'var(--success)' }}>
+                        {indent.closed ? 'Closed' : 'Open'}
+                      </span>
+                    </td>
+                    <td style={td}>{indent.branch}</td>
+                    <td style={td}>{indent.light_source === 'Other' ? (indent.light_source_other || 'Other') : indent.light_source}</td>
+                    <td style={{ ...td, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{indent.remarks || '-'}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      <button className="xs primary" disabled={indent.closed || pending === 0}
+                        style={{ opacity: (indent.closed || pending === 0) ? 0.4 : 1 }}
+                        onClick={() => setRequestModal(indent)}>
+                        New Request
+                      </button>
+                      <button className="xs" style={{ marginLeft: 4 }}
+                        onClick={() => {
+                          setEditingId(indent.id)
+                          setForm({
+                            unit: indent.unit, partyName: indent.party_name, quality: indent.quality,
+                            numberOfLabDip: String(indent.num_lab_dip), requestGivenBy: indent.request_given_by,
+                            orderStatus: indent.order_status, branch: indent.branch, lightSource: indent.light_source,
+                            lightSourceOther: indent.light_source_other || '', remarks: indent.remarks || '',
+                            requestImage: indent.request_image || '',
+                          })
+                          setIndentModal(true)
+                        }}>
+                        Edit
+                      </button>
+                      <button className="xs danger" style={{ marginLeft: 4, opacity: indent.closed ? 0.4 : 1 }}
+                        disabled={indent.closed}
+                        onClick={() => closeIndent(indent.id)}>
+                        Close
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Add/Edit Indent Modal */}
-      {isModalOpen && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '720px' }}>
+      {/* Indent modal */}
+      {indentModal && (
+        <div className="modal-overlay" onClick={() => setIndentModal(false)}>
+          <div className="modal" style={{ maxWidth: 720 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">
-                {editingId ? `Edit Lab Indent – ${editingId}` : 'New Lab Indent'}
-              </span>
-              <button className="small" onClick={closeModal}>✕</button>
+              <span className="modal-title">{editingId ? `Edit ${editingId}` : 'New Lab Indent'}</span>
+              <button className="small" onClick={() => setIndentModal(false)}>✕</button>
             </div>
-
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-              {editingId ? 'Update the indent details below.' : 'Fill the indent details below. This form opens only when you need to create a fresh request.'}
-            </p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '14px' }}>
-              <div className="form-group">
-                <label>Unit *</label>
-                <select value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })}>
-                  <option value="">Choose</option>
-                  {LAB_UNIT_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Party Name *</label>
-                <input
-                  list="party-list"
-                  placeholder="Select or type party name"
-                  value={formData.partyName}
-                  onChange={(e) => setFormData({ ...formData, partyName: e.target.value })}
-                  autoComplete="off"
-                />
-                <datalist id="party-list">
-                  {filteredParties.map(party => (
-                    <option key={party} value={party} />
-                  ))}
-                </datalist>
-              </div>
-
-              <div className="form-group">
-                <label>Quality *</label>
-                <input
-                  placeholder="Enter quality"
-                  value={formData.quality}
-                  onChange={(e) => setFormData({ ...formData, quality: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Number of LabDIP *</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  placeholder="e.g. 3"
-                  value={formData.numberOfLabDip}
-                  onChange={(e) => setFormData({ ...formData, numberOfLabDip: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Request Given By *</label>
-                <select value={formData.requestGivenBy} onChange={(e) => setFormData({ ...formData, requestGivenBy: e.target.value })}>
-                  <option value="">Choose</option>
-                  {LAB_BRANCH_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Order Status *</label>
-                <select value={formData.orderStatus} onChange={(e) => setFormData({ ...formData, orderStatus: e.target.value })}>
-                  <option value="">Choose</option>
-                  {LAB_ORDER_STATUS_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Branch *</label>
-                <select value={formData.branch} onChange={(e) => setFormData({ ...formData, branch: e.target.value })}>
-                  <option value="">Choose</option>
-                  {LAB_BRANCH_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Light Source *</label>
-                <select value={formData.lightSource} onChange={(e) => setFormData({ ...formData, lightSource: e.target.value })}>
-                  <option value="">Choose</option>
-                  {LAB_LIGHT_SOURCE_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '12px', marginBottom: '16px', alignItems: 'start' }}>
-              <div className="form-group">
-                <label>Remarks</label>
-                <textarea
-                  placeholder="Add remarks if any"
-                  value={formData.remarks}
-                  onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                  rows={3}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {formData.lightSource === 'Other' && (
-                  <div className="form-group">
-                    <label>Other Light Source</label>
-                    <input
-                      placeholder="Write light source"
-                      value={formData.lightSourceOther}
-                      onChange={(e) => setFormData({ ...formData, lightSourceOther: e.target.value })}
-                    />
-                  </div>
-                )}
-
-                <div className="form-group">
-                  <label>Lab Dip Request Image</label>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                  />
-                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                    {imagePreview ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <img src={imagePreview} alt="Preview" style={{ width: '52px', height: '52px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border-light)' }} />
-                        <div>
-                          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                            {editingId ? 'Existing image' : 'Preview ready'}
-                          </div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>
-                            {editingId ? 'Upload a new file to replace it' : 'Image ready'}
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      'No image selected'
-                    )}
-                  </div>
+            <div className="form-grid" style={{ marginBottom: 14 }}>
+              {([
+                ['unit','Unit','select'],['partyName','Party Name','datalist'],
+                ['quality','Quality','text'],['numberOfLabDip','No. of LabDIP','number'],
+                ['requestGivenBy','Request Given By','select2'],['orderStatus','Order Status','select3'],
+                ['branch','Branch','select4'],['lightSource','Light Source','select5'],
+              ] as [string,string,string][]).map(([key, label, type]) => (
+                <div key={key} className="form-group">
+                  <label>{label} *</label>
+                  {type === 'select' ? (
+                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
+                      <option value="">Choose</option>
+                      {LAB_UNIT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === 'select2' ? (
+                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
+                      <option value="">Choose</option>
+                      {LAB_BRANCHES.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === 'select3' ? (
+                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
+                      <option value="">Choose</option>
+                      {LAB_ORDER_STATUS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === 'select4' ? (
+                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
+                      <option value="">Choose</option>
+                      {LAB_BRANCHES.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === 'select5' ? (
+                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
+                      <option value="">Choose</option>
+                      {LAB_LIGHT_SOURCE.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === 'datalist' ? (
+                    <>
+                      <input list="party-list" value={(form as any)[key]} placeholder={label}
+                        onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))} />
+                      <datalist id="party-list">
+                        {customers.map(c => <option key={c} value={c} />)}
+                      </datalist>
+                    </>
+                  ) : (
+                    <input type={type} value={(form as any)[key]} placeholder={label}
+                      onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))} />
+                  )}
                 </div>
-              </div>
+              ))}
+              {form.lightSource === 'Other' && (
+                <div className="form-group">
+                  <label>Other Light Source *</label>
+                  <input value={form.lightSourceOther}
+                    onChange={e => setForm(p => ({ ...p, lightSourceOther: e.target.value }))} />
+                </div>
+              )}
             </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button 
-                onClick={saveIndent}
-                style={{ 
-                  background: 'linear-gradient(135deg, #137E43 0%, #0F6835 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '10px 20px',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  boxShadow: '0 4px 12px rgba(19, 126, 67, 0.2)'
-                }}
-              >
-                {editingId ? '✓ Update Indent' : '✓ Save Indent'}
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label>Remarks</label>
+              <textarea value={form.remarks} rows={2}
+                onChange={e => setForm(p => ({ ...p, remarks: e.target.value }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="primary" onClick={saveIndent} disabled={saving}>
+                {saving ? 'Saving…' : editingId ? '✓ Update' : '✓ Save Indent'}
               </button>
-              <button onClick={resetForm}>Reset</button>
+              <button onClick={() => setForm({ ...BLANK_INDENT })}>Reset</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* New Lab Request Modal */}
-      {isRequestModalOpen && selectedIndent && (
-        <div className="modal-overlay" onClick={closeRequestModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
+      {/* Request modal */}
+      {requestModal && (
+        <div className="modal-overlay" onClick={() => setRequestModal(null)}>
+          <div className="modal" style={{ maxWidth: 680 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">New Lab Request - {selectedIndent.id}</span>
-              <button className="small" onClick={closeRequestModal}>✕</button>
+              <span className="modal-title">New Lab Request — {requestModal.id}</span>
+              <button className="small" onClick={() => setRequestModal(null)}>✕</button>
             </div>
-
-            <div style={{ 
-              background: 'var(--bg-secondary)', 
-              borderRadius: 'var(--radius-md)', 
-              padding: '10px 12px', 
-              marginBottom: '14px', 
-              fontSize: '12px', 
-              color: 'var(--text-secondary)' 
-            }}>
-              Request {getLabRequestCount(selectedIndent.id) + 1} of {selectedIndent.numberOfLabDip} · Pending after this: {Math.max(0, getLabPendingCount(selectedIndent) - 1)}
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 14px',
+              marginBottom: 14, fontSize: 12, color: 'var(--text-secondary)' }}>
+              Request {reqCount(requestModal.id) + 1} of {requestModal.num_lab_dip} · 
+              Pending after: {Math.max(0, pendingCnt(requestModal) - 1)}
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '14px' }}>
-              <div className="form-group">
-                <label>Unit</label>
-                <input value={selectedIndent.unit} disabled />
-              </div>
-
-              <div className="form-group">
-                <label>Party</label>
-                <input value={selectedIndent.partyName} disabled />
-              </div>
-
-              <div className="form-group">
-                <label>Quality</label>
-                <input value={selectedIndent.quality} disabled />
-              </div>
-
-              <div className="form-group">
-                <label>Light Source</label>
-                <input value={selectedIndent.lightSource === 'Other' ? (selectedIndent.lightSourceOther || 'Other') : selectedIndent.lightSource} disabled />
-              </div>
-
-              <div className="form-group">
-                <label>Lab Indent No</label>
-                <input value={selectedIndent.id} disabled />
-              </div>
-
-              <div className="form-group">
-                <label>Lab Request No</label>
-                <input value={nextLabRequestId()} disabled />
-              </div>
-
+            <div className="form-grid" style={{ marginBottom: 14 }}>
+              {[['Unit', requestModal.unit],['Party', requestModal.party_name],
+                ['Quality', requestModal.quality],
+                ['Light Source', requestModal.light_source === 'Other' ? (requestModal.light_source_other || 'Other') : requestModal.light_source]
+              ].map(([l, v]) => (
+                <div key={l} className="form-group">
+                  <label>{l}</label>
+                  <input value={v || ''} disabled style={{ background: 'var(--bg-secondary)' }} />
+                </div>
+              ))}
               <div className="form-group">
                 <label>Yarn Design *</label>
-                <input
-                  placeholder="Enter yarn design"
-                  value={requestFormData.yarnDesign}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, yarnDesign: e.target.value })}
-                />
+                <input value={reqForm.yarnDesign} placeholder="Enter yarn design"
+                  onChange={e => setReqForm(p => ({ ...p, yarnDesign: e.target.value }))} />
               </div>
-
               <div className="form-group">
-                <label>Shade or Pantone *</label>
-                <input
-                  placeholder="Enter shade or pantone"
-                  value={requestFormData.shadePantone}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, shadePantone: e.target.value })}
-                />
+                <label>Shade / Pantone *</label>
+                <input value={reqForm.shadePantone} placeholder="Enter shade or pantone"
+                  onChange={e => setReqForm(p => ({ ...p, shadePantone: e.target.value }))} />
               </div>
-
               <div className="form-group">
                 <label>Fastness Type *</label>
-                <select 
-                  value={requestFormData.fastnessType}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, fastnessType: e.target.value })}
-                >
+                <select value={reqForm.fastnessType}
+                  onChange={e => setReqForm(p => ({ ...p, fastnessType: e.target.value }))}>
                   <option value="">Choose</option>
-                  {LAB_FASTNESS_TYPE_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
+                  {LAB_FASTNESS_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
-
               <div className="form-group">
                 <label>Fastness Remark</label>
-                <input
-                  placeholder="Enter fastness remark"
-                  value={requestFormData.fastnessRemark}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, fastnessRemark: e.target.value })}
-                />
+                <input value={reqForm.fastnessRemark} placeholder="Optional"
+                  onChange={e => setReqForm(p => ({ ...p, fastnessRemark: e.target.value }))} />
               </div>
             </div>
-
-            <div className="form-group" style={{ marginBottom: '16px' }}>
+            <div className="form-group" style={{ marginBottom: 14 }}>
               <label>Other Remark</label>
-              <textarea
-                placeholder="Add any additional note"
-                value={requestFormData.otherRemark}
-                onChange={(e) => setRequestFormData({ ...requestFormData, otherRemark: e.target.value })}
-                rows={3}
-              />
+              <textarea value={reqForm.otherRemark} rows={2}
+                onChange={e => setReqForm(p => ({ ...p, otherRemark: e.target.value }))} />
             </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button 
-                onClick={saveLabRequest}
-                style={{ 
-                  background: 'linear-gradient(135deg, #137E43 0%, #0F6835 100%)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '10px 20px',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  boxShadow: '0 4px 12px rgba(19, 126, 67, 0.2)'
-                }}
-              >
-                ✓ Save Lab Request
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="primary" onClick={saveRequest} disabled={saving}>
+                {saving ? 'Saving…' : '✓ Save Request'}
               </button>
-              <button onClick={closeRequestModal}>Cancel</button>
+              <button onClick={() => setRequestModal(null)}>Cancel</button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Issues modal */}
+      {issuesModal && (
+        <IssuesModal
+          requestId={issuesModal}
+          onClose={() => setIssuesModal(null)}
+          allIssues={issues}
+          onToggle={toggleIssue}
+          onAdd={(desc, pri) => addIssue(issuesModal, desc, pri)}
+        />
       )}
     </div>
   )
 }
+
+const td: React.CSSProperties = { padding: '10px 12px', fontSize: 12, color: 'var(--text-primary)' }
