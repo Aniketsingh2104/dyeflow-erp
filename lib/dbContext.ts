@@ -25,7 +25,6 @@ export async function fetchDbContext(): Promise<DbContext> {
       }
     }
   } catch {}
-  // Fallback to localStorage
   return buildDbContext()
 }
 
@@ -38,8 +37,8 @@ export function buildDbContext(): DbContext {
 
   try {
     const db = JSON.parse(raw)
-    const orders      = db.orders     || []
-    const machines    = db.machines   || []
+    const orders      = db.orders      || []
+    const machines    = db.machines    || []
     const supervisors = db.supervisors || []
     const faultyRecs  = db.faultyRecords || []
 
@@ -65,7 +64,6 @@ SUPERVISORS: ${supervisors.map((s: any) => s.name).join(', ')}
 }
 
 // ── Legacy context builders (localStorage) kept for backward compat ──────────
-// These are used by report-agent/page.tsx which still runs client-side
 
 export function buildDelayContext(): string {
   const raw = localStorage.getItem('dyeflow_db')
@@ -130,8 +128,6 @@ VALID STATUSES: new, assigned, splitting, in-process, done, hold`
 }
 
 export function buildSchedulerContext(): string {
-  const raw = localStorage.getItem('dyeflow_db')
-  if (!raw) return 'No data.'
   return 'Scheduler context requires live Supabase data. Use /api/context for full context.'
 }
 
@@ -156,12 +152,99 @@ export function buildCostContext(): string {
   } catch { return 'Error.' }
 }
 
+// ── Anomaly Detection ─────────────────────────────────────────────────────────
+
 export interface AnomalyItem {
   batchId: string; orderNo: string; party: string; article: string; color: string;
   processCode: string; processName: string; daysStuck: number; expectedDays: number;
   overByDays: number; supervisor: string; machine: string; severity: 'critical'|'warning'|'watch'
 }
 
+/**
+ * Async anomaly detection — fetches batches and process list from Supabase.
+ * Call this from a React component with useEffect.
+ */
+export async function fetchAnomalyContext(): Promise<{ anomalies: AnomalyItem[]; contextText: string }> {
+  try {
+    const [bRes, oRes, pRes] = await Promise.all([
+      fetch('/api/batches?limit=2000&status=in-process', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
+    ])
+
+    const batches: any[] = bRes.data || []
+    const orders:  any[] = oRes.data || []
+    const procs:   any[] = pRes.data || []
+
+    // Build lookup maps
+    const orderMap: Record<string, any> = {}
+    for (const o of orders) orderMap[o.id] = o
+
+    const defaultDays: Record<string, number> = {}
+    const procNames:   Record<string, string>  = {}
+    for (const p of procs) {
+      defaultDays[p.code] = p.default_days || 1
+      procNames[p.code]   = p.name || p.code
+    }
+
+    const now = Date.now()
+    const anomalies: AnomalyItem[] = []
+
+    for (const b of batches) {
+      const proc = b.current_process
+      if (!proc || b.status === 'done') continue
+
+      const enterAt = (b.fms_enter_at || {})[proc]
+      if (!enterAt) continue
+
+      const daysStuck = Math.floor((now - new Date(enterAt).getTime()) / 86400000)
+      const expectedDays = defaultDays[proc] || 1
+      if (daysStuck <= expectedDays) continue
+
+      const overByDays = daysStuck - expectedDays
+      const severity: AnomalyItem['severity'] =
+        daysStuck >= expectedDays * 2 ? 'critical' :
+        daysStuck >= expectedDays * 1.5 ? 'warning' : 'watch'
+
+      const order = orderMap[b.order_id] || {}
+      anomalies.push({
+        batchId:     b.batch_id || b.id,
+        orderNo:     order.order_number || '-',
+        party:       order.party || '-',
+        article:     order.article || '-',
+        color:       order.color || '-',
+        processCode: proc,
+        processName: procNames[proc] || proc,
+        daysStuck,
+        expectedDays,
+        overByDays,
+        supervisor:  order.supervisors?.name || '-',
+        machine:     b.machines?.name || '-',
+        severity,
+      })
+    }
+
+    // Sort: critical first, then by days stuck desc
+    anomalies.sort((a, b) => {
+      const sv = { critical: 0, warning: 1, watch: 2 }
+      if (sv[a.severity] !== sv[b.severity]) return sv[a.severity] - sv[b.severity]
+      return b.daysStuck - a.daysStuck
+    })
+
+    const contextText = anomalies.length === 0
+      ? 'No anomalies detected — all batches within expected process times.'
+      : anomalies.slice(0, 10).map(a =>
+          `${a.severity.toUpperCase()}: ${a.batchId} stuck at ${a.processName} for ${a.daysStuck}d (expected ${a.expectedDays}d) — ${a.orderNo} / ${a.party} / supervisor: ${a.supervisor}`
+        ).join('\n')
+
+    return { anomalies, contextText }
+  } catch (err) {
+    console.error('fetchAnomalyContext error:', err)
+    return buildAnomalyContext()
+  }
+}
+
+/** Sync fallback — returns empty (anomaly detection needs async Supabase data) */
 export function buildAnomalyContext(): { anomalies: AnomalyItem[]; contextText: string } {
-  return { anomalies: [], contextText: 'Anomaly detection requires live data.' }
+  return { anomalies: [], contextText: 'Anomaly detection requires live Supabase data.' }
 }

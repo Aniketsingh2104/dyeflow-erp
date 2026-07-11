@@ -1,7 +1,7 @@
 'use client'
 import React, { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import { buildDbContext, buildAnomalyContext, AnomalyItem } from '@/lib/dbContext'
+import { buildDbContext, fetchAnomalyContext, AnomalyItem } from '@/lib/dbContext'
 import { useSupervisorFilter } from '@/lib/permissions'
 
 interface AiInsight { text: string; type: 'urgent' | 'info' | 'good' }
@@ -45,7 +45,6 @@ function AiInsightsPanel() {
   const loadInsights = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      // Use server-side context for richer data
       const ctxRes = await fetch('/api/context', { cache: 'no-store' })
       const ctxData = await ctxRes.json()
       const fullCtx = ctxData.ok ? ctxData.full : buildDbContext().full
@@ -110,16 +109,13 @@ Rules:
           </button>
         </div>
       </div>
-      <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ padding: '10px 14px' }}>
         {loading ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 4px' }}>
-            <style>{`@keyframes shimmer{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}.ai-shimmer{animation:shimmer 1.4s ease-in-out infinite}`}</style>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Reading factory data from Supabase…</span>
-          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Reading factory data from Supabase…</span>
         ) : error ? (
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '4px' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
             Could not load AI insights — <button onClick={loadInsights} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>Retry</button>
-          </div>
+          </span>
         ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {insights.map((ins, i) => {
@@ -138,7 +134,7 @@ Rules:
   )
 }
 
-// ── Anomaly Panel (uses localStorage fallback — will enhance later) ────────────
+// ── Anomaly Panel — now reads from Supabase via fetchAnomalyContext ───────────
 const SEVERITY_CFG = {
   critical: { bg: '#FEF2F2', border: '#FCA5A5', color: '#DC2626', icon: '🔴', label: 'Critical' },
   warning:  { bg: '#FEF3C7', border: '#FCD34D', color: '#D97706', icon: '⚠️',  label: 'Warning'  },
@@ -146,19 +142,19 @@ const SEVERITY_CFG = {
 }
 
 function AnomalyPanel() {
-  const [anomalies, setAnomalies] = useState<AnomalyItem[]>([])
-  const [expanded, setExpanded] = useState(false)
+  const [anomalies,   setAnomalies]   = useState<AnomalyItem[]>([])
+  const [expanded,    setExpanded]    = useState(false)
   const [lastChecked, setLastChecked] = useState('')
 
-  const check = useCallback(() => {
-    const { anomalies: found } = buildAnomalyContext()
+  const check = useCallback(async () => {
+    const { anomalies: found } = await fetchAnomalyContext()
     setAnomalies(found)
     setLastChecked(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
   }, [])
 
   useEffect(() => {
     check()
-    const t = setInterval(check, 300000)
+    const t = setInterval(check, 300000) // re-check every 5 min
     return () => clearInterval(t)
   }, [check])
 
@@ -184,7 +180,11 @@ function AnomalyPanel() {
             <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 8 }}>checked {lastChecked}</span>
           </div>
         </div>
-        <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{expanded ? '▲' : '▼'}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Link href="/ai-assistant" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '2px 8px', border: '1px solid var(--accent-light)', borderRadius: 4 }}>AI Analysis →</Link>
+          <button onClick={e => { e.stopPropagation(); check() }} style={{ fontSize: 11, background: 'none', border: '1px solid var(--border-light)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}>↻</button>
+          <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{expanded ? '▲' : '▼'}</span>
+        </div>
       </div>
       <div style={{ padding: '8px 12px' }}>
         {shown.map((a, i) => {
@@ -196,10 +196,11 @@ function AnomalyPanel() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: cfg.color }}>{a.batchId}</span>
                   <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{a.orderNo} · {a.party}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', background: cfg.color, color: '#fff', borderRadius: 10 }}>{cfg.label}</span>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
-                  Stuck in <strong style={{ color: cfg.color }}>{a.processName}</strong> for <strong style={{ color: cfg.color }}>{a.daysStuck}d</strong>{' '}
-                  — expected {a.expectedDays}d, over by <strong>{a.overByDays}d</strong> · Supervisor: {a.supervisor}
+                  Stuck in <strong style={{ color: cfg.color }}>{a.processName}</strong> for <strong style={{ color: cfg.color }}>{a.daysStuck}d</strong>
+                  {' '}— expected {a.expectedDays}d, over by <strong>{a.overByDays}d</strong> · Supervisor: {a.supervisor}
                 </div>
               </div>
             </div>
@@ -215,42 +216,35 @@ function AnomalyPanel() {
   )
 }
 
-// ── Production Heatmap (reads from Supabase batches) ────────────────────────
+// ── Production Heatmap ────────────────────────────────────────────────────────
 function ProductionHeatmap() {
   const [cells, setCells] = useState<any[]>([])
 
   useEffect(() => {
-    const load = async () => {
-      const res  = await fetch('/api/batches?limit=5000&status=done', { cache: 'no-store' })
-      const data = await res.json()
-      const batches = data.data || []
-
-      const countByDay: Record<string, number> = {}
-      for (const b of batches) {
-        const day = (b.updated_at || b.created_at || '').slice(0, 10)
-        if (day) countByDay[day] = (countByDay[day] || 0) + 1
-      }
-      const today = new Date()
-      const days: any[] = []
-      for (let i = 34; i >= 0; i--) {
-        const d = new Date(today)
-        d.setDate(today.getDate() - i)
-        const iso = d.toISOString().slice(0, 10)
-        days.push({ date: iso, label: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }), count: countByDay[iso] || 0, isToday: i === 0, dayOfWeek: d.getDay() })
-      }
-      setCells(days)
-    }
-    load()
+    fetch('/api/batches?limit=5000&status=done', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(data => {
+        const countByDay: Record<string, number> = {}
+        for (const b of (data.data || [])) {
+          const day = (b.updated_at || b.created_at || '').slice(0, 10)
+          if (day) countByDay[day] = (countByDay[day] || 0) + 1
+        }
+        const today = new Date()
+        const days: any[] = []
+        for (let i = 34; i >= 0; i--) {
+          const d = new Date(today); d.setDate(today.getDate() - i)
+          const iso = d.toISOString().slice(0, 10)
+          days.push({ date: iso, label: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }), count: countByDay[iso] || 0, isToday: i === 0, dayOfWeek: d.getDay() })
+        }
+        setCells(days)
+      })
   }, [])
 
   const maxCount = Math.max(...cells.map(c => c.count), 1)
-  const cellColor = (count: number) => {
-    if (count === 0) return 'var(--bg-secondary)'
-    const pct = count / maxCount
-    if (pct < 0.25) return '#BAE6FD'
-    if (pct < 0.5)  return '#38BDF8'
-    if (pct < 0.75) return '#0284C7'
-    return '#0C4A6E'
+  const cellColor = (n: number) => {
+    if (!n) return 'var(--bg-secondary)'
+    const p = n / maxCount
+    return p < 0.25 ? '#BAE6FD' : p < 0.5 ? '#38BDF8' : p < 0.75 ? '#0284C7' : '#0C4A6E'
   }
 
   return (
@@ -264,15 +258,15 @@ function ProductionHeatmap() {
       </div>
       <div style={{ overflowX: 'auto' }}>
         <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', padding: '4px 0' }}>
-          {cells.map(cell => (
-            <div key={cell.date} title={`${cell.label}: ${cell.count} batches done`}
-              style={{ width: 18, height: Math.max(8, Math.round((cell.count / maxCount) * 60)), background: cellColor(cell.count), borderRadius: 3, border: cell.isToday ? '2px solid var(--accent)' : '2px solid transparent', flexShrink: 0 }} />
+          {cells.map(c => (
+            <div key={c.date} title={`${c.label}: ${c.count} batches`}
+              style={{ width: 18, height: Math.max(8, Math.round((c.count / maxCount) * 60)), background: cellColor(c.count), borderRadius: 3, border: c.isToday ? '2px solid var(--accent)' : '2px solid transparent', flexShrink: 0 }} />
           ))}
         </div>
         <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-          {cells.map(cell => (
-            <div key={cell.date} style={{ width: 18, textAlign: 'center', fontSize: 8, color: cell.isToday ? 'var(--accent)' : 'var(--text-tertiary)', flexShrink: 0, fontWeight: cell.isToday ? 700 : 400, overflow: 'hidden' }}>
-              {cell.dayOfWeek === 1 || cell.isToday ? cell.label.slice(0, 3) : ''}
+          {cells.map(c => (
+            <div key={c.date} style={{ width: 18, textAlign: 'center', fontSize: 8, color: c.isToday ? 'var(--accent)' : 'var(--text-tertiary)', flexShrink: 0, fontWeight: c.isToday ? 700 : 400, overflow: 'hidden' }}>
+              {c.dayOfWeek === 1 || c.isToday ? c.label.slice(0, 3) : ''}
             </div>
           ))}
         </div>
@@ -287,48 +281,45 @@ function ProductionHeatmap() {
   )
 }
 
-// ── Holiday Warnings (reads from Supabase holidays) ──────────────────────────
+// ── Holiday Warnings ──────────────────────────────────────────────────────────
 function HolidayWarnings({ orders }: { orders: any[] }) {
   const [conflicts, setConflicts] = useState<any[]>([])
 
   useEffect(() => {
     if (!orders.length) return
-    const load = async () => {
-      const res  = await fetch('/api/setup/holidays', { cache: 'no-store' })
-      const data = await res.json()
-      const holidays: any[] = data.data || []
-      const now = new Date()
-      const future = new Date(now); future.setDate(future.getDate() + 14)
-      const holidayMap: Record<string, string> = {}
-      holidays.filter(h => h.type === 'global').forEach(h => {
-        const iso = String(h.holiday_date || '').slice(0, 10)
-        if (iso) holidayMap[iso] = h.reason || 'Holiday'
-      })
-      const found: any[] = []
-      for (const order of orders) {
-        if (['done','hold'].includes(order.status)) continue
-        const planned = order.planned_dates || {}
-        for (const [code, dateVal] of Object.entries(planned)) {
-          const iso = String(dateVal || '').slice(0, 10)
-          if (!iso || !holidayMap[iso]) continue
-          const d = new Date(iso)
-          if (d < now || d > future) continue
-          found.push({ orderNo: order.order_number, party: order.party, date: iso,
-            dateLabel: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-            holidayName: holidayMap[iso], processLabel: code })
+    fetch('/api/setup/holidays', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(data => {
+        const holidays: any[] = data.data || []
+        const now = new Date(), future = new Date(now)
+        future.setDate(future.getDate() + 14)
+        const holidayMap: Record<string, string> = {}
+        holidays.filter(h => h.type === 'global').forEach(h => {
+          const iso = String(h.holiday_date || '').slice(0, 10)
+          if (iso) holidayMap[iso] = h.reason || 'Holiday'
+        })
+        const found: any[] = []
+        for (const o of orders) {
+          if (['done','hold'].includes(o.status)) continue
+          for (const [code, dv] of Object.entries(o.planned_dates || {})) {
+            const iso = String(dv || '').slice(0, 10)
+            if (!iso || !holidayMap[iso]) continue
+            const d = new Date(iso)
+            if (d < now || d > future) continue
+            found.push({ orderNo: o.order_number, party: o.party, date: iso,
+              dateLabel: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+              holidayName: holidayMap[iso], processLabel: code })
+          }
         }
-      }
-      found.sort((a, b) => a.date.localeCompare(b.date))
-      setConflicts(found.slice(0, 10))
-    }
-    load()
+        setConflicts(found.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 10))
+      })
   }, [orders])
 
   if (!conflicts.length) return null
   return (
     <div style={{ background: 'var(--bg-primary)', border: '1px solid #FCD34D', borderLeft: '4px solid #D97706', borderRadius: 10, marginBottom: 14, overflow: 'hidden' }}>
       <div style={{ background: '#FEF3C7', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 16 }}>📅</span>
+        <span>📅</span>
         <span style={{ fontSize: 13, fontWeight: 700, color: '#92400E' }}>Holiday Conflicts — {conflicts.length} planned date{conflicts.length > 1 ? 's' : ''} fall on a holiday</span>
         <Link href="/date-calculator" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '2px 8px', border: '1px solid var(--accent-light)', borderRadius: 4 }}>Fix in Date Calculator →</Link>
       </div>
@@ -357,14 +348,12 @@ export default function DashboardPage() {
 
   const loadDashboard = useCallback(async () => {
     const [oRes, bRes, mRes] = await Promise.all([
-      fetch('/api/orders?limit=500', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/batches?limit=2000', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?limit=500',  { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches?limit=2000',{ cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/machines',          { cache: 'no-store' }).then(r => r.json()),
     ])
     let allOrders: any[] = oRes.data || []
-    if (supervisorFilter) {
-      allOrders = allOrders.filter((o: any) => o.supervisors?.name === supervisorFilter)
-    }
+    if (supervisorFilter) allOrders = allOrders.filter((o: any) => o.supervisors?.name === supervisorFilter)
     setOrders(allOrders)
     setBatches(bRes.data || [])
     setMachines(mRes.data || [])
@@ -378,14 +367,12 @@ export default function DashboardPage() {
     return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', loadDashboard) }
   }, [loadDashboard])
 
-  // Stats
-  const newCount     = orders.filter(o => o.status === 'new').length
-  const inProcess    = orders.filter(o => ['assigned','splitting','in-process'].includes(o.status)).length
-  const done         = orders.filter(o => o.status === 'done').length
-  const totalKg      = orders.reduce((s, o) => s + (parseFloat(o.qty_kg) || 0), 0)
-  const activeBatch  = batches.filter(b => b.status === 'in-process').length
+  const newCount    = orders.filter(o => o.status === 'new').length
+  const inProcess   = orders.filter(o => ['assigned','splitting','in-process'].includes(o.status)).length
+  const done        = orders.filter(o => o.status === 'done').length
+  const totalKg     = orders.reduce((s, o) => s + (parseFloat(o.qty_kg) || 0), 0)
+  const activeBatch = batches.filter(b => b.status === 'in-process').length
 
-  // Machine loads from batches
   const machineLoad: Record<string, number> = {}
   batches.filter(b => b.status !== 'done').forEach(b => {
     const mn = b.machines?.name || b.machine_id
@@ -399,26 +386,10 @@ export default function DashboardPage() {
 
       <div style={{ marginBottom: 0 }}>
         <div className="stat-grid">
-          <div className="stat-card">
-            <div className="stat-label">New Orders</div>
-            <div className="stat-value">{newCount}</div>
-            <div className="stat-sub">Awaiting supervisor</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">In Production</div>
-            <div className="stat-value">{inProcess}</div>
-            <div className="stat-sub">{activeBatch} active batches</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Completed</div>
-            <div className="stat-value">{done}</div>
-            <div className="stat-sub">This period</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Total Fabric</div>
-            <div className="stat-value">{Math.round(totalKg).toLocaleString()}</div>
-            <div className="stat-sub">Kg across all orders</div>
-          </div>
+          <div className="stat-card"><div className="stat-label">New Orders</div><div className="stat-value">{newCount}</div><div className="stat-sub">Awaiting supervisor</div></div>
+          <div className="stat-card"><div className="stat-label">In Production</div><div className="stat-value">{inProcess}</div><div className="stat-sub">{activeBatch} active batches</div></div>
+          <div className="stat-card"><div className="stat-label">Completed</div><div className="stat-value">{done}</div><div className="stat-sub">This period</div></div>
+          <div className="stat-card"><div className="stat-label">Total Fabric</div><div className="stat-value">{Math.round(totalKg).toLocaleString()}</div><div className="stat-sub">Kg across all orders</div></div>
         </div>
         {lastRefreshed && (
           <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
@@ -442,8 +413,7 @@ export default function DashboardPage() {
                 {orders.slice(0, 5).map(o => (
                   <tr key={o.id}>
                     <td style={{ fontWeight: 600 }}>{o.order_number}</td>
-                    <td>{o.party}</td><td>{o.article}</td><td>{o.color}</td>
-                    <td>{o.qty_kg}</td>
+                    <td>{o.party}</td><td>{o.article}</td><td>{o.color}</td><td>{o.qty_kg}</td>
                     <td>{statusBadge(o.status)}</td>
                   </tr>
                 ))}
@@ -451,7 +421,6 @@ export default function DashboardPage() {
             </table>
           </div>
         </div>
-
         <div className="card">
           <div className="card-header">
             <span className="card-title">Machine Status</span>

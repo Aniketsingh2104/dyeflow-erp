@@ -1,11 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { QUERY_LIBRARY, QUERY_CATALOG, ReportResult } from '@/lib/reportQueries'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { QUERY_LIBRARY, QUERY_CATALOG, ReportResult, DbSnapshot } from '@/lib/reportQueries'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
 interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -14,33 +11,28 @@ interface Message {
   loading?: boolean
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 function fmtDT(s: string) {
   if (!s) return '-'
   try { return new Date(s).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return s }
 }
 
-function buildDbSnapshot(): string {
-  const raw = localStorage.getItem('dyeflow_db')
-  if (!raw) return 'Database is empty.'
-  const db = JSON.parse(raw)
-  const orders: any[] = db.orders || []
-  const fobRecords: any[] = db.fobRecords || []
-  const faultyRecords: any[] = db.faultyRecords || []
-  const machines: any[] = db.machines || []
-  const supervisors: any[] = db.supervisors || []
-  const processList: any[] = db.processList || []
-  const now = new Date()
+// ── Execute query with injected Supabase db ──────────────────────────────────
+function executeQuery(fnName: string, params: any, db: DbSnapshot): ReportResult | null {
+  try {
+    const fn = QUERY_LIBRARY[fnName]
+    if (!fn) return null
+    return fn(params, db)
+  } catch (e) {
+    console.error('Query error:', fnName, e)
+    return null
+  }
+}
 
+// ── Build a text snapshot for the AI system prompt ───────────────────────────
+function buildSnapshotText(db: DbSnapshot): string {
+  const orders = db.orders || []
   const statusMap: Record<string, number> = {}
   orders.forEach(o => { statusMap[o.status || 'new'] = (statusMap[o.status || 'new'] || 0) + 1 })
-
-  const processCodeList = processList
-    .filter((p: any) => p.enabled)
-    .map((p: any) => `${p.code}=${p.name}`)
-    .join(', ')
 
   const batchesByProcess: Record<string, number> = {}
   orders.forEach(o => {
@@ -50,46 +42,35 @@ function buildDbSnapshot(): string {
     })
   })
 
-  return `TODAY: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+  const processCodeList = (db.processList || [])
+    .filter((p: any) => p.enabled)
+    .map((p: any) => `${p.code}=${p.name}`)
+    .join(', ')
 
-FACTORY STATS:
-- Total orders: ${orders.length} | Status: ${Object.entries(statusMap).map(([s, n]) => s + ':' + n).join(', ')}
-- Machines: ${machines.map((m: any) => m.name || m.id).join(', ')}
-- Supervisors: ${supervisors.map((s: any) => s.name).join(', ')}
-- FOB Records: ${fobRecords.length} total | Open: ${fobRecords.filter(r => r.status === 'open').length}
-- Faulty Records: ${faultyRecords.length} total | Open: ${faultyRecords.filter(r => r.status === 'open').length}
+  return `TODAY: ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
 
-PROCESS CODES (code=name): ${processCodeList || 'C=CBR, H=Heat-Set, D=Dyeing, F=Finish, Qa=QA'}
+FACTORY STATS (from Supabase):
+- Total orders: ${orders.length} | Status: ${Object.entries(statusMap).map(([s, n]) => `${s}:${n}`).join(', ')}
+- Machines: ${(db.machines || []).map((m: any) => m.name).join(', ')}
+- Supervisors: ${(db.supervisors || []).map((s: any) => s.name).join(', ')}
+- FOB Records: ${(db.fobRecords || []).length} total | Open: ${(db.fobRecords || []).filter((r: any) => r.status === 'open').length}
+- Faulty Records: ${(db.faultyRecords || []).length} total | Open: ${(db.faultyRecords || []).filter((r: any) => r.status === 'open').length}
+
+PROCESS CODES (code=name): ${processCodeList || 'C=CBR, H=Heat-Set, D=Dyeing, F=Finish'}
 
 ACTIVE BATCHES BY PROCESS:
 ${Object.entries(batchesByProcess).map(([p, n]) => `  ${p}: ${n} batch(es)`).join('\n') || '  none'}`
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Execute query from library
-// ─────────────────────────────────────────────────────────────────────────────
-function executeQuery(fnName: string, params: any): ReportResult | null {
-  try {
-    const fn = QUERY_LIBRARY[fnName]
-    if (!fn) return null
-    return fn(params)
-  } catch (e) {
-    console.error('Query execution error:', fnName, e)
-    return null
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AI call — AI only picks from the query catalog, never writes raw code
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Call AI ───────────────────────────────────────────────────────────────────
 async function callReportAgent(
   messages: { role: string; content: string }[],
-  dbSnapshot: string
+  snapshotText: string
 ): Promise<string> {
   const system = `You are DyeFlow Report Agent. Your ONLY job is to pick the right pre-built query from the catalog and return the correct parameters.
 
-FACTORY DATABASE SNAPSHOT:
-${dbSnapshot}
+FACTORY DATABASE SNAPSHOT (live from Supabase):
+${snapshotText}
 
 ${QUERY_CATALOG}
 
@@ -98,60 +79,23 @@ RESPONSE RULES:
 2. Start with { and end with }
 
 RESPONSE FORMAT:
-
 To run a report: {"type":"run","fn":"queryFunctionName","params":{...}}
 To ask for clarification: {"type":"clarify","question":"...","suggestions":["...","..."]}
 To answer a general question: {"type":"answer","text":"..."}
 
-EXAMPLES:
-
-User: "Total batch pending on CBR"
-Response: {"type":"run","fn":"batchesAtProcess","params":{"processCode":"C","processName":"CBR"}}
-
-User: "FOB approval pending more than 7 days"
-Response: {"type":"run","fn":"fobPendingApproval","params":{"minDays":7}}
-
-User: "Faulty batches open more than 5 days"
-Response: {"type":"run","fn":"faultyOpenMoreThan","params":{"days":5}}
-
-User: "Orders due in next 3 days"
-Response: {"type":"run","fn":"ordersDueInDays","params":{"days":3}}
-
-User: "Overdue orders by supervisor"
-Response: {"type":"run","fn":"overdueOrders","params":{"groupBy":"supervisor"}}
-
-User: "Machine wise active batch count"
-Response: {"type":"run","fn":"machineWiseBatches","params":{}}
-
-User: "Batches stuck at Dyeing for more than 2 days"
-Response: {"type":"run","fn":"batchesStuckAtProcess","params":{"processCode":"D","processName":"Dyeing","days":2}}
-
-User: "Party wise pending orders"
-Response: {"type":"run","fn":"partyWiseOrders","params":{}}
-
-User: "Orders on hold"
-Response: {"type":"run","fn":"ordersOnHold","params":{}}
-
-User: "FOB reprocess pending"
-Response: {"type":"run","fn":"fobReprocessPending","params":{}}
-
 IMPORTANT: Always use the PROCESS CODES from the snapshot to resolve process names to codes.
-If user says "CBR" look up its code from the PROCESS CODES list and use that code.
 Return ONLY JSON. No text before or after.`
 
-  const response = await fetch('/api/ai', {
+  const res = await fetch('/api/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages, system, max_tokens: 500 }),
   })
-  if (!response.ok) throw new Error(`AI error ${response.status}`)
-  const data = await response.json()
+  if (!res.ok) throw new Error(`AI error ${res.status}`)
+  const data = await res.json()
   return data.content?.[0]?.text || ''
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Parse AI response robustly
-// ─────────────────────────────────────────────────────────────────────────────
 function parseAiResponse(raw: string): any | null {
   const text = raw.trim()
   try { return JSON.parse(text) } catch {}
@@ -160,16 +104,13 @@ function parseAiResponse(raw: string): any | null {
     if (md) return JSON.parse(md[1].trim())
   } catch {}
   try {
-    const start = text.indexOf('{')
-    const end = text.lastIndexOf('}')
+    const start = text.indexOf('{'); const end = text.lastIndexOf('}')
     if (start !== -1 && end > start) return JSON.parse(text.slice(start, end + 1))
   } catch {}
   return null
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Report Table
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Report Table ──────────────────────────────────────────────────────────────
 function ReportTable({ report }: { report: ReportResult }) {
   const exportCSV = () => {
     const csv = [report.columns, ...report.rows]
@@ -178,9 +119,7 @@ function ReportTable({ report }: { report: ReportResult }) {
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = `${report.title.replace(/[^a-z0-9]/gi, '_')}_${new Date().toLocaleDateString('en-GB').replace(/\//g, '-')}.csv`
-    a.click()
+    a.href = url; a.download = `${report.title.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.csv`; a.click()
     URL.revokeObjectURL(url)
   }
 
@@ -188,7 +127,7 @@ function ReportTable({ report }: { report: ReportResult }) {
     return (
       <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 8, padding: '12px 16px', marginTop: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 13, color: '#065F46' }}>✓ {report.title}</div>
-        <div style={{ fontSize: 12, color: '#059669', marginTop: 4 }}>{report.summary || 'No records found matching your criteria.'}</div>
+        <div style={{ fontSize: 12, color: '#059669', marginTop: 4 }}>{report.summary || 'No records found.'}</div>
       </div>
     )
   }
@@ -240,88 +179,109 @@ function ReportTable({ report }: { report: ReportResult }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Quick report chips
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Quick report chips ────────────────────────────────────────────────────────
 const QUICK_REPORTS: Array<{ label: string; fn: string; params: any }> = [
-  { label: 'FOB approval pending > 7 days',    fn: 'fobPendingApproval',     params: { minDays: 7 } },
-  { label: 'Faulty batches open > 5 days',     fn: 'faultyOpenMoreThan',     params: { days: 5 } },
-  { label: 'Orders due in next 3 days',         fn: 'ordersDueInDays',        params: { days: 3 } },
-  { label: 'Batches at CBR',                   fn: 'batchesAtProcess',       params: { processCode: 'C', processName: 'CBR' } },
-  { label: 'Batches at Dyeing',                fn: 'batchesAtProcess',       params: { processCode: 'D', processName: 'Dyeing' } },
-  { label: 'Overdue orders by supervisor',     fn: 'overdueOrders',          params: { groupBy: 'supervisor' } },
-  { label: 'Machine wise batch count',         fn: 'machineWiseBatches',     params: {} },
-  { label: 'All batches by process',           fn: 'batchesByProcess',       params: {} },
-  { label: 'Party wise pending orders',        fn: 'partyWiseOrders',        params: {} },
-  { label: 'Orders on hold',                   fn: 'ordersOnHold',           params: {} },
-  { label: 'FOB not yet sent',                 fn: 'fobNotSent',             params: {} },
-  { label: 'FOB reprocess pending',            fn: 'fobReprocessPending',    params: {} },
+  { label: 'FOB approval pending > 7 days',  fn: 'fobPendingApproval',  params: { minDays: 7 } },
+  { label: 'Faulty batches open > 5 days',   fn: 'faultyOpenMoreThan',  params: { days: 5 } },
+  { label: 'Orders due in next 3 days',       fn: 'ordersDueInDays',     params: { days: 3 } },
+  { label: 'Batches at CBR',                 fn: 'batchesAtProcess',    params: { processCode: 'C', processName: 'CBR' } },
+  { label: 'Batches at Dyeing',              fn: 'batchesAtProcess',    params: { processCode: 'D', processName: 'Dyeing' } },
+  { label: 'Overdue orders by supervisor',   fn: 'overdueOrders',       params: { groupBy: 'supervisor' } },
+  { label: 'Machine wise batch count',       fn: 'machineWiseBatches',  params: {} },
+  { label: 'All batches by process',         fn: 'batchesByProcess',    params: {} },
+  { label: 'Party wise pending orders',      fn: 'partyWiseOrders',     params: {} },
+  { label: 'Orders on hold',                 fn: 'ordersOnHold',        params: {} },
+  { label: 'FOB not yet sent',               fn: 'fobNotSent',          params: {} },
+  { label: 'FOB reprocess pending',          fn: 'fobReprocessPending', params: {} },
 ]
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Page
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ReportAgentPage() {
   const [messages, setMessages] = useState<Message[]>([{
-    id: 'welcome',
-    role: 'assistant',
-    content: `I'm your **DyeFlow Report Agent**. Tell me what report you need in plain language — I'll run it instantly from your live factory data.\n\n**Examples:**\n• "Total batch pending on CBR"\n• "FOB approval pending more than 7 days"\n• "Batches stuck at Dyeing for more than 2 days"\n• "Overdue orders by supervisor"\n• "Party wise pending orders"\n\nOr click a quick report below.`,
+    id: 'welcome', role: 'assistant',
+    content: `I'm your **DyeFlow Report Agent** — running on live Supabase data.\n\nTell me what report you need in plain language.\n\n**Examples:**\n• "Total batch pending on CBR"\n• "FOB approval pending more than 7 days"\n• "Batches stuck at Dyeing for more than 2 days"\n• "Overdue orders by supervisor"\n\nOr click a quick report below.`,
   }])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [input,       setInput]       = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [db,          setDb]          = useState<DbSnapshot | null>(null)
+  const [dbStatus,    setDbStatus]    = useState<'loading'|'ready'|'error'>('loading')
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  // ── Load Supabase snapshot on mount ──────────────────────────────────────
+  const fetchSnapshot = useCallback(async () => {
+    setDbStatus('loading')
+    try {
+      const res  = await fetch('/api/snapshot', { cache: 'no-store' })
+      const data = await res.json()
+      if (data.ok && data.db) {
+        setDb(data.db)
+        setDbStatus('ready')
+      } else {
+        setDbStatus('error')
+      }
+    } catch {
+      setDbStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchSnapshot() }, [fetchSnapshot])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Run a query directly from the library (for quick chips — no AI needed)
-  const runDirect = (fn: string, params: any, label: string) => {
-    if (loading) return
-    const userMsg: Message = { id: `u${Date.now()}`, role: 'user', content: label }
-    const report = executeQuery(fn, params)
-    const assistantMsg: Message = {
-      id: `a${Date.now()}`,
-      role: 'assistant',
-      content: report ? `Report ready: **${report.title}** — ${report.totalRows} records` : '⚠ Could not run report.',
-      reportData: report,
+  const getDb = (): DbSnapshot => {
+    if (db) return db
+    // Fallback to localStorage
+    if (typeof window !== 'undefined') {
+      const raw = localStorage.getItem('dyeflow_db')
+      if (raw) {
+        const d = JSON.parse(raw)
+        return { orders: d.orders || [], fobRecords: d.fobRecords || [], faultyRecords: d.faultyRecords || [], machines: d.machines || [], supervisors: d.supervisors || [], processList: d.processList || [] }
+      }
     }
-    setMessages(prev => [...prev, userMsg, assistantMsg])
+    return { orders: [], fobRecords: [], faultyRecords: [], machines: [], supervisors: [], processList: [] }
   }
 
-  // Send via AI for natural language queries
+  // ── Run a query directly from the library (quick chips) ──────────────────
+  const runDirect = (fn: string, params: any, label: string) => {
+    if (loading) return
+    const currentDb = getDb()
+    const report = executeQuery(fn, params, currentDb)
+    setMessages(prev => [...prev,
+      { id: `u${Date.now()}`, role: 'user', content: label },
+      { id: `a${Date.now()}`, role: 'assistant', content: report ? `Report ready: **${report.title}** — ${report.totalRows} records` : '⚠ Could not run report.', reportData: report },
+    ])
+  }
+
+  // ── Natural language → AI → query ────────────────────────────────────────
   const send = async (text?: string) => {
     const question = (text || input).trim()
     if (!question || loading) return
     setInput('')
 
-    const userMsg: Message = { id: `u${Date.now()}`, role: 'user', content: question }
-    const loadingMsg: Message = { id: `a${Date.now()}`, role: 'assistant', content: '', loading: true }
-    setMessages(prev => [...prev, userMsg, loadingMsg])
+    const loadingId = `a${Date.now()}`
+    setMessages(prev => [...prev,
+      { id: `u${Date.now()}`, role: 'user', content: question },
+      { id: loadingId, role: 'assistant', content: '', loading: true },
+    ])
     setLoading(true)
 
     try {
-      const dbSnapshot = buildDbSnapshot()
-      const history = messages
-        .filter(m => !m.loading && m.id !== 'welcome')
-        .slice(-6)
-        .map(m => ({ role: m.role, content: m.content }))
-
-      const raw = await callReportAgent([...history, { role: 'user', content: question }], dbSnapshot)
+      const currentDb = getDb()
+      const snapshotText = buildSnapshotText(currentDb)
+      const history = messages.filter(m => !m.loading && m.id !== 'welcome').slice(-6).map(m => ({ role: m.role, content: m.content }))
+      const raw    = await callReportAgent([...history, { role: 'user', content: question }], snapshotText)
       const parsed = parseAiResponse(raw)
 
       if (!parsed) {
-        setMessages(prev => prev.map(m => m.loading ? { ...m, content: 'Could not understand the request. Please rephrase.', loading: false } : m))
+        setMessages(prev => prev.map(m => m.loading ? { ...m, content: 'Could not understand. Please rephrase.', loading: false } : m))
         return
       }
 
       if (parsed.type === 'clarify') {
         const suggestions = (parsed.suggestions || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')
-        setMessages(prev => prev.map(m => m.loading ? {
-          ...m,
-          content: `**${parsed.question}**${suggestions ? '\n\n' + suggestions : ''}`,
-          loading: false, reportData: null
-        } : m))
+        setMessages(prev => prev.map(m => m.loading ? { ...m, content: `**${parsed.question}**${suggestions ? '\n\n' + suggestions : ''}`, loading: false, reportData: null } : m))
         return
       }
 
@@ -331,25 +291,19 @@ export default function ReportAgentPage() {
       }
 
       if (parsed.type === 'run' && parsed.fn) {
-        const report = executeQuery(parsed.fn, parsed.params || {})
+        const report = executeQuery(parsed.fn, parsed.params || {}, currentDb)
         setMessages(prev => prev.map(m => m.loading ? {
           ...m,
-          content: report
-            ? `Report ready: **${report.title}** — ${report.totalRows} records`
-            : `⚠ Could not run report "${parsed.fn}". Try rephrasing.`,
-          loading: false,
-          reportData: report || null
+          content: report ? `Report ready: **${report.title}** — ${report.totalRows} records` : `⚠ Could not run report "${parsed.fn}".`,
+          loading: false, reportData: report || null,
         } : m))
         return
       }
 
       setMessages(prev => prev.map(m => m.loading ? { ...m, content: raw || 'Unexpected response.', loading: false } : m))
-
     } catch (err) {
       setMessages(prev => prev.map(m => m.loading ? { ...m, content: `Error: ${String(err)}`, loading: false } : m))
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   const renderMd = (text: string) =>
@@ -357,29 +311,36 @@ export default function ReportAgentPage() {
 
   return (
     <div className="content" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 44px)' }}>
-
       {/* Header */}
       <div style={{ paddingBottom: 10, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 38, height: 38, background: 'linear-gradient(135deg, #185FA5, #7C3AED)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📊</div>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800 }}>Report Agent</div>
-            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Generate any report from your live factory data — always accurate, no guessing</div>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Generate any report from live Supabase data
+              {dbStatus === 'loading' && <span style={{ color: '#D97706', fontWeight: 600 }}>⏳ Loading data…</span>}
+              {dbStatus === 'ready'   && <span style={{ color: '#059669', fontWeight: 600 }}>✓ {db?.orders?.length || 0} orders loaded</span>}
+              {dbStatus === 'error'   && <span style={{ color: '#DC2626', fontWeight: 600 }}>⚠ Supabase error — using local fallback &nbsp;<button onClick={fetchSnapshot} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}>Retry</button></span>}
+            </div>
           </div>
+          <button onClick={fetchSnapshot} disabled={dbStatus === 'loading'} style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: 11, border: '1px solid var(--border-medium)', borderRadius: 6, cursor: 'pointer', background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
+            {dbStatus === 'loading' ? '⏳' : '↻ Refresh data'}
+          </button>
         </div>
       </div>
 
-      {/* Quick chips — bypass AI, run directly from verified library */}
+      {/* Quick chips */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
         {QUICK_REPORTS.map((r, i) => (
-          <button key={i} onClick={() => runDirect(r.fn, r.params, r.label)} disabled={loading}
-            style={{ padding: '4px 10px', fontSize: 11, fontWeight: 500, border: '1px solid var(--border-medium)', borderRadius: 20, background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: loading ? 'default' : 'pointer', whiteSpace: 'nowrap', opacity: loading ? 0.5 : 1 }}>
+          <button key={i} onClick={() => runDirect(r.fn, r.params, r.label)} disabled={loading || dbStatus === 'loading'}
+            style={{ padding: '4px 10px', fontSize: 11, fontWeight: 500, border: '1px solid var(--border-medium)', borderRadius: 20, background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: loading || dbStatus === 'loading' ? 'default' : 'pointer', whiteSpace: 'nowrap', opacity: loading || dbStatus === 'loading' ? 0.5 : 1 }}>
             {r.label}
           </button>
         ))}
       </div>
 
-      {/* Chat messages */}
+      {/* Chat */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingBottom: 8 }}>
         {messages.map(msg => (
           <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', width: '100%' }}>
@@ -390,12 +351,10 @@ export default function ReportAgentPage() {
               color: msg.role === 'user' ? '#fff' : 'var(--text-primary)',
               border: msg.role === 'assistant' ? '1px solid var(--border-light)' : 'none',
               borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-              padding: '10px 14px',
-              fontSize: 13,
-              lineHeight: 1.6,
+              padding: '10px 14px', fontSize: 13, lineHeight: 1.6,
             }}>
               {msg.loading ? (
-                <span style={{ color: 'var(--text-tertiary)' }}>⏳ Running report…</span>
+                <span style={{ color: 'var(--text-tertiary)' }}>⏳ Querying Supabase data…</span>
               ) : (
                 <>
                   <div dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
