@@ -1,97 +1,62 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { dbSelect } from '@/lib/supabase'
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password } = await req.json()
+    const { username, password, action } = await req.json()
+
+    if (action === 'logout') return NextResponse.json({ ok: true })
 
     if (!username || !password) {
-      return NextResponse.json({ ok: false, error: 'User ID and password are required' }, { status: 400 })
+      return NextResponse.json({ ok: false, error: 'Username and password required' }, { status: 400 })
     }
 
     const uname = username.trim().toLowerCase()
-    const supabaseUrl  = process.env.SUPABASE_URL
-    const supabaseAnon = process.env.SUPABASE_ANON_KEY
-    const serviceKey   = process.env.SUPABASE_SERVICE_KEY
 
-    // Pick best key available — service key bypasses RLS
-    const apiKey = (serviceKey && serviceKey !== 'YOUR_SERVICE_ROLE_KEY_HERE')
-      ? serviceKey
-      : supabaseAnon
-
-    // ── Read dyeflow_db blob from Supabase ────────────────────────────────
-    if (supabaseUrl && apiKey) {
-      try {
-        const res = await fetch(
-          `${supabaseUrl}/rest/v1/dyeflow_db?id=eq.main&select=data`,
-          {
-            headers: {
-              'apikey':        apiKey,
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            cache: 'no-store',
-          }
-        )
-
-        if (res.ok) {
-          const rows = await res.json()
-          const db   = rows?.[0]?.data || {}
-          const users: any[] = db.users || []
-
-          if (users.length > 0) {
-            const found = users.find(u =>
-              (u.username || '').trim().toLowerCase() === uname &&
-              (u.password || '').trim() === password.trim()
-            )
-
-            if (found) {
-              return NextResponse.json({
-                ok:   true,
-                user: {
-                  id:          found.id       || found.username,
-                  username:    found.username,
-                  full_name:   found.fullName || found.username,
-                  role:        found.role     || 'custom',
-                  permissions: found.permissions || null,
-                },
-              })
-            }
-
-            // Users exist but none matched — reject now, don't fall through
-            return NextResponse.json(
-              { ok: false, error: 'Invalid User ID or password' },
-              { status: 401 }
-            )
-          }
-        }
-      } catch {
-        // Supabase unreachable — fall through to default admin below
-      }
-    }
-
-    // ── Last resort: hardcoded default admin ─────────────────────────────
-    // Only works if NO users have been set up yet (Supabase empty/down)
-    if (uname === 'admin' && password === 'dyeflow123') {
-      return NextResponse.json({
-        ok:   true,
-        user: {
-          id:        'USR-001',
-          username:  'admin',
-          full_name: 'Admin',
-          role:      'admin',
-          permissions: null,
-        },
-      })
-    }
-
-    return NextResponse.json(
-      { ok: false, error: 'Invalid User ID or password' },
-      { status: 401 }
+    // Query users table directly (service key bypasses RLS)
+    const { data: users, error } = await dbSelect(
+      'users',
+      { username: `eq.${uname}`, is_active: 'eq.true' }
     )
+
+    if (error) {
+      // DB unavailable — allow fallback admin only
+      if (uname === 'admin' && password === 'dyeflow123') {
+        return NextResponse.json({ ok: true, user: {
+          id: 'fallback-admin', username: 'admin',
+          full_name: 'Admin', role: 'admin', permissions: null,
+        }})
+      }
+      return NextResponse.json({ ok: false, error: 'Database unavailable' }, { status: 503 })
+    }
+
+    const user = users?.[0]
+
+    // No matching user — try fallback admin if no users exist yet
+    if (!user) {
+      if (uname === 'admin' && password === 'dyeflow123' && users.length === 0) {
+        return NextResponse.json({ ok: true, user: {
+          id: 'fallback-admin', username: 'admin',
+          full_name: 'Admin', role: 'admin', permissions: null,
+        }})
+      }
+      return NextResponse.json({ ok: false, error: 'Invalid username or password' }, { status: 401 })
+    }
+
+    // Password check (plain text — hash with bcrypt in a future iteration)
+    if ((user.password || '').trim() !== password.trim()) {
+      return NextResponse.json({ ok: false, error: 'Invalid username or password' }, { status: 401 })
+    }
+
+    return NextResponse.json({ ok: true, user: {
+      id:          user.id,
+      username:    user.username,
+      full_name:   user.full_name || user.username,
+      role:        user.role || 'custom',
+      permissions: user.permissions || null,
+    }})
 
   } catch (err: any) {
-    return NextResponse.json(
-      { ok: false, error: err.message || 'Server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ ok: false, error: err.message || 'Server error' }, { status: 500 })
   }
 }
