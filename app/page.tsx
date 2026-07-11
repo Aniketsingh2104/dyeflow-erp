@@ -4,39 +4,7 @@ import Link from 'next/link'
 import { buildDbContext, buildAnomalyContext, AnomalyItem } from '@/lib/dbContext'
 import { useSupervisorFilter } from '@/lib/permissions'
 
-interface Order {
-  id: string
-  orderNumber: string
-  party: string
-  article: string
-  color: string
-  qtyKg: number
-  qtyMtr: number
-  status: 'new' | 'assigned' | 'splitting' | 'in-process' | 'done' | 'hold'
-  machine: string
-  splits: Batch[]
-  plannedDates?: Record<string, string>
-}
-
-interface Batch {
-  batchId: string
-  kg: number
-  status: 'pending' | 'in-process' | 'done'
-  currentProcess: string
-  machine: string
-}
-
-interface Machine {
-  id: string
-  name: string
-  capacity: number
-  status: 'running' | 'idle'
-}
-
-interface AiInsight {
-  text: string
-  type: 'urgent' | 'info' | 'good'
-}
+interface AiInsight { text: string; type: 'urgent' | 'info' | 'good' }
 
 const statusBadge = (status: string) => {
   const classes: Record<string, string> = {
@@ -45,8 +13,6 @@ const statusBadge = (status: string) => {
   }
   return <span className={`badge ${classes[status] || 'badge-pending'}`}>{status}</span>
 }
-
-const getMachineShortName = (name: string) => name.replace('Machine ', 'M-')
 
 function parseInsights(text: string): AiInsight[] {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
@@ -69,8 +35,7 @@ function parseInsights(text: string): AiInsight[] {
   return insights
 }
 
-// ── AI Insights Panel — uses /api/ai (Groq) ──────────────────────────────────
-
+// ── AI Insights Panel ─────────────────────────────────────────────────────────
 function AiInsightsPanel() {
   const [insights, setInsights] = useState<AiInsight[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,17 +43,23 @@ function AiInsightsPanel() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
 
   const loadInsights = useCallback(async () => {
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const ctx = buildDbContext()
-      if (ctx.orderCount === 0) {
+      // Use server-side context for richer data
+      const ctxRes = await fetch('/api/context', { cache: 'no-store' })
+      const ctxData = await ctxRes.json()
+      const fullCtx = ctxData.ok ? ctxData.full : buildDbContext().full
+
+      if (!fullCtx || fullCtx.includes('empty')) {
         setInsights([{ text: 'No orders yet. Add your first order to start seeing insights.', type: 'info' }])
-        setLoading(false)
-        return
+        setLoading(false); return
       }
 
-      const systemPrompt = `You are a factory operations assistant for a dyeing factory ERP.
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system: `You are a factory operations assistant for a dyeing factory ERP.
 Analyze the live database snapshot and return EXACTLY 3-5 short bullet points (one per line, starting with -) about what needs attention RIGHT NOW.
 Rules:
 - Each bullet must be specific with actual order numbers, machine names, or counts — never generic
@@ -96,41 +67,25 @@ Rules:
 - Keep each bullet under 20 words
 - Cover: overdue orders, machine loads, supervisor inbox, faulty batches, unassigned orders
 - If everything is fine, say so specifically
-- NO headers, NO explanations, ONLY bullet points`
-
-      // Use /api/ai which supports Groq (and Gemini as fallback)
-      const response = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: systemPrompt,
+- NO headers, NO explanations, ONLY bullet points`,
           max_tokens: 400,
-          messages: [{ role: 'user', content: `Give me 3-5 urgent attention points from this live factory data:\n\n${ctx.full}` }]
+          messages: [{ role: 'user', content: `Give me 3-5 urgent attention points from this live factory data:\n\n${fullCtx}` }]
         })
       })
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}))
-        throw new Error(err.error || `API ${response.status}`)
-      }
-
       const data = await response.json()
-      // /api/ai returns Anthropic-style: { content: [{ type: 'text', text: '...' }] }
       const text = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
       const parsed = parseInsights(text)
       setInsights(parsed.length > 0 ? parsed : [{ text: 'Factory data loaded. No urgent issues detected.', type: 'good' }])
       setLastRefreshed(new Date())
     } catch (err: any) {
       setError(err.message || 'Could not load AI insights.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { loadInsights() }, [loadInsights])
 
-  const iconMap: Record<AiInsight['type'], string> = { urgent: '⚠', info: '●', good: '✓' }
-  const colorMap: Record<AiInsight['type'], { bg: string; border: string; icon: string; text: string }> = {
+  const iconMap: Record<string, string> = { urgent: '⚠', info: '●', good: '✓' }
+  const colorMap: Record<string, any> = {
     urgent: { bg: '#FEF3CD', border: '#F59E0B', icon: '#D97706', text: '#78350F' },
     info:   { bg: 'var(--bg-secondary)', border: 'var(--border-light)', icon: 'var(--accent)', text: 'var(--text-primary)' },
     good:   { bg: '#F0FDF4', border: '#86EFAC', icon: '#16A34A', text: '#14532D' }
@@ -159,8 +114,7 @@ Rules:
         {loading ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 4px' }}>
             <style>{`@keyframes shimmer{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}.ai-shimmer{animation:shimmer 1.4s ease-in-out infinite}`}</style>
-            {[1, 2, 3].map(i => <div key={i} className="ai-shimmer" style={{ height: 12, borderRadius: 6, background: 'var(--bg-secondary)', width: i === 1 ? '60%' : i === 2 ? '80%' : '50%' }} />)}
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>Reading factory data…</span>
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Reading factory data from Supabase…</span>
           </div>
         ) : error ? (
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '4px' }}>
@@ -184,8 +138,7 @@ Rules:
   )
 }
 
-// ── Anomaly Detection Panel ────────────────────────────────────────────────────
-
+// ── Anomaly Panel (uses localStorage fallback — will enhance later) ────────────
 const SEVERITY_CFG = {
   critical: { bg: '#FEF2F2', border: '#FCA5A5', color: '#DC2626', icon: '🔴', label: 'Critical' },
   warning:  { bg: '#FEF3C7', border: '#FCD34D', color: '#D97706', icon: '⚠️',  label: 'Warning'  },
@@ -226,16 +179,12 @@ function AnomalyPanel() {
               {criticalCount > 0 && warningCount > 0 ? ' · ' : ''}
               {warningCount > 0 ? `⚠️ ${warningCount} Warning` : ''}
               {criticalCount === 0 && warningCount === 0 ? `🔵 ${anomalies.length} Watch` : ''}
-              {` — Batch Anomalies Detected`}
+              {` — Batch Anomalies`}
             </span>
             <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 8 }}>checked {lastChecked}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Link href="/ai-assistant" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '2px 8px', border: '1px solid var(--accent-light)', borderRadius: 4 }}>AI Analysis →</Link>
-          <button onClick={e => { e.stopPropagation(); check() }} style={{ fontSize: 11, background: 'none', border: '1px solid var(--border-light)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}>↻</button>
-          <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{expanded ? '▲' : '▼'}</span>
-        </div>
+        <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{expanded ? '▲' : '▼'}</span>
       </div>
       <div style={{ padding: '8px 12px' }}>
         {shown.map((a, i) => {
@@ -247,7 +196,6 @@ function AnomalyPanel() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: cfg.color }}>{a.batchId}</span>
                   <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{a.orderNo} · {a.party}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', background: cfg.color, color: '#fff', borderRadius: 10 }}>{cfg.label}</span>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
                   Stuck in <strong style={{ color: cfg.color }}>{a.processName}</strong> for <strong style={{ color: cfg.color }}>{a.daysStuck}d</strong>{' '}
@@ -267,39 +215,32 @@ function AnomalyPanel() {
   )
 }
 
-// ── Production Heatmap — useState+useEffect (no SSR localStorage) ─────────────
-
-type HeatCell = { date: string; label: string; count: number; kg: number; isToday: boolean; dayOfWeek: number }
-
+// ── Production Heatmap (reads from Supabase batches) ────────────────────────
 function ProductionHeatmap() {
-  const [cells, setCells] = useState<HeatCell[]>([])
+  const [cells, setCells] = useState<any[]>([])
 
   useEffect(() => {
-    const raw = localStorage.getItem('dyeflow_db')
-    const db = raw ? JSON.parse(raw) : {}
-    const countByDay: Record<string, number> = {}
-    const kgByDay: Record<string, number> = {}
-    for (const order of (db.orders || [])) {
-      for (const batch of (order.splits || [])) {
-        if (!batch.fmsActualDates) continue
-        for (const dateVal of Object.values(batch.fmsActualDates as Record<string, string>)) {
-          const day = dateVal.slice(0, 10)
-          if (!day || day === 'undefined') continue
-          countByDay[day] = (countByDay[day] || 0) + 1
-          kgByDay[day] = (kgByDay[day] || 0) + (parseFloat(batch.kg) || 0)
-        }
+    const load = async () => {
+      const res  = await fetch('/api/batches?limit=5000&status=done', { cache: 'no-store' })
+      const data = await res.json()
+      const batches = data.data || []
+
+      const countByDay: Record<string, number> = {}
+      for (const b of batches) {
+        const day = (b.updated_at || b.created_at || '').slice(0, 10)
+        if (day) countByDay[day] = (countByDay[day] || 0) + 1
       }
+      const today = new Date()
+      const days: any[] = []
+      for (let i = 34; i >= 0; i--) {
+        const d = new Date(today)
+        d.setDate(today.getDate() - i)
+        const iso = d.toISOString().slice(0, 10)
+        days.push({ date: iso, label: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }), count: countByDay[iso] || 0, isToday: i === 0, dayOfWeek: d.getDay() })
+      }
+      setCells(days)
     }
-    const today = new Date()
-    const days: HeatCell[] = []
-    for (let i = 34; i >= 0; i--) {
-      const d = new Date(today)
-      d.setDate(today.getDate() - i)
-      const iso = d.toISOString().slice(0, 10)
-      const label = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-      days.push({ date: iso, label, count: countByDay[iso] || 0, kg: Math.round(kgByDay[iso] || 0), isToday: i === 0, dayOfWeek: d.getDay() })
-    }
-    setCells(days)
+    load()
   }, [])
 
   const maxCount = Math.max(...cells.map(c => c.count), 1)
@@ -311,26 +252,21 @@ function ProductionHeatmap() {
     if (pct < 0.75) return '#0284C7'
     return '#0C4A6E'
   }
-  const totalToday = cells[cells.length - 1]?.count ?? 0
-  const totalWeek  = cells.slice(-7).reduce((s, c) => s + c.count, 0)
-  const totalMonth = cells.reduce((s, c) => s + c.count, 0)
 
   return (
     <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-header">
-        <span className="card-title">🟥 Production Heatmap <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>Last 35 days — batch completions per day</span></span>
+        <span className="card-title">🟥 Production Heatmap <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>Last 35 days</span></span>
         <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-tertiary)' }}>
-          <span>Today: <strong style={{ color: 'var(--text-primary)' }}>{totalToday}</strong></span>
-          <span>7d: <strong style={{ color: 'var(--text-primary)' }}>{totalWeek}</strong></span>
-          <span>35d: <strong style={{ color: 'var(--text-primary)' }}>{totalMonth}</strong></span>
+          <span>7d: <strong style={{ color: 'var(--text-primary)' }}>{cells.slice(-7).reduce((s, c) => s + c.count, 0)}</strong></span>
+          <span>35d: <strong style={{ color: 'var(--text-primary)' }}>{cells.reduce((s, c) => s + c.count, 0)}</strong></span>
         </div>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', padding: '4px 0' }}>
           {cells.map(cell => (
-            <div key={cell.date} title={`${cell.label}: ${cell.count} batch${cell.count !== 1 ? 'es' : ''} completed${cell.kg > 0 ? `, ${cell.kg} Kg` : ''}`}
-              style={{ width: 18, height: Math.max(8, Math.round((cell.count / maxCount) * 60)), background: cellColor(cell.count), borderRadius: 3, border: cell.isToday ? '2px solid var(--accent)' : '2px solid transparent', cursor: 'default', flexShrink: 0 }}
-            />
+            <div key={cell.date} title={`${cell.label}: ${cell.count} batches done`}
+              style={{ width: 18, height: Math.max(8, Math.round((cell.count / maxCount) * 60)), background: cellColor(cell.count), borderRadius: 3, border: cell.isToday ? '2px solid var(--accent)' : '2px solid transparent', flexShrink: 0 }} />
           ))}
         </div>
         <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
@@ -343,7 +279,7 @@ function ProductionHeatmap() {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8 }}>
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>None</span>
-        {['#BAE6FD', '#38BDF8', '#0284C7', '#0C4A6E'].map(c => <div key={c} style={{ width: 16, height: 12, background: c, borderRadius: 2 }} />)}
+        {['#BAE6FD','#38BDF8','#0284C7','#0C4A6E'].map(c => <div key={c} style={{ width: 16, height: 12, background: c, borderRadius: 2 }} />)}
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>High</span>
         <Link href="/reports/daily" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Daily Report →</Link>
       </div>
@@ -351,45 +287,44 @@ function ProductionHeatmap() {
   )
 }
 
-// ── Holiday Conflict Warnings ──────────────────────────────────────────────────
+// ── Holiday Warnings (reads from Supabase holidays) ──────────────────────────
+function HolidayWarnings({ orders }: { orders: any[] }) {
+  const [conflicts, setConflicts] = useState<any[]>([])
 
-function HolidayWarnings({ orders }: { orders: Order[] }) {
-  interface HolidayConflict {
-    orderNo: string; party: string; date: string
-    dateLabel: string; holidayName: string; processLabel: string
-  }
-  const [conflicts, setConflicts] = React.useState<HolidayConflict[]>([])
-
-  React.useEffect(() => {
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return
-    const db = JSON.parse(raw)
-    const holidays: any[] = db.holidays || []
-    const now = new Date()
-    const future = new Date(now)
-    future.setDate(future.getDate() + 14)
-    const holidayMap: Record<string, string> = {}
-    holidays.forEach((h: any) => {
-      const iso = (h.date || '').slice(0, 10)
-      if (iso) holidayMap[iso] = h.name || h.description || 'Holiday'
-    })
-    const found: HolidayConflict[] = []
-    for (const order of orders) {
-      if (['done', 'hold'].includes(order.status)) continue
-      const planned = order.plannedDates || {}
-      for (const [processCode, dateVal] of Object.entries(planned)) {
-        const iso = String(dateVal || '').slice(0, 10)
-        if (!iso || !holidayMap[iso]) continue
-        const d = new Date(iso)
-        if (d < now || d > future) continue
-        found.push({ orderNo: order.orderNumber, party: order.party, date: iso, dateLabel: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }), holidayName: holidayMap[iso], processLabel: processCode })
+  useEffect(() => {
+    if (!orders.length) return
+    const load = async () => {
+      const res  = await fetch('/api/setup/holidays', { cache: 'no-store' })
+      const data = await res.json()
+      const holidays: any[] = data.data || []
+      const now = new Date()
+      const future = new Date(now); future.setDate(future.getDate() + 14)
+      const holidayMap: Record<string, string> = {}
+      holidays.filter(h => h.type === 'global').forEach(h => {
+        const iso = String(h.holiday_date || '').slice(0, 10)
+        if (iso) holidayMap[iso] = h.reason || 'Holiday'
+      })
+      const found: any[] = []
+      for (const order of orders) {
+        if (['done','hold'].includes(order.status)) continue
+        const planned = order.planned_dates || {}
+        for (const [code, dateVal] of Object.entries(planned)) {
+          const iso = String(dateVal || '').slice(0, 10)
+          if (!iso || !holidayMap[iso]) continue
+          const d = new Date(iso)
+          if (d < now || d > future) continue
+          found.push({ orderNo: order.order_number, party: order.party, date: iso,
+            dateLabel: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+            holidayName: holidayMap[iso], processLabel: code })
+        }
       }
+      found.sort((a, b) => a.date.localeCompare(b.date))
+      setConflicts(found.slice(0, 10))
     }
-    found.sort((a, b) => a.date.localeCompare(b.date))
-    setConflicts(found.slice(0, 10))
+    load()
   }, [orders])
 
-  if (conflicts.length === 0) return null
+  if (!conflicts.length) return null
   return (
     <div style={{ background: 'var(--bg-primary)', border: '1px solid #FCD34D', borderLeft: '4px solid #D97706', borderRadius: 10, marginBottom: 14, overflow: 'hidden' }}>
       <div style={{ background: '#FEF3C7', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -401,7 +336,7 @@ function HolidayWarnings({ orders }: { orders: Order[] }) {
         {conflicts.map((c, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: i < conflicts.length - 1 ? '1px solid var(--border-light)' : 'none', fontSize: 12 }}>
             <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 8, fontWeight: 700, fontSize: 11, flexShrink: 0 }}>{c.dateLabel}</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.orderNo}</span>
+            <span style={{ fontWeight: 700 }}>{c.orderNo}</span>
             <span style={{ color: 'var(--text-secondary)' }}>{c.party}</span>
             <span style={{ color: 'var(--text-tertiary)' }}>— {c.processLabel}</span>
             <span style={{ marginLeft: 'auto', color: '#D97706', fontWeight: 600, flexShrink: 0 }}>🗓 {c.holidayName}</span>
@@ -413,26 +348,27 @@ function HolidayWarnings({ orders }: { orders: Order[] }) {
 }
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────────
-
 export default function DashboardPage() {
   const supervisorFilter = useSupervisorFilter()
-  const [orders, setOrders] = useState<Order[]>([])
-  const [machines, setMachines] = useState<Machine[]>([])
+  const [orders,   setOrders]   = useState<any[]>([])
+  const [batches,  setBatches]  = useState<any[]>([])
+  const [machines, setMachines] = useState<any[]>([])
   const [lastRefreshed, setLastRefreshed] = useState('')
 
-  const loadDashboard = useCallback(() => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (stored) {
-      const db = JSON.parse(stored)
-      const allOrders: Order[] = db.orders || []
-      // Apply supervisor filter to dashboard stats and tables
-      const filteredOrders = supervisorFilter
-        ? allOrders.filter(o => (o as any).supervisor === supervisorFilter)
-        : allOrders
-      setOrders(filteredOrders)
-      setMachines(db.machines || [])
-      setLastRefreshed(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
+  const loadDashboard = useCallback(async () => {
+    const [oRes, bRes, mRes] = await Promise.all([
+      fetch('/api/orders?limit=500', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches?limit=2000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
+    ])
+    let allOrders: any[] = oRes.data || []
+    if (supervisorFilter) {
+      allOrders = allOrders.filter((o: any) => o.supervisors?.name === supervisorFilter)
     }
+    setOrders(allOrders)
+    setBatches(bRes.data || [])
+    setMachines(mRes.data || [])
+    setLastRefreshed(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
   }, [supervisorFilter])
 
   useEffect(() => {
@@ -442,12 +378,19 @@ export default function DashboardPage() {
     return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', loadDashboard) }
   }, [loadDashboard])
 
-  const newCount      = orders.filter(o => o.status === 'new').length
-  const inProcess     = orders.filter(o => ['assigned', 'splitting', 'in-process'].includes(o.status)).length
-  const done          = orders.filter(o => o.status === 'done').length
-  const totalKg       = orders.reduce((s, o) => s + (parseInt(String(o.qtyKg)) || 0), 0)
-  const allBatches    = orders.flatMap(o => (o.splits || []).map(b => ({ ...b, orderNo: o.orderNumber, party: o.party, article: o.article, color: o.color, machine: b.machine || o.machine })))
-  const activeBatches = allBatches.filter(b => b.status === 'in-process').length
+  // Stats
+  const newCount     = orders.filter(o => o.status === 'new').length
+  const inProcess    = orders.filter(o => ['assigned','splitting','in-process'].includes(o.status)).length
+  const done         = orders.filter(o => o.status === 'done').length
+  const totalKg      = orders.reduce((s, o) => s + (parseFloat(o.qty_kg) || 0), 0)
+  const activeBatch  = batches.filter(b => b.status === 'in-process').length
+
+  // Machine loads from batches
+  const machineLoad: Record<string, number> = {}
+  batches.filter(b => b.status !== 'done').forEach(b => {
+    const mn = b.machines?.name || b.machine_id
+    if (mn) machineLoad[mn] = (machineLoad[mn] || 0) + (parseFloat(b.kg) || 0)
+  })
 
   return (
     <div className="content">
@@ -464,7 +407,7 @@ export default function DashboardPage() {
           <div className="stat-card">
             <div className="stat-label">In Production</div>
             <div className="stat-value">{inProcess}</div>
-            <div className="stat-sub">{activeBatches} active batches</div>
+            <div className="stat-sub">{activeBatch} active batches</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Completed</div>
@@ -473,7 +416,7 @@ export default function DashboardPage() {
           </div>
           <div className="stat-card">
             <div className="stat-label">Total Fabric</div>
-            <div className="stat-value">{totalKg.toLocaleString()}</div>
+            <div className="stat-value">{Math.round(totalKg).toLocaleString()}</div>
             <div className="stat-sub">Kg across all orders</div>
           </div>
         </div>
@@ -496,10 +439,11 @@ export default function DashboardPage() {
             <table>
               <thead><tr><th>Order #</th><th>Party</th><th>Article</th><th>Color</th><th>Qty(Kg)</th><th>Status</th></tr></thead>
               <tbody>
-                {orders.slice(-5).reverse().map(o => (
-                  <tr key={o.id} style={{ cursor: 'pointer' }}>
-                    <td style={{ fontWeight: 600 }}>{o.orderNumber}</td>
-                    <td>{o.party}</td><td>{o.article}</td><td>{o.color}</td><td>{o.qtyKg}</td>
+                {orders.slice(0, 5).map(o => (
+                  <tr key={o.id}>
+                    <td style={{ fontWeight: 600 }}>{o.order_number}</td>
+                    <td>{o.party}</td><td>{o.article}</td><td>{o.color}</td>
+                    <td>{o.qty_kg}</td>
                     <td>{statusBadge(o.status)}</td>
                   </tr>
                 ))}
@@ -514,19 +458,18 @@ export default function DashboardPage() {
             <Link href="/machines"><button className="small">Sheets →</button></Link>
           </div>
           {machines.map(m => {
-            const load = orders.filter(o => o.machine === m.id && ['splitting', 'in-process'].includes(o.status))
-            const loadKg = load.flatMap(o => o.splits).filter(s => s.status !== 'done').reduce((s, b) => s + (parseInt(String(b.kg)) || 0), 0)
-            const pct = Math.min(100, Math.round((loadKg / m.capacity) * 100))
+            const loadKg = machineLoad[m.name] || 0
+            const pct = m.capacity ? Math.min(100, Math.round((loadKg / m.capacity) * 100)) : 0
             return (
               <div key={m.id} style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{getMachineShortName(m.name)}</span>
-                  <span className={`badge badge-${m.status}`}>{m.status === 'running' ? 'Running' : 'Idle'}</span>
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>{m.name}</span>
+                  <span className={`badge badge-${m.status || 'idle'}`}>{m.status || 'idle'}</span>
                 </div>
                 <div style={{ background: 'var(--bg-secondary)', borderRadius: 20, height: 6, overflow: 'hidden' }}>
-                  <div style={{ width: `${pct}%`, height: '100%', background: pct > 80 ? '#E24B4A' : pct > 50 ? '#EF9F27' : '#1D9E75', borderRadius: 20, transition: 'width 0.3s' }} />
+                  <div style={{ width: `${pct}%`, height: '100%', background: pct > 80 ? '#E24B4A' : pct > 50 ? '#EF9F27' : '#1D9E75', borderRadius: 20 }} />
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{loadKg} / {m.capacity} Kg loaded</div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{Math.round(loadKg)} / {m.capacity} Kg loaded</div>
               </div>
             )
           })}
@@ -541,22 +484,27 @@ export default function DashboardPage() {
           <span className="card-title">Active Batches</span>
           <Link href="/batches"><button className="small">All Batches →</button></Link>
         </div>
-        {allBatches.filter(b => b.status !== 'done').length === 0 ? (
+        {batches.filter(b => b.status === 'in-process').length === 0 ? (
           <div className="empty-state">No active batches at this time.</div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Batch ID</th><th>Order #</th><th>Party</th><th>Color</th><th>Machine</th><th>Current Process</th><th>Status</th></tr></thead>
               <tbody>
-                {allBatches.filter(b => b.status !== 'done').map((b, idx) => (
-                  <tr key={`${b.batchId}-${idx}`}>
-                    <td style={{ fontWeight: 600 }}>{b.batchId}</td>
-                    <td>{b.orderNo}</td><td>{b.party}</td><td>{b.color}</td>
-                    <td><span className="machine-badge">{b.machine}</span></td>
-                    <td><span className="process-step active">{b.currentProcess || '-'}</span></td>
-                    <td>{statusBadge(b.status)}</td>
-                  </tr>
-                ))}
+                {batches.filter(b => b.status === 'in-process').slice(0, 20).map(b => {
+                  const order = orders.find(o => o.id === b.order_id) || {}
+                  return (
+                    <tr key={b.id}>
+                      <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{b.batch_id}</td>
+                      <td>{order.order_number || '-'}</td>
+                      <td>{order.party || '-'}</td>
+                      <td>{order.color || '-'}</td>
+                      <td><span className="machine-badge">{b.machines?.name || '-'}</span></td>
+                      <td><span className="process-step active">{b.current_process || '-'}</span></td>
+                      <td>{statusBadge(b.status)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

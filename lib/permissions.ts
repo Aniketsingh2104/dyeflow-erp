@@ -17,7 +17,7 @@ export interface PagePerm {
 export interface UserPermissions {
   pages: Record<string, PagePerm>
   supervisorFilter: string
-  allowedSheets?: string[]   // array of sheet IDs the user can access
+  allowedSheets?: string[]
 }
 
 export interface PageDef {
@@ -119,7 +119,7 @@ export function buildPageList(): PageDef[] {
       pages.push({ path: `/machines/${slug}`, label: m.name || m.id, group: 'Machines', dynamic: true })
     }
     for (const p of (db.processList || [])) {
-      if (!p.enabled) continue
+      if (!p.enabled && !p.is_enabled) continue
       pages.push({ path: `/fms/${p.code}`, label: `FMS — ${p.code} · ${p.name}`, group: 'FMS', dynamic: true })
     }
     for (const s of (db.supervisors || [])) {
@@ -129,6 +129,33 @@ export function buildPageList(): PageDef[] {
     }
   } catch { /* ignore */ }
   return pages
+}
+
+/** Async version: fetches dynamic pages from Supabase APIs, falls back to localStorage */
+export async function fetchPageList(): Promise<PageDef[]> {
+  const pages: PageDef[] = [...STATIC_PAGES]
+  try {
+    const [mRes, pRes, sRes] = await Promise.all([
+      fetch('/api/machines',    { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/processes',   { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
+    ])
+    for (const m of (mRes.data || [])) {
+      const slug = (m.name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+      if (slug) pages.push({ path: `/machines/${slug}`, label: m.name, group: 'Machines', dynamic: true })
+    }
+    for (const p of (pRes.data || [])) {
+      if (!p.is_enabled) continue
+      pages.push({ path: `/fms/${p.code}`, label: `FMS — ${p.code} · ${p.name}`, group: 'FMS', dynamic: true })
+    }
+    for (const s of (sRes.data || [])) {
+      const idSlug = encodeURIComponent(s.id || s.name || '')
+      if (idSlug) pages.push({ path: `/supervisor/${idSlug}`, label: `Supervisor — ${s.name}`, group: 'Supervisors', dynamic: true })
+    }
+    return pages
+  } catch {
+    return buildPageList()
+  }
 }
 
 export type RolePreset = 'admin' | 'machine_operator' | 'supervisor_role' | 'lab_technician' | 'viewer' | 'custom'
@@ -191,11 +218,8 @@ export function getActiveUserRecord(): DyeflowUser | null {
 
 export function isAdminUser(user: DyeflowUser | null): boolean {
   if (!user) return false
-  // Only explicit 'admin' role gets admin access
-  // Users with no permissions object AND no role get treated as admin (legacy)
-  // Users with a role set always follow that role
   if (user.role === 'admin') return true
-  if (!user.role && !user.permissions) return true  // legacy user with no setup
+  if (!user.role && !user.permissions) return true
   return false
 }
 

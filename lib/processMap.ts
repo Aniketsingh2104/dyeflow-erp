@@ -1,22 +1,24 @@
 /**
  * SINGLE SOURCE OF TRUTH for process codes and names.
  * All pages must import from here — never hardcode PROCESS_MAP locally.
- *
- * At runtime, pages prefer db.processList[] (user-managed via Process Master).
- * This file is the fallback seed so the app works before any user configuration.
  */
 
 export interface ProcessDef {
-  code: string      // e.g. "D"
-  name: string      // e.g. "Dyeing"
+  code: string
+  name: string
   enabled: boolean
-  order: number     // display/nav order
-  defaultDays?: number  // default duration for date calculator (optional)
-  allowFaulty?: boolean // show Faulty button on this process's FMS page
-  allowFOB?: boolean    // show FOB button on this process's FMS page
+  order: number
+  defaultDays?: number
+  allowFaulty?: boolean
+  allowFOB?: boolean
+  // Supabase columns (snake_case aliases)
+  is_enabled?: boolean
+  display_order?: number
+  default_days?: number
+  allow_faulty?: boolean
+  allow_fob?: boolean
 }
 
-/** Default process list — used as seed when db.processList is empty */
 export const DEFAULT_PROCESSES: ProcessDef[] = [
   { code: 'C',        name: 'CBR',       enabled: true, order: 1,  defaultDays: 1, allowFaulty: true,  allowFOB: false },
   { code: 'S',        name: 'SCQ',       enabled: true, order: 2,  defaultDays: 1, allowFaulty: true,  allowFOB: false },
@@ -43,10 +45,6 @@ export const DEFAULT_PROCESSES: ProcessDef[] = [
   { code: 'Dispatch', name: 'Dispatch',  enabled: true, order: 23, defaultDays: 1, allowFaulty: false, allowFOB: false },
 ]
 
-/**
- * Build a flat code->name lookup from a ProcessDef array.
- * Stores both original-case and UPPERCASE keys for resilient lookup.
- */
 export function buildProcessMap(list: ProcessDef[]): Record<string, string> {
   const map: Record<string, string> = {}
   list.forEach(p => {
@@ -56,38 +54,59 @@ export function buildProcessMap(list: ProcessDef[]): Record<string, string> {
   return map
 }
 
-/** Built-in fallback map — safe to import in any file (no localStorage) */
 export const PROCESS_MAP: Record<string, string> = buildProcessMap(DEFAULT_PROCESSES)
 
-/**
- * Resolve a process code to its display name.
- * Pass runtimeList (from db.processList) when available for user-defined names.
- */
 export function getProcessName(code: string, runtimeList?: ProcessDef[]): string {
   if (runtimeList && runtimeList.length > 0) {
-    const found = runtimeList.find(
-      p => p.code.toUpperCase() === code.toUpperCase()
-    )
+    const found = runtimeList.find(p => p.code.toUpperCase() === code.toUpperCase())
     if (found) return found.name
   }
   return PROCESS_MAP[code] ?? PROCESS_MAP[code.toUpperCase()] ?? code
 }
 
+/** Normalise a Supabase process_list row to ProcessDef */
+function normaliseFromDb(row: any): ProcessDef {
+  return {
+    code:        row.code,
+    name:        row.name,
+    enabled:     row.is_enabled ?? row.enabled ?? true,
+    order:       row.display_order ?? row.order ?? 99,
+    defaultDays: row.default_days  ?? row.defaultDays ?? 1,
+    allowFaulty: row.allow_faulty  ?? row.allowFaulty ?? true,
+    allowFOB:    row.allow_fob     ?? row.allowFOB    ?? false,
+  }
+}
+
 /**
- * Load db.processList from localStorage, seeding DEFAULT_PROCESSES if missing.
- * Returns the full list (always non-empty).
- * Only call this inside client-side useEffect or event handlers.
+ * Async: Fetch process list from Supabase via /api/processes.
+ * Falls back to localStorage, then DEFAULT_PROCESSES.
+ */
+export async function fetchProcessList(): Promise<ProcessDef[]> {
+  try {
+    const res  = await fetch('/api/processes', { cache: 'no-store' })
+    const data = await res.json()
+    if (data.ok && Array.isArray(data.data) && data.data.length > 0) {
+      return data.data.map(normaliseFromDb).sort((a, b) => a.order - b.order)
+    }
+  } catch {}
+  return loadOrSeedProcessList()
+}
+
+/**
+ * Sync: Read from localStorage. Seeds defaults if absent.
+ * Only call inside client-side useEffect or event handlers.
  */
 export function loadOrSeedProcessList(): ProcessDef[] {
   if (typeof window === 'undefined') return DEFAULT_PROCESSES
-
-  const raw = localStorage.getItem('dyeflow_db')
-  const db = raw ? JSON.parse(raw) : {}
-
-  if (!db.processList || !Array.isArray(db.processList) || db.processList.length === 0) {
-    db.processList = DEFAULT_PROCESSES
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
+  try {
+    const raw = localStorage.getItem('dyeflow_db')
+    const db = raw ? JSON.parse(raw) : {}
+    if (!db.processList || !Array.isArray(db.processList) || db.processList.length === 0) {
+      db.processList = DEFAULT_PROCESSES
+      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+    }
+    return db.processList as ProcessDef[]
+  } catch {
+    return DEFAULT_PROCESSES
   }
-
-  return db.processList as ProcessDef[]
 }
