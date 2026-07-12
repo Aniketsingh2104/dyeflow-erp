@@ -1,11 +1,11 @@
 /**
  * Audit Trail — logs every meaningful change to Supabase audit_log table.
- * Also writes to localStorage for backward compatibility with local libs.
+ * Phase 12: localStorage dual-write removed. All reads and writes go to Supabase.
  */
 
 export interface AuditEntry {
   id: string
-  timestamp: string        // ISO string (maps to created_at)
+  timestamp: string
   user: string
   action: string
   entityType: string
@@ -16,33 +16,28 @@ export interface AuditEntry {
   note?: string
 }
 
+/** Get current logged-in username from session (Supabase-backed since Phase 11) */
+function getActiveUsername(): string {
+  if (typeof window === 'undefined') return 'System'
+  try {
+    const raw = localStorage.getItem('dyeflow_session')
+    if (!raw) return 'System'
+    return JSON.parse(raw)?.username || 'System'
+  } catch { return 'System' }
+}
+
 /**
- * Log an audit entry. Writes to Supabase via API (fire-and-forget).
- * Also keeps localStorage copy for local context builders.
+ * Log an audit entry to Supabase via /api/audit (fire-and-forget).
+ * Never throws — audit failures must not crash the app.
  */
 export function logAudit(entry: Omit<AuditEntry, 'id' | 'timestamp' | 'user'>): void {
   if (typeof window === 'undefined') return
   try {
-    const raw = localStorage.getItem('dyeflow_db')
-    const db  = raw ? JSON.parse(raw) : {}
-    const activeUser: string = db.activeUser || db.currentUser || 'System'
+    const id         = `AL-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+    const activeUser = getActiveUsername()
 
-    const id = `AL-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
-    const timestamp = new Date().toISOString()
-
-    const newEntry: AuditEntry = {
-      id, timestamp, user: activeUser, ...entry,
-    }
-
-    // ── Write to localStorage (for dbContext / local AI tools) ──────────────
-    if (!Array.isArray(db.auditLog)) db.auditLog = []
-    db.auditLog.unshift(newEntry)
-    if (db.auditLog.length > 2000) db.auditLog = db.auditLog.slice(0, 2000)
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-
-    // ── Write to Supabase (fire-and-forget) ──────────────────────────────────
     fetch('/api/audit', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action:      'log',
@@ -63,7 +58,7 @@ export function logAudit(entry: Omit<AuditEntry, 'id' | 'timestamp' | 'user'>): 
   }
 }
 
-/** Read audit log from Supabase. Falls back to localStorage. */
+/** Read audit log from Supabase. */
 export async function readAuditLogAsync(limit = 500): Promise<AuditEntry[]> {
   try {
     const res  = await fetch(`/api/audit?limit=${limit}`, { cache: 'no-store' })
@@ -83,18 +78,13 @@ export async function readAuditLogAsync(limit = 500): Promise<AuditEntry[]> {
       }))
     }
   } catch {}
-  return readAuditLog(limit) // fallback
+  return []
 }
 
-/** Synchronous read from localStorage (used by legacy code). */
-export function readAuditLog(limit = 200): AuditEntry[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return []
-    const db = JSON.parse(raw)
-    return (db.auditLog || []).slice(0, limit) as AuditEntry[]
-  } catch {
-    return []
-  }
+/**
+ * Synchronous read — kept for any legacy callers.
+ * Returns empty array since localStorage is no longer written.
+ */
+export function readAuditLog(_limit = 200): AuditEntry[] {
+  return []
 }

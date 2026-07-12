@@ -1,6 +1,9 @@
 /**
- * SINGLE SOURCE OF TRUTH for process codes and names.
- * All pages must import from here — never hardcode PROCESS_MAP locally.
+ * lib/processMap.ts
+ * Single source of truth for process codes and names.
+ * Phase 12: loadOrSeedProcessList() no longer writes to localStorage.
+ *           It is now a pure read-only fallback returning DEFAULT_PROCESSES.
+ *           All dynamic data comes from Supabase via fetchProcessList().
  */
 
 export interface ProcessDef {
@@ -11,12 +14,12 @@ export interface ProcessDef {
   defaultDays?: number
   allowFaulty?: boolean
   allowFOB?: boolean
-  // Supabase columns (snake_case aliases)
-  is_enabled?: boolean
+  // Supabase column aliases
+  is_enabled?:    boolean
   display_order?: number
-  default_days?: number
-  allow_faulty?: boolean
-  allow_fob?: boolean
+  default_days?:  number
+  allow_faulty?:  boolean
+  allow_fob?:     boolean
 }
 
 export const DEFAULT_PROCESSES: ProcessDef[] = [
@@ -57,7 +60,7 @@ export function buildProcessMap(list: ProcessDef[]): Record<string, string> {
 export const PROCESS_MAP: Record<string, string> = buildProcessMap(DEFAULT_PROCESSES)
 
 export function getProcessName(code: string, runtimeList?: ProcessDef[]): string {
-  if (runtimeList && runtimeList.length > 0) {
+  if (runtimeList?.length) {
     const found = runtimeList.find(p => p.code.toUpperCase() === code.toUpperCase())
     if (found) return found.name
   }
@@ -69,8 +72,8 @@ function normaliseFromDb(row: any): ProcessDef {
   return {
     code:        row.code,
     name:        row.name,
-    enabled:     row.is_enabled ?? row.enabled ?? true,
-    order:       row.display_order ?? row.order ?? 99,
+    enabled:     row.is_enabled    ?? row.enabled    ?? true,
+    order:       row.display_order ?? row.order       ?? 99,
     defaultDays: row.default_days  ?? row.defaultDays ?? 1,
     allowFaulty: row.allow_faulty  ?? row.allowFaulty ?? true,
     allowFOB:    row.allow_fob     ?? row.allowFOB    ?? false,
@@ -78,8 +81,8 @@ function normaliseFromDb(row: any): ProcessDef {
 }
 
 /**
- * Async: Fetch process list from Supabase via /api/processes.
- * Falls back to localStorage, then DEFAULT_PROCESSES.
+ * Async — fetch from Supabase via /api/processes.
+ * Falls back to DEFAULT_PROCESSES on error. Always prefer this.
  */
 export async function fetchProcessList(): Promise<ProcessDef[]> {
   try {
@@ -89,24 +92,14 @@ export async function fetchProcessList(): Promise<ProcessDef[]> {
       return data.data.map(normaliseFromDb).sort((a, b) => a.order - b.order)
     }
   } catch {}
-  return loadOrSeedProcessList()
+  return [...DEFAULT_PROCESSES]
 }
 
 /**
- * Sync: Read from localStorage. Seeds defaults if absent.
- * Only call inside client-side useEffect or event handlers.
+ * Sync fallback — returns DEFAULT_PROCESSES.
+ * Phase 12: no longer reads or writes localStorage.
+ * Use only when an async call is impossible (e.g. inside a sync event handler).
  */
 export function loadOrSeedProcessList(): ProcessDef[] {
-  if (typeof window === 'undefined') return DEFAULT_PROCESSES
-  try {
-    const raw = localStorage.getItem('dyeflow_db')
-    const db = raw ? JSON.parse(raw) : {}
-    if (!db.processList || !Array.isArray(db.processList) || db.processList.length === 0) {
-      db.processList = DEFAULT_PROCESSES
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    }
-    return db.processList as ProcessDef[]
-  } catch {
-    return DEFAULT_PROCESSES
-  }
+  return [...DEFAULT_PROCESSES]
 }
