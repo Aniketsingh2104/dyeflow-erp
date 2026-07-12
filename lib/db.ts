@@ -1,6 +1,5 @@
 /**
  * lib/db.ts — Compatibility stub (Phase 12)
- * Provides all functions imported by legacy pages.
  * All operations proxy through API routes to Supabase.
  */
 
@@ -68,9 +67,19 @@ export async function assignSupervisor(orderId: string, supervisorId: string): P
 
 // ── Batches ────────────────────────────────────────────────────────────────
 
-export async function getBatches(orderId?: string): Promise<{ data: any[]; error: string | null }> {
+// Accepts either a string orderId or an options object
+export async function getBatches(optsOrId?: string | { orderId?: string; status?: string; limit?: number }): Promise<{ data: any[]; error: string | null }> {
   try {
-    const url  = orderId ? `/api/batches?order_id=${orderId}` : '/api/batches?limit=5000'
+    let url = '/api/batches?limit=5000'
+    if (typeof optsOrId === 'string') {
+      url = `/api/batches?order_id=${optsOrId}`
+    } else if (optsOrId && typeof optsOrId === 'object') {
+      const params = new URLSearchParams()
+      if (optsOrId.orderId) params.set('order_id', optsOrId.orderId)
+      if (optsOrId.status)  params.set('status',   optsOrId.status)
+      params.set('limit', String(optsOrId.limit || 5000))
+      url = `/api/batches?${params.toString()}`
+    }
     const res  = await fetch(url, { cache: 'no-store' })
     const data = await res.json()
     return { data: data.data || [], error: data.error || null }
@@ -88,6 +97,17 @@ export async function createSplits(orderId: string, batches: any[], processRoute
 export async function markProcessDone(batchId: string, processCode: string, nextProcess?: string): Promise<{ error: string | null }> {
   try {
     const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'process_done', batch_id: batchId, process_code: processCode, next_process: nextProcess }) })
+    const data = await res.json()
+    return { error: data.error || null }
+  } catch (e: any) { return { error: e.message } }
+}
+
+export async function markBatchFaulty(payload: {
+  batch_id: string; order_id: string; order_number: string; party: string;
+  faulty_type: string; faulty_kg: number; process_code: string;
+}): Promise<{ error: string | null }> {
+  try {
+    const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'mark_faulty', ...payload }) })
     const data = await res.json()
     return { error: data.error || null }
   } catch (e: any) { return { error: e.message } }
@@ -145,7 +165,7 @@ export function getCurrentUser(): { username: string; role: string } | null {
   } catch { return null }
 }
 
-// ── Legacy localStorage stubs (no-op) ─────────────────────────────────────
+// ── Legacy stubs ───────────────────────────────────────────────────────────
 
 export function getDb(): Record<string, any> {
   if (typeof window === 'undefined') return {}
