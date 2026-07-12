@@ -1,28 +1,22 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
-  buildPageList, buildPermissionsFromRole,
+  fetchPageList, buildPermissionsFromRole,
   ROLE_LABELS, EMPTY_PERM, FULL_PERM, VIEW_PERM,
   DEFAULT_USER_PERMISSIONS,
   type DyeflowUser, type UserPermissions, type PagePerm, type RolePreset, type PageDef,
 } from '@/lib/permissions'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Extended with password for local storage
+// ── Types ────────────────────────────────────────────────────────────────────
 interface DyeflowUserWithPassword extends DyeflowUser {
   password?: string
   fullName?: string
+  isActive?: boolean
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-const SCOPE_MODES = ['all', 'unit', 'party', 'unit_or_party']
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const SCOPE_MODES  = ['all', 'unit', 'party', 'unit_or_party']
 const SCOPE_LABELS: Record<string, string> = {
   all: 'All Data', unit: 'Unit Only', party: 'Party Only', unit_or_party: 'Unit OR Party',
 }
@@ -40,19 +34,29 @@ function getScopeSummary(user: DyeflowUser): string {
   return '-'
 }
 
-function nextUserId(users: DyeflowUserWithPassword[]): string {
-  const nums = users.map(u => { const m = (u.id || '').match(/(\d+)/); return m ? parseInt(m[1]) : 0 })
-  return 'USR-' + String(Math.max(0, ...nums) + 1).padStart(3, '0')
-}
-
 function countGranted(perms: UserPermissions): number {
   return Object.values(perms.pages).filter(p => p.view).length
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PagePermRow
-// ─────────────────────────────────────────────────────────────────────────────
+// Shape Supabase row → DyeflowUserWithPassword
+function shapeUser(row: any): DyeflowUserWithPassword {
+  return {
+    id:          row.id,
+    username:    row.username,
+    fullName:    row.full_name || row.username,
+    role:        row.role || 'custom',
+    scopeMode:   row.scope_mode || 'all',
+    unit:        row.unit || '',
+    party:       row.party || '',
+    notes:       row.notes || '',
+    permissions: row.permissions || DEFAULT_USER_PERMISSIONS,
+    createdAt:   row.created_at,
+    isActive:    row.is_active !== false,
+    password:    row.password || '',   // plain text for now
+  }
+}
 
+// ── PagePermRow ───────────────────────────────────────────────────────────────
 function PagePermRow({ page, perm, onChange }: { page: PageDef; perm: PagePerm; onChange: (p: PagePerm) => void }) {
   return (
     <div style={{
@@ -81,25 +85,16 @@ function PagePermRow({ page, perm, onChange }: { page: PageDef; perm: PagePerm; 
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PasswordInput
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── PasswordInput ─────────────────────────────────────────────────────────────
 function PasswordInput({ value, onChange, placeholder, required }: {
   value: string; onChange: (v: string) => void; placeholder?: string; required?: boolean
 }) {
   const [show, setShow] = useState(false)
   return (
     <div style={{ position: 'relative' }}>
-      <input
-        type={show ? 'text' : 'password'}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder || 'Enter password'}
-        required={required}
-        autoComplete="new-password"
-        style={{ paddingRight: 38 }}
-      />
+      <input type={show ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || 'Enter password'} required={required} autoComplete="new-password"
+        style={{ paddingRight: 38 }} />
       <button type="button" onClick={() => setShow(s => !s)}
         style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: show ? 'var(--accent)' : 'var(--text-tertiary)', fontSize: 14, padding: '2px 4px' }}>
         {show ? '🙈' : '👁'}
@@ -108,104 +103,77 @@ function PasswordInput({ value, onChange, placeholder, required }: {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Page
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function UserManagementPage() {
-  const [users, setUsers]               = useState<DyeflowUserWithPassword[]>([])
-  const [activeUserId, setActiveUserId] = useState('')
-  const [isModalOpen, setIsModalOpen]   = useState(false)
-  const [editingUserId, setEditingUserId] = useState('')
-  const [modalTab, setModalTab]         = useState<'basic' | 'permissions'>('basic')
-  const [allPages, setAllPages]         = useState<PageDef[]>([])
-  const [supervisorNames, setSupervisorNames] = useState<string[]>([])
-  const [allSheets, setAllSheets]       = useState<{id:string,title:string,assignedTo:string}[]>([])
-  const [saveError, setSaveError]       = useState('')
+  const [users,             setUsers]             = useState<DyeflowUserWithPassword[]>([])
+  const [loading,           setLoading]           = useState(true)
+  const [saving,            setSaving]            = useState(false)
+  const [isModalOpen,       setIsModalOpen]       = useState(false)
+  const [editingUserId,     setEditingUserId]     = useState('')
+  const [modalTab,          setModalTab]          = useState<'basic'|'permissions'>('basic')
+  const [allPages,          setAllPages]          = useState<PageDef[]>([])
+  const [supervisorNames,   setSupervisorNames]   = useState<string[]>([])
+  const [availableParties,  setAvailableParties]  = useState<string[]>([])
+  const [saveError,         setSaveError]         = useState('')
 
   const [formData, setFormData] = useState({
     username: '', password: '', confirmPassword: '',
-    role: 'custom' as RolePreset, scopeMode: 'all',
-    unit: '', party: '', notes: '',
+    role: 'custom' as RolePreset, scopeMode: 'all', unit: '', party: '', notes: '',
   })
   const [formPerms, setFormPerms] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS)
-  const [availableParties, setAvailableParties] = useState<string[]>([])
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // ── Load all data from Supabase ──────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [usersRes, pagesRes, supRes, ordersRes] = await Promise.all([
+        fetch('/api/users',       { cache: 'no-store' }).then(r => r.json()),
+        fetchPageList(),
+        fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders?limit=500', { cache: 'no-store' }).then(r => r.json()),
+      ])
 
-  useEffect(() => { loadData() }, [])
+      const shapedUsers = (usersRes.data || []).map(shapeUser)
+      setUsers(shapedUsers)
+      setAllPages(pagesRes)
+      setSupervisorNames((supRes.data || []).map((s: any) => s.name).filter(Boolean))
+      const parties = [...new Set((ordersRes.data || []).map((o: any) => o.party).filter(Boolean))].sort() as string[]
+      setAvailableParties(parties)
 
-  const loadData = () => {
-    setAllPages(buildPageList())
-    const raw = localStorage.getItem('dyeflow_db')
-    const db  = raw ? JSON.parse(raw) : {}
-    // Migrate old users — ensure role and password fields exist
-    let changed = false
-    if (!db.users || db.users.length === 0) {
-      db.users = [{
-        id: 'USR-001', username: 'admin', password: 'dyeflow123',
-        fullName: 'Admin', role: 'admin', scopeMode: 'all',
-        notes: 'Default admin', createdAt: new Date().toLocaleString('en-GB'),
-      }]
-      db.activeUserId = 'USR-001'
-      changed = true
-    } else {
-      // Patch existing users that are missing role or password
-      db.users = db.users.map((u: any) => {
-        const patched = { ...u }
-        if (!patched.role) { patched.role = 'admin'; changed = true }
-        if (!patched.username) { patched.username = patched.id || 'user'; changed = true }
-        return patched
-      })
+      // If no users exist at all, seed the admin into localStorage so login still works
+      if (shapedUsers.length === 0) {
+        console.warn('No users in Supabase — using fallback admin')
+      }
+    } finally {
+      setLoading(false)
     }
-    if (changed) localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setUsers(db.users || [])
-    setActiveUserId(db.activeUserId || db.users?.[0]?.id || '')
-    setSupervisorNames((db.supervisors || []).map((s: any) => s.name).filter(Boolean))
-    setAllSheets((db.orderSheets || []).map((s: any) => ({ id: s.id, title: s.title, assignedTo: s.assignedTo || '' })))
-    const parties = [...new Set((db.orders || []).map((x: any) => x.party).filter(Boolean))].sort() as string[]
-    setAvailableParties(parties)
-  }
+  }, [])
 
-  const saveToLocalStorage = (updatedUsers: DyeflowUserWithPassword[], newActiveId?: string) => {
-    const raw = localStorage.getItem('dyeflow_db')
-    const db  = raw ? JSON.parse(raw) : {}
-    db.users = updatedUsers
-    if (newActiveId !== undefined) db.activeUserId = newActiveId
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    window.dispatchEvent(new Event('dyeflow-db-updated'))
-    loadData()
-  }
+  useEffect(() => { loadData() }, [loadData])
 
   // ── Permission helpers ────────────────────────────────────────────────────
-
-  const setPagePerm = (path: string, perm: PagePerm) =>
+  const setPagePerm    = (path: string, perm: PagePerm) =>
     setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, [path]: perm } }))
-
   const applyRolePreset = (role: RolePreset) => {
     setFormPerms(buildPermissionsFromRole(role, allPages, formPerms.supervisorFilter))
     setFormData(f => ({ ...f, role }))
   }
-
-  const grantGroupAll = (group: string, perm: PagePerm) => {
+  const grantGroupAll  = (group: string, perm: PagePerm) => {
     const updates: Record<string, PagePerm> = {}
     allPages.filter(p => p.group === group).forEach(p => { updates[p.path] = perm })
     setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, ...updates } }))
   }
-
   const grantAll = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = FULL_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
   const clearAll = () => setFormPerms(prev => ({ ...prev, pages: {} }))
   const viewAll  = () => { const p: Record<string,PagePerm> = {}; allPages.forEach(pg => { p[pg.path] = VIEW_PERM }); setFormPerms(prev => ({ ...prev, pages: p })) }
 
-  // ── Modal ─────────────────────────────────────────────────────────────────
-
+  // ── Modal helpers ─────────────────────────────────────────────────────────
   const openAddModal = () => {
     setEditingUserId(''); setSaveError('')
     setFormData({ username: '', password: '', confirmPassword: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
     setFormPerms(DEFAULT_USER_PERMISSIONS)
     setModalTab('basic'); setIsModalOpen(true)
   }
-
   const openEditModal = (userId: string) => {
     const user = users.find(u => u.id === userId)
     if (!user) return
@@ -218,95 +186,77 @@ export default function UserManagementPage() {
     setFormPerms(user.permissions || DEFAULT_USER_PERMISSIONS)
     setModalTab('basic'); setIsModalOpen(true)
   }
-
   const closeModal = () => { setIsModalOpen(false); setEditingUserId(''); setSaveError('') }
 
-  // ── Save ─────────────────────────────────────────────────────────────────
-
-  const saveUser = () => {
+  // ── Save (create or update) via /api/users ────────────────────────────────
+  const saveUser = async () => {
     setSaveError('')
     if (!formData.username.trim()) { setSaveError('Username is required.'); return }
+    if (!editingUserId && !formData.password.trim()) { setSaveError('Password required for new users.'); return }
+    if (formData.password && formData.password.length < 4) { setSaveError('Password must be ≥ 4 characters.'); return }
+    if (formData.password && formData.password !== formData.confirmPassword) { setSaveError('Passwords do not match.'); return }
 
-    // Password validation
-    if (!editingUserId && !formData.password.trim()) {
-      setSaveError('Password is required for new users.'); return
-    }
-    if (formData.password && formData.password.length < 4) {
-      setSaveError('Password must be at least 4 characters.'); return
-    }
-    if (formData.password && formData.password !== formData.confirmPassword) {
-      setSaveError('Passwords do not match.'); return
-    }
+    setSaving(true)
+    try {
+      const payload: Record<string, any> = {
+        username:    formData.username.trim().toLowerCase(),
+        full_name:   formData.username.trim(),
+        role:        formData.role,
+        permissions: formData.role === 'admin' ? null : formPerms,
+        scope_mode:  formData.scopeMode,
+        unit:        formData.unit.trim() || null,
+        party:       formData.party.trim() || null,
+        notes:       formData.notes.trim() || null,
+      }
+      if (formData.password.trim()) payload.password = formData.password.trim()
 
-    // Duplicate username check (only on create)
-    if (!editingUserId) {
-      const exists = users.some(u => u.username.toLowerCase() === formData.username.trim().toLowerCase())
-      if (exists) { setSaveError('Username already exists. Choose a different one.'); return }
-    }
+      const action  = editingUserId ? 'update' : 'create'
+      const body    = editingUserId ? { action, id: editingUserId, ...payload } : { action, ...payload }
 
-    const userData: DyeflowUserWithPassword = {
-      id:          editingUserId ? (users.find(u => u.id === editingUserId)?.id || nextUserId(users)) : nextUserId(users),
-      username:    formData.username.trim().toLowerCase(),
-      fullName:    formData.username.trim(),
-      role:        formData.role,
-      scopeMode:   formData.scopeMode,
-      unit:        formData.unit.trim(),
-      party:       formData.party.trim(),
-      notes:       formData.notes.trim(),
-      permissions: formData.role === 'admin' ? undefined : formPerms,
-      createdAt:   new Date().toLocaleString('en-GB'),
-    }
+      const res  = await fetch('/api/users', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      })
+      const data = await res.json()
 
-    // Set password: new user always sets it; edit only if provided
-    if (formData.password.trim()) {
-      userData.password = formData.password.trim()
-    } else if (editingUserId) {
-      // Keep existing password
-      const existing = users.find(u => u.id === editingUserId)
-      userData.password = existing?.password || ''
-    }
+      if (!data.ok) { setSaveError(data.error || 'Save failed'); return }
 
-    const updatedUsers = editingUserId
-      ? users.map(u => u.id === editingUserId ? { ...u, ...userData } : u)
-      : [...users, userData]
-
-    saveToLocalStorage(updatedUsers)
-    closeModal()
+      closeModal()
+      await loadData()
+    } finally { setSaving(false) }
   }
 
-  // ── Delete ────────────────────────────────────────────────────────────────
-
-  const deleteUser = (id: string) => {
+  // ── Delete via /api/users ─────────────────────────────────────────────────
+  const deleteUser = async (id: string) => {
     const user = users.find(u => u.id === id)
     if (!user) return
     if (!confirm(`Delete user "${user.username}"? This cannot be undone.`)) return
-    const updated = users.filter(u => u.id !== id)
-    const newActive = activeUserId === id ? (updated[0]?.id || '') : activeUserId
-    saveToLocalStorage(updated, newActive)
+    const res  = await fetch('/api/users', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ action: 'delete', id }),
+    })
+    const data = await res.json()
+    if (!data.ok) { alert('Delete failed: ' + (data.error || 'Unknown error')); return }
+    await loadData()
   }
 
-  // ── Reset password ────────────────────────────────────────────────────────
-
-  const resetPassword = (userId: string) => {
+  // ── Reset password via /api/users ─────────────────────────────────────────
+  const resetPassword = async (userId: string) => {
     const user = users.find(u => u.id === userId)
     if (!user) return
     const newPwd = prompt(`New password for "${user.username}":`)
-    if (!newPwd || !newPwd.trim()) return
+    if (!newPwd?.trim()) return
     if (newPwd.trim().length < 4) { alert('Password must be at least 4 characters.'); return }
-    const updated = users.map(u => u.id === userId ? { ...u, password: newPwd.trim() } : u)
-    saveToLocalStorage(updated)
-    alert(`✓ Password updated for "${user.username}"`)
-  }
-
-  // ── Set active user ───────────────────────────────────────────────────────
-
-  const setActiveUser = (id: string) => {
-    const raw = localStorage.getItem('dyeflow_db')
-    const db  = raw ? JSON.parse(raw) : {}
-    db.activeUserId = id
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    setActiveUserId(id)
-    window.dispatchEvent(new Event('dyeflow-db-updated'))
+    const res  = await fetch('/api/users', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ action: 'reset_password', id: userId, password: newPwd.trim() }),
+    })
+    const data = await res.json()
+    if (data.ok) alert(`✓ Password updated for "${user.username}"`)
+    else alert('Reset failed: ' + (data.error || 'Unknown'))
   }
 
   const groupedPages = useMemo(() => {
@@ -318,41 +268,15 @@ export default function UserManagementPage() {
     return groups
   }, [allPages])
 
-  const activeUser = users.find(u => u.id === activeUserId)
-  // Determine who is actually logged in from the session
+  // Who is currently logged in (session stored in localStorage by login page)
   const loggedInUsername = (() => {
-    try {
-      const s = localStorage.getItem('dyeflow_session')
-      return s ? JSON.parse(s)?.username?.toLowerCase() : null
-    } catch { return null }
+    if (typeof window === 'undefined') return null
+    try { const s = localStorage.getItem('dyeflow_session'); return s ? JSON.parse(s)?.username?.toLowerCase() : null } catch { return null }
   })()
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="content">
-
-      {/* Active user banner */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--success-light)', borderRadius: 8, border: '1px solid var(--success)' }}>
-          <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18, fontWeight: 700, flexShrink: 0 }}>
-            {activeUser ? activeUser.username.charAt(0).toUpperCase() : '?'}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--success)' }}>
-              {activeUser ? activeUser.username : 'No active user'}
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>({activeUser?.role || 'no role'})</span>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-              Data scope: {activeUser ? getScopeSummary(activeUser) : '-'} &nbsp;·&nbsp;
-              Supervisor filter: <strong>{activeUser?.permissions?.supervisorFilter || 'all'}</strong> &nbsp;·&nbsp;
-              Pages: <strong>{activeUser ? (activeUser.role === 'admin' ? 'All (admin)' : `${countGranted(activeUser.permissions || { pages: {}, supervisorFilter: 'all' })} granted`) : '-'}</strong>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Users table */}
       <div className="card" style={{ marginBottom: 16 }}>
@@ -360,64 +284,64 @@ export default function UserManagementPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="card-title">Users</span>
             <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{users.length}</span>
+            {loading && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Loading…</span>}
           </div>
-          <button className="primary" onClick={openAddModal}>+ Add User</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="small" onClick={loadData} disabled={loading}>↻ Refresh</button>
+            <button className="primary" onClick={openAddModal} disabled={loading}>+ Add User</button>
+          </div>
         </div>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Username</th>
-                <th>Role</th>
-                <th>Password</th>
-                <th>Data Scope</th>
-                <th>Supervisor Filter</th>
-                <th>Pages</th>
-                <th>Session</th>
-                <th>Actions</th>
+                <th>Username</th><th>Role</th><th>Password</th><th>Data Scope</th>
+                <th>Supervisor Filter</th><th>Pages</th><th>Session</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {users.map(user => {
-                const isActive = (user.username || '').toLowerCase() === loggedInUsername
-                const granted  = user.role === 'admin' ? '∞' : `${countGranted(user.permissions || { pages: {}, supervisorFilter: 'all' })}`
-                const sfLabel  = user.permissions?.supervisorFilter || 'all'
-                return (
-                  <tr key={user.id}>
-                    <td style={{ fontWeight: 700, color: 'var(--accent)', fontSize: 11 }}>{user.id}</td>
-                    <td style={{ fontWeight: 600 }}>{user.username}</td>
-                    <td>
-                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 600, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)' }}>
-                        {ROLE_LABELS[user.role as RolePreset] || user.role}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-tertiary)' }}>
-                      {user.password ? '••••••••' : <span style={{ color: 'var(--danger)', fontSize: 11 }}>Not set</span>}
-                    </td>
-                    <td style={{ fontSize: 12 }}>{getScopeSummary(user)}</td>
-                    <td style={{ fontSize: 12 }}>
-                      {sfLabel === 'all'
-                        ? <span style={{ color: 'var(--text-tertiary)' }}>All</span>
-                        : <span style={{ fontWeight: 600, color: 'var(--accent-dark)' }}>{sfLabel}</span>}
-                    </td>
-                    <td style={{ fontSize: 12, fontWeight: 600 }}>{granted}</td>
-                    <td>{isActive ? <span className="badge badge-done">✓ Current session</span> : <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
-                      <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
-                      <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
-                    </td>
-                  </tr>
-                )
-              })}
+              {loading ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading users from Supabase…</td></tr>
+              ) : users.length === 0 ? (
+                <tr><td colSpan={8} className="empty-state">No users found. Add your first user above.</td></tr>
+              ) : (
+                users.map(user => {
+                  const isActive = (user.username || '').toLowerCase() === loggedInUsername
+                  const granted  = user.role === 'admin' ? '∞' : `${countGranted(user.permissions || DEFAULT_USER_PERMISSIONS)}`
+                  const sfLabel  = user.permissions?.supervisorFilter || 'all'
+                  return (
+                    <tr key={user.id}>
+                      <td style={{ fontWeight: 600 }}>{user.username}</td>
+                      <td>
+                        <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 600, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)' }}>
+                          {ROLE_LABELS[user.role as RolePreset] || user.role}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-tertiary)' }}>
+                        {user.password ? '••••••••' : <span style={{ color: 'var(--danger)', fontSize: 11 }}>Not set</span>}
+                      </td>
+                      <td style={{ fontSize: 12 }}>{getScopeSummary(user)}</td>
+                      <td style={{ fontSize: 12 }}>
+                        {sfLabel === 'all' ? <span style={{ color: 'var(--text-tertiary)' }}>All</span> : <span style={{ fontWeight: 600, color: 'var(--accent-dark)' }}>{sfLabel}</span>}
+                      </td>
+                      <td style={{ fontSize: 12, fontWeight: 600 }}>{granted}</td>
+                      <td>{isActive ? <span className="badge badge-done">✓ Current</span> : <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
+                        <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
+                        <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>
 
         <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border-light)' }}>
-          ℹ Users and passwords are stored in the DyeFlow database and synced across all devices automatically.
+          ✓ Users are stored in Supabase and synced across all devices automatically.
         </div>
       </div>
 
@@ -433,10 +357,6 @@ export default function UserManagementPage() {
               <strong>{label}</strong> — {desc}
             </div>
           ))}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)' }}>↪</span>
-            Dynamic pages auto-generated from machines / processes / supervisors
-          </div>
         </div>
       </div>
 
@@ -465,18 +385,16 @@ export default function UserManagementPage() {
             </div>
 
             {/* Body */}
-            <form onSubmit={e => { e.preventDefault(); saveUser() }} style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
               {saveError && (
-                <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--danger)', marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--danger)', marginBottom: 14 }}>
                   ⚠ {saveError}
                 </div>
               )}
 
-              {/* ── BASIC TAB ─────────────────────────────────────────── */}
+              {/* ── BASIC TAB ──────────────────────────────────────────── */}
               {modalTab === 'basic' && (
                 <div>
-                  {/* Username + Role */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
                     <div className="form-group">
                       <label>Username *</label>
@@ -495,28 +413,20 @@ export default function UserManagementPage() {
                   <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
                       🔑 Password
-                      {editingUserId && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 8 }}>Leave blank to keep existing password</span>}
+                      {editingUserId && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 8 }}>Leave blank to keep existing</span>}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                       <div className="form-group">
                         <label>{editingUserId ? 'New Password' : 'Password *'}</label>
-                        <PasswordInput
-                          value={formData.password}
-                          onChange={v => { setFormData(f => ({ ...f, password: v })); setSaveError('') }}
-                          placeholder={editingUserId ? 'Leave blank to keep current' : 'Min. 4 characters'}
-                          required={!editingUserId}
-                        />
+                        <PasswordInput value={formData.password} onChange={v => { setFormData(f => ({ ...f, password: v })); setSaveError('') }}
+                          placeholder={editingUserId ? 'Leave blank to keep current' : 'Min. 4 characters'} required={!editingUserId} />
                       </div>
                       <div className="form-group">
-                        <label>Confirm Password{!editingUserId && ' *'}</label>
-                        <PasswordInput
-                          value={formData.confirmPassword}
-                          onChange={v => { setFormData(f => ({ ...f, confirmPassword: v })); setSaveError('') }}
-                          placeholder="Re-enter password"
-                        />
+                        <label>Confirm Password</label>
+                        <PasswordInput value={formData.confirmPassword} onChange={v => { setFormData(f => ({ ...f, confirmPassword: v })); setSaveError('') }}
+                          placeholder="Re-enter password" />
                       </div>
                     </div>
-                    {/* Match indicator */}
                     {formData.password && formData.confirmPassword && (
                       <div style={{ fontSize: 11, marginTop: 6, color: formData.password === formData.confirmPassword ? 'var(--success)' : 'var(--danger)' }}>
                         {formData.password === formData.confirmPassword ? '✓ Passwords match' : '⚠ Passwords do not match'}
@@ -535,7 +445,8 @@ export default function UserManagementPage() {
                     <div className="form-group">
                       <label>Unit</label>
                       <input value={formData.unit} onChange={e => setFormData(f => ({ ...f, unit: e.target.value }))}
-                        placeholder="Unit name" autoComplete="off" disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
+                        placeholder="Unit name" autoComplete="off"
+                        disabled={formData.scopeMode === 'all' || formData.scopeMode === 'party'} />
                     </div>
                     <div className="form-group">
                       <label>Party</label>
@@ -548,7 +459,8 @@ export default function UserManagementPage() {
 
                   <div className="form-group" style={{ marginBottom: 14 }}>
                     <label>Notes</label>
-                    <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes about this user" autoComplete="off" />
+                    <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))}
+                      placeholder="Optional notes about this user" autoComplete="off" />
                   </div>
 
                   {/* Supervisor filter */}
@@ -566,8 +478,7 @@ export default function UserManagementPage() {
                             onChange={() => setFormPerms(p => ({ ...p, supervisorFilter: supervisorNames[0] || '' }))} />
                           Specific supervisor:
                         </label>
-                        <select
-                          value={formPerms.supervisorFilter === 'all' ? '' : formPerms.supervisorFilter}
+                        <select value={formPerms.supervisorFilter === 'all' ? '' : formPerms.supervisorFilter}
                           onChange={e => setFormPerms(p => ({ ...p, supervisorFilter: e.target.value }))}
                           disabled={formPerms.supervisorFilter === 'all'}
                           style={{ fontSize: 13, padding: '5px 8px' }}>
@@ -632,73 +543,20 @@ export default function UserManagementPage() {
                           ))}
                         </div>
                       ))}
-
-                      {/* ── Order Sheet Access ── */}
-                      {allSheets.length > 0 && (
-                        <div style={{ marginBottom: 16 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '.06em' }}>📋 Order Sheet Access</span>
-                            <div style={{ flex: 1, height: 1, background: 'var(--border-light)' }} />
-                            <button className="xs" onClick={() => setFormPerms(p => ({ ...p, allowedSheets: allSheets.map(s => s.id) }))} style={{ fontSize: 10, padding: '2px 7px' }}>All</button>
-                            <button className="xs" onClick={() => setFormPerms(p => ({ ...p, allowedSheets: [] }))} style={{ fontSize: 10, padding: '2px 7px' }}>None</button>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            {allSheets.map(sheet => {
-                              const allowed = (formPerms.allowedSheets || []).includes(sheet.id)
-                              return (
-                                <label key={sheet.id} style={{
-                                  display: 'flex', alignItems: 'center', gap: 10,
-                                  padding: '8px 12px', borderRadius: 6, cursor: 'pointer',
-                                  background: allowed ? 'var(--accent-light)' : 'var(--bg-secondary)',
-                                  border: `1px solid ${allowed ? 'var(--accent)' : 'var(--border-light)'}`,
-                                }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={allowed}
-                                    onChange={e => {
-                                      const current = formPerms.allowedSheets || []
-                                      setFormPerms(p => ({
-                                        ...p,
-                                        allowedSheets: e.target.checked
-                                          ? [...current, sheet.id]
-                                          : current.filter(id => id !== sheet.id)
-                                      }))
-                                    }}
-                                    style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: 'pointer' }}
-                                  />
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: 13, fontWeight: allowed ? 700 : 400, color: allowed ? 'var(--accent-dark)' : 'var(--text-primary)' }}>
-                                      {sheet.title}
-                                    </div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                                      {sheet.id} {sheet.assignedTo ? `· ${sheet.assignedTo}` : ''}
-                                    </div>
-                                  </div>
-                                  {allowed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ Access granted</span>}
-                                </label>
-                              )
-                            })}
-                          </div>
-                          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8 }}>
-                            Checked sheets will be visible to this user when they log in. Unchecked sheets are hidden.
-                          </p>
-                        </div>
-                      )}
                     </>
                   )}
                 </div>
               )}
-            </form>
+            </div>
 
             {/* Footer */}
             <div style={{ flexShrink: 0, padding: '14px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
               {saveError && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>⚠ {saveError}</span>}
-              <button onClick={closeModal}>Cancel</button>
-              <button className="primary" onClick={saveUser}>
-                {editingUserId ? '✓ Update User' : '✓ Create User'}
+              <button onClick={closeModal} disabled={saving}>Cancel</button>
+              <button className="primary" onClick={saveUser} disabled={saving}>
+                {saving ? '⏳ Saving…' : editingUserId ? '✓ Update User' : '✓ Create User'}
               </button>
             </div>
-
           </div>
         </div>
       )}

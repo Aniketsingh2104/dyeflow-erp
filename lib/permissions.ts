@@ -1,7 +1,8 @@
 /**
  * lib/permissions.ts
  * Single source of truth for the DyeFlow permission system.
- * NOTE: No JSX here — AccessDenied component is in lib/AccessDenied.tsx
+ * Phase 11: getActiveUserRecord() now reads from session (set on login from Supabase)
+ * rather than from dyeflow_db.users localStorage blob.
  */
 
 'use client'
@@ -175,7 +176,7 @@ export function buildPermissionsFromRole(
   supervisorFilter = 'all'
 ): UserPermissions {
   const pages: Record<string, PagePerm> = {}
-  const grant = (path: string, perm: PagePerm) => { pages[path] = perm }
+  const grant     = (path: string, perm: PagePerm) => { pages[path] = perm }
   const grantGroup = (group: string, perm: PagePerm) => allPages.filter(p => p.group === group).forEach(p => grant(p.path, perm))
   const grantAll   = (perm: PagePerm) => allPages.forEach(p => grant(p.path, perm))
 
@@ -200,35 +201,49 @@ export function buildPermissionsFromRole(
 }
 
 const SESSION_KEY = 'dyeflow_session'
-const DB_KEY      = 'dyeflow_db'
 
+/**
+ * getActiveUserRecord — reads from dyeflow_session (set on login from Supabase).
+ * The session now contains the full user record including permissions.
+ * Falls back to reading dyeflow_db.users for legacy compatibility.
+ */
 export function getActiveUserRecord(): DyeflowUser | null {
   if (typeof window === 'undefined') return null
   try {
-    const session = localStorage.getItem(SESSION_KEY)
-    if (!session) return null
-    const { username } = JSON.parse(session)
-    const raw = localStorage.getItem(DB_KEY)
-    if (!raw) return null
-    const db = JSON.parse(raw)
-    const users: DyeflowUser[] = db.users || []
-    return users.find(u => u.username?.toLowerCase() === username?.toLowerCase()) || null
+    const sessionRaw = localStorage.getItem(SESSION_KEY)
+    if (!sessionRaw) return null
+    const session = JSON.parse(sessionRaw)
+    if (!session?.username) return null
+
+    // Session now carries the full user object (set by login page from Supabase /api/auth response)
+    // Shape it into DyeflowUser
+    const user: DyeflowUser = {
+      id:          session.id || session.username,
+      username:    session.username,
+      role:        session.role || 'admin',
+      permissions: session.permissions || undefined,
+      scopeMode:   session.scopeMode || 'all',
+      unit:        session.unit || '',
+      party:       session.party || '',
+    }
+    return user
   } catch { return null }
 }
 
 export function isAdminUser(user: DyeflowUser | null): boolean {
   if (!user) return false
   if (user.role === 'admin') return true
+  // Legacy: users with no role and no permissions are treated as admin
   if (!user.role && !user.permissions) return true
   return false
 }
 
 export interface PermResult {
-  canView: boolean
-  canEdit: boolean
+  canView:   boolean
+  canEdit:   boolean
   canDelete: boolean
-  isAdmin: boolean
-  loading: boolean
+  isAdmin:   boolean
+  loading:   boolean
 }
 
 export function usePermission(path: string): PermResult {
@@ -242,7 +257,7 @@ export function usePermission(path: string): PermResult {
         setResult({ canView: true, canEdit: true, canDelete: true, isAdmin: true, loading: false })
         return
       }
-      const perms = user.permissions || DEFAULT_USER_PERMISSIONS
+      const perms    = user.permissions || DEFAULT_USER_PERMISSIONS
       const pagePerm = perms.pages[path] || EMPTY_PERM
       setResult({ canView: pagePerm.view, canEdit: pagePerm.edit, canDelete: pagePerm.delete, isAdmin: false, loading: false })
     }

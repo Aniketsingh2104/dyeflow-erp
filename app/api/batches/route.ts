@@ -8,8 +8,9 @@ export async function GET(req: NextRequest) {
   const machine_id = searchParams.get('machine_id')
   const batch_id   = searchParams.get('batch_id')
   const status     = searchParams.get('status')
+  const limit      = searchParams.get('limit') || '5000'
 
-  const query: Record<string, string> = { order: 'batch_number.asc' }
+  const query: Record<string, string> = { order: 'batch_number.asc', limit }
   if (order_id)   query['order_id']   = `eq.${order_id}`
   if (machine_id) query['machine_id'] = `eq.${machine_id}`
   if (batch_id)   query['batch_id']   = `eq.${batch_id}`
@@ -17,7 +18,10 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await dbSelect('batches', query,
     'id,batch_id,order_id,machine_id,batch_number,kg,status,current_process,' +
-    'is_done,is_faulty,planned_date,actual_date,notes,created_at,updated_at,' +
+    'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
+    'date_calc_plan,dc_generated_once,dc_regenerate,' +
+    'fms_enter_at,fms_actual_dates,' +
+    'created_at,updated_at,' +
     'machines(id,name,capacity),' +
     'batch_processes(id,process_code,status,sent_at,received_at,done_at)'
   )
@@ -36,10 +40,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'order_id and batches required' }, { status: 400 })
     }
 
-    // Delete existing batches
     await dbDelete('batches', { order_id })
 
-    // Insert new batches
     const rows = batches.map((b: any, idx: number) => ({
       batch_id:     b.batch_id,
       order_id,
@@ -55,10 +57,8 @@ export async function POST(req: NextRequest) {
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-    // Update order status
     await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
 
-    // Auto-create batch_processes rows
     if (created?.length && process_route?.length) {
       const bpRows: any[] = []
       for (const batch of created) {
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
   if (action === 'update') {
     const { id, ...patch } = payload
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    const { error } = await dbUpdate('batches', { id }, patch)
+    const { error } = await dbUpdate('batches', { id }, { ...patch, updated_at: new Date().toISOString() })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })
   }

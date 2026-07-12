@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await dbSelect(
     'orders', query,
     'id,order_number,challan_no,party,article,color,shade_group,blend,' +
-    'qty_kg,status,supervisor_id,machine_id,process_route,hold_reason,' +
+    'qty_kg,status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,' +
     'hold_approval,remarks,priority,dyeing_fob,rolling_fob,' +
     'created_at,updated_at,supervisors(id,name),machines(id,name,capacity)'
   )
@@ -34,7 +34,6 @@ export async function POST(req: NextRequest) {
     const { data, error } = await dbInsert('orders', payload)
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-    // Auto-create planned_dates rows
     if (payload.process_route?.length && data?.id) {
       const rows = payload.process_route.map((code: string) => ({
         order_id: data.id, process_code: code,
@@ -59,6 +58,23 @@ export async function POST(req: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     await auditLog({ username: _user, action: 'edit', entity_type: 'order', entity_id: id })
     return NextResponse.json({ ok: true })
+  }
+
+  // ── Batch-update planned_dates for multiple orders at once ────────────────
+  if (action === 'update_planned_dates') {
+    // updates: [{ id, planned_dates: Record<string, string> }]
+    const { updates } = payload
+    if (!updates?.length) return NextResponse.json({ ok: false, error: 'updates array required' }, { status: 400 })
+
+    const errors: string[] = []
+    for (const { id, planned_dates } of updates) {
+      const { error } = await dbUpdate('orders', { id }, { planned_dates, updated_at: new Date().toISOString() })
+      if (error) errors.push(`${id}: ${error}`)
+    }
+    if (errors.length) return NextResponse.json({ ok: false, error: errors.join('; ') }, { status: 500 })
+    await auditLog({ username: _user, action: 'edit', entity_type: 'order',
+      note: `Planned dates updated for ${updates.length} orders` })
+    return NextResponse.json({ ok: true, updated: updates.length })
   }
 
   if (action === 'delete') {
