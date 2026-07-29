@@ -37,102 +37,116 @@ export default function SheetPageContent() {
 
   const inputRef    = useRef<HTMLInputElement>(null)
   const tbodyRef    = useRef<HTMLTableSectionElement>(null)
-  const saveTimerRef= useRef<NodeJS.Timeout|null>(null)
+  const saveTimerRef= useRef<Record<number, NodeJS.Timeout>>({})  // per-row debounce
   const gridRef     = useRef<HTMLDivElement>(null)
 
-  // ── Load sheet from Supabase ──────────────────────────────────────────────
+  // ── Load sheet metadata + rows from dedicated table ───────────────────────
   useEffect(() => {
     if (!sheetId) { setNotFound(true); return }
     const load = async () => {
       try {
-        const res  = await fetch(`/api/order-sheets?id=${sheetId}`, { cache: 'no-store' })
-        const data = await res.json()
-        if (!data.ok || !data.data) { setNotFound(true); return }
-        const foundSheet = data.data
+        const [sheetRes, rowsRes] = await Promise.all([
+          fetch(`/api/order-sheets?id=${sheetId}`, { cache: 'no-store' }).then(r => r.json()),
+          fetch(`/api/sheet-rows?sheet_id=${sheetId}`, { cache: 'no-store' }).then(r => r.json()),
+        ])
+
+        if (!sheetRes.ok || !sheetRes.data) { setNotFound(true); return }
+
         const sessionRaw = localStorage.getItem('dyeflow_session')
         const session    = sessionRaw ? JSON.parse(sessionRaw) : null
         const isAdmin    = !session || session.role === 'admin' || !session.permissions
         const allowedSheets: string[] = session?.permissions?.allowedSheets || []
         if (!isAdmin && !allowedSheets.includes(sheetId)) { setSheet({ __accessDenied: true }); return }
-        setSheet(foundSheet)
-        setRows(foundSheet.rows?.length ? foundSheet.rows : [createBlankRow()])
+
+        setSheet(sheetRes.data)
+
+        // If no rows yet in new table, fall back to legacy blob then bulk-migrate
+        let clientRows: any[] = rowsRes.ok ? (rowsRes.data || []) : []
+
+        if (clientRows.length === 0 && sheetRes.data.rows?.length) {
+          // Migrate legacy blob to new table
+          clientRows = sheetRes.data.rows.map((r: any, i: number) => ({ ...r, rowIndex: i, id: undefined }))
+          await fetch('/api/sheet-rows', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'bulk_upsert', sheet_id: sheetId, rows: clientRows }),
+          })
+          // Reload from table
+          const fresh = await fetch(`/api/sheet-rows?sheet_id=${sheetId}`, { cache: 'no-store' }).then(r => r.json())
+          clientRows = fresh.ok ? (fresh.data || []) : clientRows
+        }
+
+        setRows(clientRows.length ? clientRows : [createBlankRow()])
       } catch { setNotFound(true) }
     }
     load()
   }, [sheetId])
 
-  // ── Save to Supabase ──────────────────────────────────────────────────────
-  const saveSheet = useCallback(() => {
-    if (!sheet || sheet.__accessDenied) return
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(async () => {
-      setSaveStatus('Saving…')
+  // ── Save ONE row to Supabase (debounced per row) ──────────────────────────
+  // This is the key change: only the modified row is saved, not the whole sheet
+  const saveRow = useCallback((rowIndex: number, rowData: any) => {
+    if (!sheetId) return
+
+    // Clear existing debounce for this row
+    if (saveTimerRef.current[rowIndex]) clearTimeout(saveTimerRef.current[rowIndex])
+
+    setSaveStatus('Unsaved…')
+    saveTimerRef.current[rowIndex] = setTimeout(async () => {
       try {
-        const res  = await fetch('/api/order-sheets', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update_rows', id: sheet.id, rows }),
+        const res  = await fetch('/api/sheet-rows', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            action:   'upsert_row',
+            sheet_id: sheetId,
+            row:      { ...rowData, rowIndex },
+          }),
         })
         const data = await res.json()
-        if (data.ok) { setSaveStatus('Saved just now'); setTimeout(() => setSaveStatus('Saved'), 2000) }
-        else setSaveStatus('Save failed ⚠')
-      } catch { setSaveStatus('Save failed ⚠') }
-    }, 800)
-  }, [sheet, rows])
+        if (data.ok) {
+          setSaveStatus('Saved')
+          setTimeout(() => setSaveStatus('Saved'), 1000)
+        } else {
+          setSaveStatus('Save failed ⚠')
+        }
+      } catch {
+        setSaveStatus('Save failed ⚠')
+      }
+      delete saveTimerRef.current[rowIndex]
+    }, 600)
+  }, [sheetId])
 
-  useEffect(() => { if (rows.length > 0 && sheet) saveSheet() }, [rows, saveSheet])
-
-  // ── Checkbox handler — handles Submit for Approval & Request Edit ─────────
-  const handleCheckbox = (ri: number, ci: number, checked: boolean) => {
+  // ── Checkbox handler ──────────────────────────────────────────────────────
+  const handleCheckbox = useCallback((ri: number, ci: number, checked: boolean) => {
     const row = rows[ri]
     const nr  = [...rows]
 
     if (ci === 0) {
-      // SUBMIT FOR APPROVAL
-      if (checked) {
-        nr[ri] = {
-          ...row,
-          submitForApproval: true,
-          approvalStatus:    'pending',
-          submittedOn:       new Date().toISOString(),
-          receivedAt:        new Date().toISOString(),
-        }
-      } else {
-        nr[ri] = {
-          ...row,
-          submitForApproval: false,
-          approvalStatus:    'draft',
-          submittedOn:       '',
-          receivedAt:        '',
-        }
-      }
+      nr[ri] = checked
+        ? { ...row, submitForApproval: true,  approvalStatus: 'pending', submittedOn: new Date().toISOString(), receivedAt: new Date().toISOString() }
+        : { ...row, submitForApproval: false, approvalStatus: 'draft',   submittedOn: '', receivedAt: '' }
     } else if (ci === 1) {
-      // REQUEST EDIT
-      nr[ri] = {
-        ...row,
-        requestEdit:     checked,
-        editHistory:     checked ? (row.editHistory || {}) : {},
-        editRequestedOn: checked ? (row.editRequestedOn || new Date().toISOString()) : '',
-      }
+      nr[ri] = { ...row, requestEdit: checked, editHistory: checked ? (row.editHistory || {}) : {}, editRequestedOn: checked ? (row.editRequestedOn || new Date().toISOString()) : '' }
     } else {
       nr[ri] = setCellValueInRow(row, ci, checked)
     }
 
-    updateRows(nr)
-  }
+    setRows(nr)
+    saveRow(ri, nr[ri])
+  }, [rows, saveRow])
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const scrollCellIntoView = useCallback((rowIndex: number, colIndex: number) => {
     if (!gridRef.current) return
-    const container    = gridRef.current
-    const cell         = container.querySelector(`tbody tr:nth-child(${rowIndex+1}) td:nth-child(${colIndex+2})`) as HTMLElement
+    const container = gridRef.current
+    const cell = container.querySelector(`tbody tr:nth-child(${rowIndex+1}) td:nth-child(${colIndex+2})`) as HTMLElement
     if (!cell) return
     const cr = container.getBoundingClientRect(), cellR = cell.getBoundingClientRect()
     const cellTop = cellR.top - cr.top + container.scrollTop, cellBottom = cellTop + cellR.height
     const cellLeft= cellR.left- cr.left+ container.scrollLeft, cellRight = cellLeft + cellR.width
-    if (cellTop    < container.scrollTop)                    container.scrollTop  = cellTop  - 50
-    else if (cellBottom > container.scrollTop  + container.clientHeight) container.scrollTop  = cellBottom - container.clientHeight + 50
-    if (cellLeft   < container.scrollLeft)                   container.scrollLeft = cellLeft  - 50
-    else if (cellRight  > container.scrollLeft + container.clientWidth)  container.scrollLeft = cellRight  - container.clientWidth  + 50
+    if (cellTop < container.scrollTop) container.scrollTop = cellTop - 50
+    else if (cellBottom > container.scrollTop + container.clientHeight) container.scrollTop = cellBottom - container.clientHeight + 50
+    if (cellLeft < container.scrollLeft) container.scrollLeft = cellLeft - 50
+    else if (cellRight > container.scrollLeft + container.clientWidth) container.scrollLeft = cellRight - container.clientWidth + 50
   }, [])
 
   useEffect(() => {
@@ -158,10 +172,15 @@ export default function SheetPageContent() {
   }
 
   const addToUndoStack = useCallback(() => { setUndoStack(prev=>[...prev.slice(-19),rows]); setRedoStack([]) }, [rows])
-  const updateRows = useCallback((newRows: any[], addToUndo=true) => { if(addToUndo) addToUndoStack(); setRows(newRows); setSaveStatus('Unsaved changes…') }, [addToUndoStack])
 
-  const handleUndo = () => { if(!undoStack.length)return; setRedoStack(p=>[...p,rows]); setUndoStack(p=>p.slice(0,-1)); setRows(undoStack[undoStack.length-1]); setSaveStatus('Unsaved changes…') }
-  const handleRedo = () => { if(!redoStack.length)return; setUndoStack(p=>[...p,rows]); setRedoStack(p=>p.slice(0,-1)); setRows(redoStack[redoStack.length-1]); setSaveStatus('Unsaved changes…') }
+  const updateRows = useCallback((newRows: any[], changedIdx?: number) => {
+    addToUndoStack()
+    setRows(newRows)
+    if (changedIdx !== undefined) saveRow(changedIdx, newRows[changedIdx])
+  }, [addToUndoStack, saveRow])
+
+  const handleUndo = () => { if(!undoStack.length)return; setRedoStack(p=>[...p,rows]); setUndoStack(p=>p.slice(0,-1)); setRows(undoStack[undoStack.length-1]) }
+  const handleRedo = () => { if(!redoStack.length)return; setUndoStack(p=>[...p,rows]); setRedoStack(p=>p.slice(0,-1)); setRows(redoStack[redoStack.length-1]) }
 
   const handleCopy = () => {
     if (!selectedCell&&!selectedRange) return
@@ -173,8 +192,14 @@ export default function SheetPageContent() {
 
   const handleCut = () => {
     handleCopy()
-    if (selectedRange) { const nr=[...rows]; for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++) for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++) if(!isReadonlyColumn(c)&&!isRowLocked(nr[r])) nr[r]=setCellValueInRow(nr[r],c,''); updateRows(nr) }
-    else if (selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isRowLocked(rows[selectedCell.row])) { const nr=[...rows]; nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,''); updateRows(nr) }
+    if (selectedRange) {
+      const nr=[...rows]; const changed=new Set<number>()
+      for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++) for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++) if(!isReadonlyColumn(c)&&!isRowLocked(nr[r])){nr[r]=setCellValueInRow(nr[r],c,'');changed.add(r)}
+      addToUndoStack(); setRows(nr); changed.forEach(i=>saveRow(i,nr[i]))
+    } else if (selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isRowLocked(rows[selectedCell.row])) {
+      const nr=[...rows]; nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,'')
+      updateRows(nr, selectedCell.row)
+    }
   }
 
   const handlePaste = async () => {
@@ -184,23 +209,23 @@ export default function SheetPageContent() {
       const cd=text.split('\n').map(r=>r.split('\t'))
       const data=cd.length&&cd[0].length?cd:copiedData
       if(!data.length)return
-      const nr=[...rows]; let cr=selectedCell.row
-      for(const rd of data){if(cr>=rows.length)nr.push(createBlankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length&&!isReadonlyColumn(cc))nr[cr]=setCellValueInRow(nr[cr],cc,cv);cc++};cr++}
-      updateRows(nr)
+      const nr=[...rows]; let cr=selectedCell.row; const changed=new Set<number>()
+      for(const rd of data){if(cr>=rows.length)nr.push(createBlankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length&&!isReadonlyColumn(cc)){nr[cr]=setCellValueInRow(nr[cr],cc,cv)};cc++};changed.add(cr);cr++}
+      addToUndoStack(); setRows(nr); changed.forEach(i=>saveRow(i,nr[i]))
     } catch {
       if(!copiedData.length)return
-      const nr=[...rows]; let cr=selectedCell.row
-      for(const rd of copiedData){if(cr>=rows.length)nr.push(createBlankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length&&!isReadonlyColumn(cc))nr[cr]=setCellValueInRow(nr[cr],cc,cv);cc++};cr++}
-      updateRows(nr)
+      const nr=[...rows]; let cr=selectedCell.row; const changed=new Set<number>()
+      for(const rd of copiedData){if(cr>=rows.length)nr.push(createBlankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length&&!isReadonlyColumn(cc)){nr[cr]=setCellValueInRow(nr[cr],cc,cv)};cc++};changed.add(cr);cr++}
+      addToUndoStack(); setRows(nr); changed.forEach(i=>saveRow(i,nr[i]))
     }
   }
 
   const handleDeleteSelectedCells = () => {
     if (!selectedCell&&!selectedRange) return
-    const nr=[...rows]; let changed=false
-    if (selectedRange) { for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++) for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++) if(!isReadonlyColumn(c)&&!isCheckboxColumn(c)&&!isRowLocked(nr[r])){nr[r]=setCellValueInRow(nr[r],c,'');changed=true} }
-    else if (selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isCheckboxColumn(selectedCell.col)&&!isRowLocked(nr[selectedCell.row])){nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,'');changed=true}
-    if (changed) updateRows(nr)
+    const nr=[...rows]; let changed=false; const changedRows=new Set<number>()
+    if (selectedRange) { for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++) for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++) if(!isReadonlyColumn(c)&&!isCheckboxColumn(c)&&!isRowLocked(nr[r])){nr[r]=setCellValueInRow(nr[r],c,'');changed=true;changedRows.add(r)} }
+    else if (selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isCheckboxColumn(selectedCell.col)&&!isRowLocked(nr[selectedCell.row])){nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,'');changed=true;changedRows.add(selectedCell.row)}
+    if (changed) { addToUndoStack(); setRows(nr); changedRows.forEach(i=>saveRow(i,nr[i])) }
   }
 
   useEffect(() => {
@@ -212,7 +237,6 @@ export default function SheetPageContent() {
       if(e.ctrlKey&&e.key==='x'){e.preventDefault();handleCut()}
       if(e.ctrlKey&&e.key==='v'){e.preventDefault();handlePaste()}
       if(e.ctrlKey&&e.key==='f'){e.preventDefault();setShowFind(true)}
-      if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveSheet()}
       if((e.key==='Delete'||e.key==='Backspace')&&!editingCell){e.preventDefault();handleDeleteSelectedCells()}
       if(selectedCell&&e.key==='Enter'&&!editingCell){e.preventDefault();const row=rows[selectedCell.row];if(!isCheckboxColumn(selectedCell.col)&&!isReadonlyColumn(selectedCell.col)){if(isRowLocked(row)){alert('Row is locked.');return};setEditingCell({row:selectedCell.row,col:selectedCell.col});setEditValue(String(getCellValue(row,selectedCell.col)||''))}}
       if(selectedCell&&!editingCell){
@@ -228,32 +252,50 @@ export default function SheetPageContent() {
   useEffect(()=>{ if(editingCell&&inputRef.current){inputRef.current.focus();inputRef.current.select()} },[editingCell])
 
   const handleColResizeStart=(ci:number,e:React.MouseEvent)=>{ e.preventDefault();e.stopPropagation();setResizingColumn(ci);setResizeStartX(e.clientX);setResizeStartWidth(columnWidths[ci]) }
-  const handleCellMouseDown=(r:number,c:number,e:React.MouseEvent)=>{ if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setIsSelecting(true);setSelectionStart({row:r,col:c});setSelectedCell({row:r,col:c});setSelectedRange(null) }
+  const handleCellMouseDown=(r:number,c:number)=>{ if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setIsSelecting(true);setSelectionStart({row:r,col:c});setSelectedCell({row:r,col:c});setSelectedRange(null) }
   const handleCellMouseEnter=(r:number,c:number)=>{ if(!isSelecting||!selectionStart||isCheckboxColumn(c)||isReadonlyColumn(c))return;setSelectedRange({startRow:Math.min(selectionStart.row,r),startCol:Math.min(selectionStart.col,c),endRow:Math.max(selectionStart.row,r),endCol:Math.max(selectionStart.col,c)}) }
   const handleCellClick=(r:number,c:number)=>{ if(editingCell?.row===r&&editingCell?.col===c)return;if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setSelectedCell({row:r,col:c});setSelectedRange(null);setAnchorCell(null) }
   const handleCellDoubleClick=(r:number,c:number)=>{ if(isCheckboxColumn(c)||isReadonlyColumn(c))return;if(isRowLocked(rows[r])){alert('Row is locked.');return};setEditingCell({row:r,col:c});setEditValue(String(getCellValue(rows[r],c)||'')) }
 
-  const handleCellBlur=()=>{ if(!editingCell)return;const row=rows[editingCell.row];const oldVal=getCellValue(row,editingCell.col);if(oldVal===editValue){setEditingCell(null);return};const nr=[...rows];nr[editingCell.row]=setCellValueInRow(row,editingCell.col,editValue);updateRows(nr);setEditingCell(null) }
+  const handleCellBlur=()=>{
+    if(!editingCell)return
+    const row=rows[editingCell.row]; const oldVal=getCellValue(row,editingCell.col)
+    if(oldVal===editValue){setEditingCell(null);return}
+    const nr=[...rows]; nr[editingCell.row]=setCellValueInRow(row,editingCell.col,editValue)
+    addToUndoStack(); setRows(nr); saveRow(editingCell.row, nr[editingCell.row])
+    setEditingCell(null)
+  }
 
   const handleKeyDown=(e:React.KeyboardEvent)=>{
     if(!editingCell)return
-    if(e.key==='Enter'){e.preventDefault();handleCellBlur();const nr=editingCell.row+1;if(nr<rows.length){setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});if(!isRowLocked(rows[nr])&&!isReadonlyColumn(editingCell.col)){setEditingCell({row:nr,col:editingCell.col});setEditValue(String(getCellValue(rows[nr],editingCell.col)||''))}},50)}else{updateRows([...rows,createBlankRow()]);setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});setEditingCell({row:nr,col:editingCell.col});setEditValue('')},100)}}
+    if(e.key==='Enter'){e.preventDefault();handleCellBlur();const nr=editingCell.row+1;if(nr<rows.length){setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});if(!isRowLocked(rows[nr])&&!isReadonlyColumn(editingCell.col)){setEditingCell({row:nr,col:editingCell.col});setEditValue(String(getCellValue(rows[nr],editingCell.col)||''))}},50)}else{const newRows=[...rows,createBlankRow()];addToUndoStack();setRows(newRows);saveRow(nr,newRows[nr]);setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});setEditingCell({row:nr,col:editingCell.col});setEditValue('')},100)}}
     else if(e.key==='Escape'){setEditingCell(null);setEditValue('')}
     else if(e.key==='Tab'){e.preventDefault();handleCellBlur();const nc=editingCell.col+1;if(nc<SHEET_COL_HEADERS.length){setTimeout(()=>{setSelectedCell({row:editingCell.row,col:nc});if(!isReadonlyColumn(nc)&&!isCheckboxColumn(nc)){setEditingCell({row:editingCell.row,col:nc});setEditValue(String(getCellValue(rows[editingCell.row],nc)||''))}},50)}}
   }
 
-  const addRow=()=>updateRows([...rows,createBlankRow()])
-  const deleteRow=()=>{ if(!selectedCell||rows.length===1)return;if(!confirm('Delete this row?'))return;updateRows(rows.filter((_,i)=>i!==selectedCell.row));setSelectedCell(null) }
+  const addRow=()=>{
+    const newRows=[...rows,createBlankRow()]
+    const newIdx=newRows.length-1
+    addToUndoStack(); setRows(newRows); saveRow(newIdx,newRows[newIdx])
+  }
+
+  const deleteRow=()=>{
+    if(!selectedCell||rows.length===1)return
+    if(!confirm('Delete this row?'))return
+    const row=rows[selectedCell.row]
+    if(row.id){
+      fetch('/api/sheet-rows',{ method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete_row',id:row.id})}).catch(()=>{})
+    }
+    addToUndoStack(); setRows(rows.filter((_,i)=>i!==selectedCell.row)); setSelectedCell(null)
+  }
 
   const getSelectionStats=()=>{ const vals:number[]=[]; if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++){const n=parseFloat(String(getCellValue(rows[r],c)));if(!isNaN(n))vals.push(n)}}else if(selectedCell){const n=parseFloat(String(getCellValue(rows[selectedCell.row],selectedCell.col)));if(!isNaN(n))vals.push(n)};const sum=vals.reduce((a,b)=>a+b,0);return{sum,avg:vals.length?sum/vals.length:0,count:vals.length} }
   const isCellInRange=(r:number,c:number)=>!!selectedRange&&r>=selectedRange.startRow&&r<=selectedRange.endRow&&c>=selectedRange.startCol&&c<=selectedRange.endCol
-
   const stats=getSelectionStats()
 
-  // Render guards
-  if (!sheet&&!notFound) return <div className="content"><div className="card"><div style={{padding:40,textAlign:'center',color:'var(--text-tertiary)'}}>Loading spreadsheet from Supabase…</div></div></div>
+  if (!sheet&&!notFound) return <div className="content"><div className="card"><div style={{padding:40,textAlign:'center',color:'var(--text-tertiary)'}}>Loading…</div></div></div>
   if (notFound||!sheet) return <div className="content"><div className="card"><div className="empty-state">Sheet not found. <Link href="/order-sheets">Go back</Link></div></div></div>
-  if (sheet.__accessDenied) return <div className="content"><div className="card"><div style={{textAlign:'center',padding:'60px 20px'}}><div style={{fontSize:48,marginBottom:16}}>🔒</div><div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Access Denied</div><Link href="/order-sheets"><button className="primary">← Back to Sheets</button></Link></div></div></div>
+  if (sheet.__accessDenied) return <div className="content"><div className="card"><div style={{textAlign:'center',padding:'60px 20px'}}><div style={{fontSize:48,marginBottom:16}}>🔒</div><div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Access Denied</div><Link href="/order-sheets"><button className="primary">← Back</button></Link></div></div></div>
 
   return (
     <div className="content">
@@ -262,7 +304,7 @@ export default function SheetPageContent() {
           <div>
             <div className="card-title">{sheet.title}</div>
             <div style={{fontSize:12,color:'var(--text-tertiary)',marginTop:2}}>
-              Assigned To: {sheet.assigned_to||'-'} · {rows.length} rows
+              {rows.length} rows · Each row saved individually to Supabase
             </div>
           </div>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -271,7 +313,6 @@ export default function SheetPageContent() {
           </div>
         </div>
 
-        {/* Legend */}
         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8,alignItems:'center'}}>
           <span style={{fontSize:11,color:'var(--text-tertiary)'}}>Legend:</span>
           {[['#fff','Draft'],['#fff4e6','Pending'],['#f1f3f5','Approved'],['#fff8db','Edit Req'],['#e9f8ee','Accepted'],['#ffe9e9','Rejected']].map(([bg,label])=>(
@@ -279,9 +320,8 @@ export default function SheetPageContent() {
           ))}
         </div>
 
-        {/* Toolbar */}
         <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:8}}>
-          <button className="small primary" onClick={saveSheet}>Save</button>
+          <button className="small primary" onClick={()=>{/* manual save no longer needed — auto saves per row */}}>Saved ✓</button>
           <button className="small" onClick={handleUndo} disabled={!undoStack.length}>Undo</button>
           <button className="small" onClick={handleRedo} disabled={!redoStack.length}>Redo</button>
           <span style={{width:1,height:22,background:'#ddd',margin:'0 3px'}}/>
@@ -302,8 +342,7 @@ export default function SheetPageContent() {
           </div>
         )}
 
-        {/* Grid */}
-        <div ref={gridRef} style={{width:'100%',maxHeight:'calc(100vh - 320px)',overflow:'auto',border:'1px solid #ddd',borderRadius:6,background:'#fff',userSelect:'none'}}>
+        <div ref={gridRef} style={{width:'100%',maxHeight:'calc(100vh - 280px)',overflow:'auto',border:'1px solid #ddd',borderRadius:6,background:'#fff',userSelect:'none'}}>
           <table style={{borderCollapse:'separate',borderSpacing:0,tableLayout:'fixed',width:'max-content',minWidth:'max-content',fontSize:12}}>
             <thead>
               <tr>
@@ -336,14 +375,14 @@ export default function SheetPageContent() {
                     const matchFind = !!(findText&&String(value).toLowerCase().includes(findText.toLowerCase()))
                     return (
                       <td key={`${ri}-${ci}`}
-                        onMouseDown={e=>handleCellMouseDown(ri,ci,e)}
+                        onMouseDown={()=>handleCellMouseDown(ri,ci)}
                         onMouseEnter={()=>handleCellMouseEnter(ri,ci)}
                         onClick={()=>handleCellClick(ri,ci)}
                         onDoubleClick={()=>handleCellDoubleClick(ri,ci)}
                         style={{width:columnWidths[ci],minWidth:columnWidths[ci],borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',height:30,cursor:isRO?'not-allowed':isChk?'default':'cell',outline:(isSelected||isInRange)?'2px solid #137E43':'none',outlineOffset:(isSelected||isInRange)?-2:0,background:matchFind?'#fff7c2':(isSelected||isInRange)?'rgba(232,245,233,0.55)':isRO?'#f1f3f5':'inherit',color:isRO?'#5a6470':'inherit'}}>
                         {isChk ? (
                           <input type="checkbox" checked={!!value}
-                            onChange={e=>{ e.stopPropagation(); handleCheckbox(ri, ci, e.target.checked) }}
+                            onChange={e=>{ e.stopPropagation(); handleCheckbox(ri,ci,e.target.checked) }}
                             style={{margin:0,pointerEvents:'auto'}}/>
                         ) : isEditing ? (
                           <input ref={inputRef} type="text" value={editValue} onChange={e=>setEditValue(e.target.value)} onBlur={handleCellBlur} onKeyDown={handleKeyDown} style={{width:'100%',height:'100%',border:0,outline:0,padding:0,background:'transparent',font:'inherit',color:'inherit'}} autoFocus/>
@@ -359,15 +398,14 @@ export default function SheetPageContent() {
           </table>
         </div>
 
-        {/* Status bar */}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'6px 10px',border:'1px solid #ddd',borderTop:'none',borderRadius:'0 0 6px 6px',background:'#f8faf9',fontSize:12}}>
           <span>Row {selectedCell?selectedCell.row+1:1} of {rows.length} | Sum: {stats.sum.toFixed(2)} | Avg: {stats.avg.toFixed(2)} | Count: {stats.count}</span>
-          <span style={{color:'var(--text-tertiary)',fontSize:11}}>Auto-saves to Supabase</span>
+          <span style={{color:'var(--text-tertiary)',fontSize:11}}>Each row saves independently to Supabase</span>
         </div>
       </div>
     </div>
   )
 }
 
-const sth:  React.CSSProperties = { height:22, textAlign:'center', fontSize:11, fontWeight:700, color:'#2d5fa5', background:'#eef3fb', borderRight:'1px solid #e6e9ef', borderBottom:'1px solid #e6e9ef', padding:'4px 6px' }
-const sth2: React.CSSProperties = { height:26, textAlign:'left',   fontWeight:600,  color:'#1a1a18', background:'#f2f3f5', borderRight:'1px solid #e6e9ef', borderBottom:'1px solid #e6e9ef', padding:'4px 6px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }
+const sth:  React.CSSProperties = { height:22,textAlign:'center',fontSize:11,fontWeight:700,color:'#2d5fa5',background:'#eef3fb',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px' }
+const sth2: React.CSSProperties = { height:26,textAlign:'left',fontWeight:600,color:'#1a1a18',background:'#f2f3f5',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }
