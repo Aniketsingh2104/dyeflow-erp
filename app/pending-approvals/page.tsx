@@ -33,36 +33,27 @@ const fmtDate = (d?: string) => {
 
 const val = (v: any) => (v === undefined || v === null || v === '') ? '-' : String(v)
 
-// Every column from the sheet — matches exactly what's in utils.ts SHEET_COL_HEADERS
-const ALL_COLS: { label: string; key: string; bold?: boolean; numeric?: boolean; width?: number }[] = [
-  { label: 'Party',            key: 'party',          bold: true,  width: 120 },
-  { label: 'Sub Party',        key: 'subParty',                     width: 100 },
-  { label: 'Sales Person',     key: 'salesPerson',                  width: 110 },
-  { label: 'Article',          key: 'article',        bold: true,  width: 100 },
-  { label: 'Blend',            key: 'blend',                        width: 80  },
-  { label: 'Width',            key: 'width',                        width: 60  },
-  { label: 'GSM',              key: 'gsm',                          width: 60  },
-  { label: 'Color',            key: 'color',          bold: true,  width: 100 },
-  { label: 'Lab No.',          key: 'labNo',                        width: 90  },
-  { label: 'Lot No.',          key: 'lotNo',                        width: 80  },
-  { label: 'Challan No.',      key: 'challanNo',                    width: 100 },
-  { label: 'Qty (KG)',         key: 'qtyKg',          bold: true, numeric: true, width: 90 },
-  { label: 'Qty (MTR)',        key: 'qtyMtr',         numeric: true, width: 90 },
-  { label: 'No. of Taka',      key: 'noOfTa',         numeric: true, width: 90 },
-  { label: 'Type of Finish',   key: 'typeOfFinish',                 width: 120 },
-  { label: 'Type of Packing',  key: 'typeOfPacking',                width: 120 },
-  { label: 'Remarks',          key: 'remarks',                      width: 150 },
-  { label: 'Hold Reason',      key: 'holdReason',                   width: 120 },
-  { label: 'Order Number',     key: 'orderNumber',    bold: true,  width: 120 },
-  { label: 'Process',          key: 'process',                      width: 100 },
-  { label: 'Delivery Date',    key: 'deliveryDate',                 width: 100 },
-  { label: 'Current Stage',    key: 'currentStage',                 width: 110 },
-  { label: 'Approval Status',  key: 'approvalStatus', bold: true,  width: 120 },
-  { label: 'Rejection Reason', key: 'rejectionReason',              width: 140 },
-  { label: 'Submitted On',     key: 'submittedOn',                  width: 130 },
+// Only the core order detail columns — exactly what's visible in the screenshot
+const ORDER_COLS: { label: string; key: string; bold?: boolean; numeric?: boolean; width?: number }[] = [
+  { label: 'Party',           key: 'party',       bold: true,  width: 110 },
+  { label: 'Sub Party',       key: 'subParty',                 width: 100 },
+  { label: 'Sales Person',    key: 'salesPerson',              width: 110 },
+  { label: 'Article',         key: 'article',     bold: true,  width: 90  },
+  { label: 'Blend',           key: 'blend',                    width: 60  },
+  { label: 'Width',           key: 'width',                    width: 55  },
+  { label: 'GSM',             key: 'gsm',                      width: 55  },
+  { label: 'Color',           key: 'color',       bold: true,  width: 90  },
+  { label: 'Lab No.',         key: 'labNo',                    width: 90  },
+  { label: 'Lot No.',         key: 'lotNo',                    width: 80  },
+  { label: 'Challan No.',     key: 'challanNo',                width: 100 },
+  { label: 'Qty (KG)',        key: 'qtyKg',       bold: true, numeric: true, width: 85 },
+  { label: 'Qty (MTR)',       key: 'qtyMtr',      numeric: true, width: 85 },
+  { label: 'No. of Taka',     key: 'noOfTa',      numeric: true, width: 90 },
+  { label: 'Type of Finish',  key: 'typeOfFinish',             width: 120 },
+  { label: 'Type of Packing', key: 'typeOfPacking',            width: 120 },
+  { label: 'Remarks',         key: 'remarks',                  width: 140 },
 ]
 
-// Approval status badge colours
 const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
   pending:  { bg: '#FEF3C7', color: '#92400E' },
   approved: { bg: '#D1FAE5', color: '#065F46' },
@@ -104,9 +95,9 @@ export default function PendingApprovalsPage() {
     if (!confirm('Approve this row and create an order?')) return
     setSaving(true)
     try {
-      const existRes = await fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] }))
+      const existRes    = await fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] }))
       const orderNumber = genOrderNumber((existRes.data || []).map((o: any) => o.order_number))
-      const { row } = item
+      const { row }     = item
 
       const { error } = await createOrder({
         order_number:    orderNumber,
@@ -114,9 +105,9 @@ export default function PendingApprovalsPage() {
         article:         row.article         || '',
         blend:           row.blend           || '',
         color:           row.color           || '',
-        qty_kg:          parseFloat(row.qtyKg)    || 0,
-        qty_mtr:         parseFloat(row.qtyMtr)   || 0,
-        no_of_taka:      parseInt(row.noOfTa)     || 0,
+        qty_kg:          parseFloat(row.qtyKg)  || 0,
+        qty_mtr:         parseFloat(row.qtyMtr) || 0,
+        no_of_taka:      parseInt(row.noOfTa)   || 0,
         width:           row.width           || '',
         gsm:             row.gsm             || '',
         lab_no:          row.labNo           || '',
@@ -127,9 +118,6 @@ export default function PendingApprovalsPage() {
         type_of_finish:  row.typeOfFinish    || '',
         type_of_packing: row.typeOfPacking   || '',
         remarks:         row.remarks         || '',
-        hold_reason:     row.holdReason      || '',
-        delivery_date:   row.deliveryDate    || '',
-        process:         row.process         || '',
         status:          'new',
         process_route:   [],
       })
@@ -177,14 +165,12 @@ export default function PendingApprovalsPage() {
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
 
-      {/* Toast */}
       {toast && (
         <div style={{ position:'fixed', top:16, right:20, zIndex:9999, background:'#D1FAE5', border:'1px solid #6EE7B7', borderRadius:8, padding:'10px 18px', fontSize:13, fontWeight:600, color:'#065F46', boxShadow:'0 4px 12px rgba(0,0,0,0.1)' }}>
           {toast}
         </div>
       )}
 
-      {/* Header */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <span style={{ fontSize:18, fontWeight:800 }}>Pending Approvals</span>
@@ -212,75 +198,70 @@ export default function PendingApprovalsPage() {
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
               <thead style={{ position:'sticky', top:0, zIndex:10, background:'var(--bg-secondary)' }}>
                 <tr>
+                  {/* Fixed left: Sheet + Row + Status + Submitted */}
                   <th style={{ ...th, position:'sticky', left:0, zIndex:12, background:'var(--bg-secondary)' }}>SHEET</th>
-                  <th style={{ ...th }}>ROW</th>
-                  {ALL_COLS.map(c => (
-                    <th key={c.key} style={{ ...th, minWidth: c.width || 100 }}>{c.label.toUpperCase()}</th>
+                  <th style={th}>ROW</th>
+                  <th style={th}>STATUS</th>
+                  <th style={th}>SUBMITTED ON</th>
+                  {/* Order detail columns */}
+                  {ORDER_COLS.map(c => (
+                    <th key={c.key} style={{ ...th, minWidth: c.width || 90 }}>{c.label.toUpperCase()}</th>
                   ))}
+                  {/* Sticky right: Actions */}
                   <th style={{ ...th, position:'sticky', right:0, zIndex:12, background:'var(--bg-secondary)', boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((item, i) => {
                   const status = item.row.approvalStatus || 'pending'
+                  const sty    = STATUS_STYLE[status] || STATUS_STYLE.draft
                   const rowBg  = status === 'pending' ? '#FFFBEB' : i%2===0 ? 'var(--bg-primary)' : 'var(--bg-secondary)'
                   return (
                     <tr key={i} style={{ borderBottom:'1px solid var(--border-light)', background: rowBg }}>
-                      {/* Sheet name — sticky left */}
-                      <td style={{ ...td, position:'sticky', left:0, background: rowBg, zIndex:2,
+
+                      {/* Sheet — sticky left */}
+                      <td style={{ ...td, position:'sticky', left:0, zIndex:2, background: rowBg,
                         fontWeight:700, color:'var(--accent)', whiteSpace:'nowrap',
                         boxShadow:'2px 0 4px rgba(0,0,0,0.04)' }}>
                         {item.sheet.title}
                       </td>
+
                       {/* Row number */}
                       <td style={{ ...td, textAlign:'center', color:'var(--text-tertiary)', fontWeight:600 }}>
                         {item.rowIndex + 1}
                       </td>
-                      {/* All data columns */}
-                      {ALL_COLS.map(c => {
-                        const v = item.row[c.key]
-                        const display = val(v)
 
-                        // Special rendering for approvalStatus
-                        if (c.key === 'approvalStatus') {
-                          const sty = STATUS_STYLE[status] || STATUS_STYLE.draft
-                          return (
-                            <td key={c.key} style={{ ...td, whiteSpace:'nowrap' }}>
-                              <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:sty.bg, color:sty.color }}>
-                                {status.charAt(0).toUpperCase()+status.slice(1)}
-                              </span>
-                            </td>
-                          )
-                        }
+                      {/* Status badge */}
+                      <td style={{ ...td, whiteSpace:'nowrap' }}>
+                        <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:sty.bg, color:sty.color }}>
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </span>
+                      </td>
 
-                        // Special rendering for submittedOn
-                        if (c.key === 'submittedOn') {
-                          return (
-                            <td key={c.key} style={{ ...td, whiteSpace:'nowrap', fontSize:11, color:'var(--text-secondary)' }}>
-                              {fmtDate(v)}
-                            </td>
-                          )
-                        }
+                      {/* Submitted On */}
+                      <td style={{ ...td, whiteSpace:'nowrap', fontSize:11, color:'var(--text-secondary)' }}>
+                        {fmtDate(item.row.submittedOn || item.row.receivedAt)}
+                      </td>
 
-                        return (
-                          <td key={c.key} style={{ ...td,
-                            fontWeight:  c.bold ? 600 : 400,
-                            color:       c.numeric && v ? 'var(--accent-dark)' : 'var(--text-primary)',
-                            textAlign:   c.numeric ? 'right' : 'left',
-                            whiteSpace:  'nowrap',
-                            maxWidth:    c.key === 'remarks' || c.key === 'rejectionReason' ? 200 : undefined,
-                            overflow:    'hidden',
-                            textOverflow:'ellipsis',
-                          }}>
-                            {display}
-                          </td>
-                        )
-                      })}
+                      {/* Order detail columns */}
+                      {ORDER_COLS.map(c => (
+                        <td key={c.key} style={{ ...td,
+                          fontWeight:   c.bold ? 600 : 400,
+                          color:        c.numeric && item.row[c.key] ? 'var(--accent-dark)' : 'var(--text-primary)',
+                          textAlign:    c.numeric ? 'right' : 'left',
+                          whiteSpace:   'nowrap',
+                          maxWidth:     c.key === 'remarks' ? 180 : undefined,
+                          overflow:     'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>
+                          {val(item.row[c.key])}
+                        </td>
+                      ))}
+
                       {/* Actions — sticky right */}
                       <td style={{ ...td, whiteSpace:'nowrap', position:'sticky', right:0,
                         background: rowBg, zIndex:2,
-                        boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}
-                        onClick={e=>e.stopPropagation()}>
+                        boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}>
                         <button
                           style={{ padding:'5px 14px', fontSize:11, fontWeight:700, border:'none', borderRadius:6, background:'#059669', color:'#fff', cursor:'pointer', marginRight:6 }}
                           disabled={saving} onClick={()=>handleApprove(item)}>
@@ -298,6 +279,7 @@ export default function PendingApprovalsPage() {
               </tbody>
             </table>
           </div>
+
           <div style={{ padding:'8px 16px', borderTop:'1px solid var(--border-light)', fontSize:11, color:'var(--text-tertiary)', display:'flex', justifyContent:'space-between' }}>
             <span>{items.length} row{items.length!==1?'s':''} pending approval</span>
             <span>Approve creates a new order in Supabase</span>
@@ -315,7 +297,12 @@ export default function PendingApprovalsPage() {
             </div>
             <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 12px', marginBottom:14, fontSize:12 }}>
               <div><strong>Sheet:</strong> {rejectModal.sheet.title} · Row {rejectModal.rowIndex+1}</div>
-              <div style={{ marginTop:4 }}><strong>Party:</strong> {rejectModal.row.party} · <strong>Color:</strong> {rejectModal.row.color} · <strong>Qty:</strong> {rejectModal.row.qtyKg} Kg · <strong>Article:</strong> {rejectModal.row.article}</div>
+              <div style={{ marginTop:4 }}>
+                <strong>Party:</strong> {rejectModal.row.party} ·{' '}
+                <strong>Article:</strong> {rejectModal.row.article} ·{' '}
+                <strong>Color:</strong> {rejectModal.row.color} ·{' '}
+                <strong>Qty:</strong> {rejectModal.row.qtyKg} Kg
+              </div>
             </div>
             <div className="form-group" style={{ marginBottom:14 }}>
               <label>Rejection reason *</label>
