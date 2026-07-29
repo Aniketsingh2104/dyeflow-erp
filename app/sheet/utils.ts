@@ -1,22 +1,19 @@
 // Spreadsheet constants and utilities
 
-// Column headers - exactly from original ERP
 export const SHEET_COL_HEADERS = [
-  'Submit for Approval', 'Request Edit', 'Party', 'Sub Party', 'Sales Person', 
-  'Article', 'Blend', 'Width', 'GSM', 'Color', 'Lab No.', 'Lot No.', 'Challan No.', 
-  'Qty (Kg)', 'Qty (Mtr.)', 'No. of Ta', 'Type of Finish', 'Type of Packing', 
-  'Remarks', 'Hold Reason', 'Order Number', 'Process', 'Delivery Date', 
+  'Submit for Approval', 'Request Edit', 'Party', 'Sub Party', 'Sales Person',
+  'Article', 'Blend', 'Width', 'GSM', 'Color', 'Lab No.', 'Lot No.', 'Challan No.',
+  'Qty (Kg)', 'Qty (Mtr.)', 'No. of Ta', 'Type of Finish', 'Type of Packing',
+  'Remarks', 'Hold Reason', 'Order Number', 'Process', 'Delivery Date',
   'Current Stage', 'Approval Status', 'Rejection Reason', 'Sent At', 'Received At'
 ]
 
-// Column widths - exactly from original ERP
 export const SHEET_COL_WIDTH_DEFAULTS = [
-  56, 56, 150, 140, 130, 170, 115, 86, 86, 120, 
-  104, 104, 112, 96, 96, 88, 132, 132, 260, 220, 
+  56, 56, 150, 140, 130, 170, 115, 86, 86, 120,
+  104, 104, 112, 96, 96, 88, 132, 132, 260, 220,
   120, 130, 130, 130, 120, 220, 150, 150
 ]
 
-// All column keys in order
 export const SHEET_ALL_KEYS = [
   'submitForApproval', 'requestEdit', 'party', 'subParty', 'salesPerson',
   'article', 'blend', 'width', 'gsm', 'color', 'labNo', 'lotNo', 'challanNo',
@@ -25,19 +22,16 @@ export const SHEET_ALL_KEYS = [
   'approvalStatus', 'rejectionReason', 'submittedOn', 'receivedAt'
 ]
 
-// Readonly columns
+// Columns the party can never edit — set by system or admin only
 export const SHEET_READONLY_KEYS = [
-  'holdReason', 'orderNumber', 'process', 'deliveryDate', 
+  'holdReason', 'orderNumber', 'process', 'deliveryDate',
   'currentStage', 'approvalStatus', 'rejectionReason', 'submittedOn', 'receivedAt'
 ]
 
-// Numeric columns
 export const SHEET_NUMERIC_COLS = [7, 8, 13, 14, 15]
 
-// Convert column index to Excel letter
 export const toExcelColLabel = (num: number): string => {
-  let n = num + 1
-  let out = ''
+  let n = num + 1, out = ''
   while (n > 0) {
     const rem = (n - 1) % 26
     out = String.fromCharCode(65 + rem) + out
@@ -46,57 +40,78 @@ export const toExcelColLabel = (num: number): string => {
   return out || 'A'
 }
 
-// ✅ UPDATED: Create blank row - now includes rowId for tracking edited orders
 export const createBlankRow = (): any => ({
-  rowId: `ROW-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, // Unique row identifier
   party: '', subParty: '', salesPerson: '', article: '', blend: '', width: '', gsm: '',
   color: '', labNo: '', lotNo: '', challanNo: '', qtyKg: '', qtyMtr: '', noOfTa: '',
   typeOfFinish: '', typeOfPacking: '', remarks: '', holdReason: '', orderNumber: '',
   process: '', deliveryDate: '', currentStage: '', approvalStatus: 'draft',
-  rejectionReason: '', submittedOn: '', receivedAt: ''
+  rejectionReason: '', submittedOn: '', receivedAt: '',
+  submitForApproval: false, requestEdit: false, editHistory: {},
 })
 
-// Get cell value
-export const getCellValue = (row: any, colIndex: number): any => {
-  const key = SHEET_ALL_KEYS[colIndex]
-  return row[key] ?? ''
-}
+export const getCellValue = (row: any, colIndex: number): any =>
+  row[SHEET_ALL_KEYS[colIndex]] ?? ''
 
-// Set cell value
-export const setCellValueInRow = (row: any, colIndex: number, value: any): any => {
-  const key = SHEET_ALL_KEYS[colIndex]
-  return { ...row, [key]: value }
-}
+export const setCellValueInRow = (row: any, colIndex: number, value: any): any =>
+  ({ ...row, [SHEET_ALL_KEYS[colIndex]]: value })
 
-// ✅ FIXED: Get row class - now checks requestEdit checkbox!
-export const getRowClass = (row: any): string => {
-  // Priority 1: Check if "Request Edit" is ticked (yellow)
-  if (row.requestEdit) return 'sheet-row-edit-requested'
-  
-  // Priority 2: Check approval status
-  const status = row.approvalStatus
-  if (status === 'pending') return 'sheet-row-pending'
-  if (status === 'approved') return 'sheet-row-approved'
-  if (status === 'rejected') return 'sheet-row-rejected'
-  if (status === 'edit-accepted') return 'sheet-row-edit-accepted'
-  
-  // Default: draft (white)
-  return 'sheet-row-draft'
-}
+export const isReadonlyColumn = (colIndex: number): boolean =>
+  SHEET_READONLY_KEYS.includes(SHEET_ALL_KEYS[colIndex])
 
-// Check if readonly
-export const isReadonlyColumn = (colIndex: number): boolean => {
-  return SHEET_READONLY_KEYS.includes(SHEET_ALL_KEYS[colIndex])
-}
+export const isCheckboxColumn = (colIndex: number): boolean =>
+  colIndex === 0 || colIndex === 1
 
-// Check if checkbox
-export const isCheckboxColumn = (colIndex: number): boolean => {
-  return colIndex === 0 || colIndex === 1
-}
-
-// Check if row locked
+// ── isRowLocked ────────────────────────────────────────────────────────────
+//
+// Rule: requestEdit=true ALWAYS unlocks, regardless of approvalStatus.
+// This must be checked FIRST before any status check.
+//
+// Locked states (no requestEdit):
+//   pending      → waiting for admin, party cannot edit
+//   edit-request → edit submitted, waiting for admin, party cannot edit
+//   approved     → order created, locked until party requests edit
+//   edit-accepted→ edit accepted, locked until party requests edit
+//
+// Unlocked states:
+//   draft        → fresh row, freely editable
+//   rejected     → admin rejected, party must fix and resubmit
+//   any status   → when requestEdit=true (party is making an edit request)
+//
 export const isRowLocked = (row: any): boolean => {
-  if (row.approvalStatus === 'pending') return true
-  if ((row.approvalStatus === 'approved' || row.approvalStatus === 'edit-accepted') && !row.requestEdit) return true
+  // requestEdit=true always overrides — unlocks regardless of status
+  if (row.requestEdit) return false
+
+  const status = row.approvalStatus || 'draft'
+
+  // Waiting for admin decision → locked
+  if (status === 'pending')       return true
+  if (status === 'edit-request')  return true   // FIX: was missing, left edit-request rows unlocked
+
+  // Finalized states → locked (party must tick Request Edit to change)
+  if (status === 'approved')      return true
+  if (status === 'edit-accepted') return true
+
+  // draft and rejected → unlocked (party can freely edit or fix)
+  // FIX: rejected was incorrectly locked before
   return false
+}
+
+// ── getRowClass ────────────────────────────────────────────────────────────
+//
+// requestEdit=true → always yellow, regardless of underlying status.
+// This must be checked FIRST, same priority as isRowLocked.
+//
+export const getRowClass = (row: any): string => {
+  // requestEdit overrides everything → yellow
+  if (row.requestEdit) return 'sheet-row-edit-requested'
+
+  const status = row.approvalStatus || 'draft'
+
+  if (status === 'pending')        return 'sheet-row-pending'       // orange tint
+  if (status === 'approved')       return 'sheet-row-approved'      // grey
+  if (status === 'rejected')       return 'sheet-row-rejected'      // red tint
+  if (status === 'edit-request')   return 'sheet-row-edit-requested' // FIX: was missing → yellow
+  if (status === 'edit-accepted')  return 'sheet-row-edit-accepted' // green tint
+
+  return 'sheet-row-draft' // white
 }
