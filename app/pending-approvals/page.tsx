@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createOrder } from '@/lib/db'
 
 async function getSheets() {
   const res = await fetch('/api/order-sheets', { cache: 'no-store' })
@@ -12,6 +11,14 @@ async function updateSheetRows(id: string, rows: any[]) {
   const res = await fetch('/api/order-sheets', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'update_rows', id, rows }),
+  })
+  return res.json()
+}
+
+async function createOrderInSupabase(payload: Record<string, any>) {
+  const res = await fetch('/api/orders', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'create', ...payload }),
   })
   return res.json()
 }
@@ -33,25 +40,24 @@ const fmtDate = (d?: string) => {
 
 const val = (v: any) => (v === undefined || v === null || v === '') ? '-' : String(v)
 
-// Only the core order detail columns — exactly what's visible in the screenshot
 const ORDER_COLS: { label: string; key: string; bold?: boolean; numeric?: boolean; width?: number }[] = [
-  { label: 'Party',           key: 'party',       bold: true,  width: 110 },
-  { label: 'Sub Party',       key: 'subParty',                 width: 100 },
-  { label: 'Sales Person',    key: 'salesPerson',              width: 110 },
-  { label: 'Article',         key: 'article',     bold: true,  width: 90  },
-  { label: 'Blend',           key: 'blend',                    width: 60  },
-  { label: 'Width',           key: 'width',                    width: 55  },
-  { label: 'GSM',             key: 'gsm',                      width: 55  },
-  { label: 'Color',           key: 'color',       bold: true,  width: 90  },
-  { label: 'Lab No.',         key: 'labNo',                    width: 90  },
-  { label: 'Lot No.',         key: 'lotNo',                    width: 80  },
-  { label: 'Challan No.',     key: 'challanNo',                width: 100 },
-  { label: 'Qty (KG)',        key: 'qtyKg',       bold: true, numeric: true, width: 85 },
-  { label: 'Qty (MTR)',       key: 'qtyMtr',      numeric: true, width: 85 },
-  { label: 'No. of Taka',     key: 'noOfTa',      numeric: true, width: 90 },
-  { label: 'Type of Finish',  key: 'typeOfFinish',             width: 120 },
-  { label: 'Type of Packing', key: 'typeOfPacking',            width: 120 },
-  { label: 'Remarks',         key: 'remarks',                  width: 140 },
+  { label: 'Party',           key: 'party',          bold: true,  width: 110 },
+  { label: 'Sub Party',       key: 'subParty',                    width: 100 },
+  { label: 'Sales Person',    key: 'salesPerson',                 width: 110 },
+  { label: 'Article',         key: 'article',        bold: true,  width: 90  },
+  { label: 'Blend',           key: 'blend',                       width: 60  },
+  { label: 'Width',           key: 'width',                       width: 55  },
+  { label: 'GSM',             key: 'gsm',                         width: 55  },
+  { label: 'Color',           key: 'color',          bold: true,  width: 90  },
+  { label: 'Lab No.',         key: 'labNo',                       width: 90  },
+  { label: 'Lot No.',         key: 'lotNo',                       width: 80  },
+  { label: 'Challan No.',     key: 'challanNo',                   width: 100 },
+  { label: 'Qty (KG)',        key: 'qtyKg',    bold: true, numeric: true, width: 85 },
+  { label: 'Qty (MTR)',       key: 'qtyMtr',          numeric: true, width: 85 },
+  { label: 'No. of Taka',     key: 'noOfTa',          numeric: true, width: 90 },
+  { label: 'Type of Finish',  key: 'typeOfFinish',                width: 120 },
+  { label: 'Type of Packing', key: 'typeOfPacking',               width: 120 },
+  { label: 'Remarks',         key: 'remarks',                     width: 140 },
 ]
 
 const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
@@ -99,12 +105,14 @@ export default function PendingApprovalsPage() {
       const orderNumber = genOrderNumber((existRes.data || []).map((o: any) => o.order_number))
       const { row }     = item
 
-      const { error } = await createOrder({
+      // Create order using only columns that exist in the orders table
+      const result = await createOrderInSupabase({
         order_number:    orderNumber,
         party:           row.party           || '',
         article:         row.article         || '',
         blend:           row.blend           || '',
         color:           row.color           || '',
+        challan_no:      row.challanNo       || '',
         qty_kg:          parseFloat(row.qtyKg)  || 0,
         qty_mtr:         parseFloat(row.qtyMtr) || 0,
         no_of_taka:      parseInt(row.noOfTa)   || 0,
@@ -112,18 +120,19 @@ export default function PendingApprovalsPage() {
         gsm:             row.gsm             || '',
         lab_no:          row.labNo           || '',
         lot_no:          row.lotNo           || '',
-        challan_no:      row.challanNo       || '',
         sub_party:       row.subParty        || '',
         sales_person:    row.salesPerson     || '',
         type_of_finish:  row.typeOfFinish    || '',
         type_of_packing: row.typeOfPacking   || '',
+        delivery_date:   row.deliveryDate    || '',
         remarks:         row.remarks         || '',
         status:          'new',
         process_route:   [],
       })
 
-      if (error) { alert('Error creating order: ' + error); return }
+      if (!result.ok) { alert('Error creating order: ' + result.error); return }
 
+      // Update the sheet row status to approved
       const updatedRows = [...item.sheet.rows]
       updatedRows[item.rowIndex] = {
         ...row,
@@ -198,16 +207,13 @@ export default function PendingApprovalsPage() {
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
               <thead style={{ position:'sticky', top:0, zIndex:10, background:'var(--bg-secondary)' }}>
                 <tr>
-                  {/* Fixed left: Sheet + Row + Status + Submitted */}
                   <th style={{ ...th, position:'sticky', left:0, zIndex:12, background:'var(--bg-secondary)' }}>SHEET</th>
                   <th style={th}>ROW</th>
                   <th style={th}>STATUS</th>
                   <th style={th}>SUBMITTED ON</th>
-                  {/* Order detail columns */}
                   {ORDER_COLS.map(c => (
                     <th key={c.key} style={{ ...th, minWidth: c.width || 90 }}>{c.label.toUpperCase()}</th>
                   ))}
-                  {/* Sticky right: Actions */}
                   <th style={{ ...th, position:'sticky', right:0, zIndex:12, background:'var(--bg-secondary)', boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}>ACTIONS</th>
                 </tr>
               </thead>
@@ -218,32 +224,20 @@ export default function PendingApprovalsPage() {
                   const rowBg  = status === 'pending' ? '#FFFBEB' : i%2===0 ? 'var(--bg-primary)' : 'var(--bg-secondary)'
                   return (
                     <tr key={i} style={{ borderBottom:'1px solid var(--border-light)', background: rowBg }}>
-
-                      {/* Sheet — sticky left */}
-                      <td style={{ ...td, position:'sticky', left:0, zIndex:2, background: rowBg,
-                        fontWeight:700, color:'var(--accent)', whiteSpace:'nowrap',
-                        boxShadow:'2px 0 4px rgba(0,0,0,0.04)' }}>
+                      <td style={{ ...td, position:'sticky', left:0, zIndex:2, background: rowBg, fontWeight:700, color:'var(--accent)', whiteSpace:'nowrap', boxShadow:'2px 0 4px rgba(0,0,0,0.04)' }}>
                         {item.sheet.title}
                       </td>
-
-                      {/* Row number */}
                       <td style={{ ...td, textAlign:'center', color:'var(--text-tertiary)', fontWeight:600 }}>
                         {item.rowIndex + 1}
                       </td>
-
-                      {/* Status badge */}
                       <td style={{ ...td, whiteSpace:'nowrap' }}>
                         <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:sty.bg, color:sty.color }}>
                           {status.charAt(0).toUpperCase() + status.slice(1)}
                         </span>
                       </td>
-
-                      {/* Submitted On */}
                       <td style={{ ...td, whiteSpace:'nowrap', fontSize:11, color:'var(--text-secondary)' }}>
                         {fmtDate(item.row.submittedOn || item.row.receivedAt)}
                       </td>
-
-                      {/* Order detail columns */}
                       {ORDER_COLS.map(c => (
                         <td key={c.key} style={{ ...td,
                           fontWeight:   c.bold ? 600 : 400,
@@ -257,11 +251,7 @@ export default function PendingApprovalsPage() {
                           {val(item.row[c.key])}
                         </td>
                       ))}
-
-                      {/* Actions — sticky right */}
-                      <td style={{ ...td, whiteSpace:'nowrap', position:'sticky', right:0,
-                        background: rowBg, zIndex:2,
-                        boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}>
+                      <td style={{ ...td, whiteSpace:'nowrap', position:'sticky', right:0, background: rowBg, zIndex:2, boxShadow:'-2px 0 6px rgba(0,0,0,0.08)' }}>
                         <button
                           style={{ padding:'5px 14px', fontSize:11, fontWeight:700, border:'none', borderRadius:6, background:'#059669', color:'#fff', cursor:'pointer', marginRight:6 }}
                           disabled={saving} onClick={()=>handleApprove(item)}>
@@ -279,7 +269,6 @@ export default function PendingApprovalsPage() {
               </tbody>
             </table>
           </div>
-
           <div style={{ padding:'8px 16px', borderTop:'1px solid var(--border-light)', fontSize:11, color:'var(--text-tertiary)', display:'flex', justifyContent:'space-between' }}>
             <span>{items.length} row{items.length!==1?'s':''} pending approval</span>
             <span>Approve creates a new order in Supabase</span>
@@ -287,7 +276,6 @@ export default function PendingApprovalsPage() {
         </div>
       )}
 
-      {/* Reject modal */}
       {rejectModal && (
         <div className="modal-overlay" onClick={()=>setRejectModal(null)}>
           <div className="modal" style={{ maxWidth:480 }} onClick={e=>e.stopPropagation()}>

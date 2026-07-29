@@ -17,7 +17,9 @@ export async function GET(req: NextRequest) {
   const { data, error } = await dbSelect(
     'orders', query,
     'id,order_number,challan_no,party,article,color,shade_group,blend,' +
-    'qty_kg,status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,' +
+    'qty_kg,qty_mtr,no_of_taka,gsm,width,lab_no,lot_no,sub_party,sales_person,' +
+    'type_of_finish,type_of_packing,delivery_date,' +
+    'status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,' +
     'hold_approval,remarks,priority,dyeing_fob,rolling_fob,' +
     'created_at,updated_at,supervisors(id,name),machines(id,name,capacity)'
   )
@@ -60,12 +62,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
-  // ── Batch-update planned_dates for multiple orders at once ────────────────
   if (action === 'update_planned_dates') {
-    // updates: [{ id, planned_dates: Record<string, string> }]
     const { updates } = payload
     if (!updates?.length) return NextResponse.json({ ok: false, error: 'updates array required' }, { status: 400 })
-
     const errors: string[] = []
     for (const { id, planned_dates } of updates) {
       const { error } = await dbUpdate('orders', { id }, { planned_dates, updated_at: new Date().toISOString() })
@@ -87,9 +86,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'assign_supervisor') {
     const { id, supervisor_id } = payload
-    if (!id || !supervisor_id) {
-      return NextResponse.json({ ok: false, error: 'id and supervisor_id required' }, { status: 400 })
-    }
+    if (!id || !supervisor_id) return NextResponse.json({ ok: false, error: 'id and supervisor_id required' }, { status: 400 })
     const { error } = await dbUpdate('orders', { id }, { supervisor_id, status: 'assigned' })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     await auditLog({ username: _user, action: 'assign', entity_type: 'order',
@@ -99,9 +96,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'update_status') {
     const { id, status, hold_reason } = payload
-    if (!id || !status) {
-      return NextResponse.json({ ok: false, error: 'id and status required' }, { status: 400 })
-    }
+    if (!id || !status) return NextResponse.json({ ok: false, error: 'id and status required' }, { status: 400 })
     const patch: Record<string, any> = { status }
     if (hold_reason !== undefined) patch.hold_reason = hold_reason
     const { error } = await dbUpdate('orders', { id }, patch)
