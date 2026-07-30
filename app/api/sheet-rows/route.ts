@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 
-// Shape DB row → camelCase for the sheet component
 function toClient(r: any) {
   return {
     id:                r.id,
@@ -46,11 +45,12 @@ function toClient(r: any) {
   }
 }
 
-// Shape camelCase → DB columns for upsert
 function toDB(row: any, sheetId: string) {
-  return {
+  // BUG FIX: always include id when present so upsert matches by PK not just (sheet_id, row_index)
+  // BUG FIX: handle both camelCase rowIndex (client) and row_index (db round-trip)
+  const base: Record<string, any> = {
     sheet_id:            sheetId,
-    row_index:           row.rowIndex,
+    row_index:           row.rowIndex ?? row.row_index,
     party:               row.party            || null,
     sub_party:           row.subParty         || null,
     sales_person:        row.salesPerson      || null,
@@ -62,9 +62,9 @@ function toDB(row: any, sheetId: string) {
     lab_no:              row.labNo            || null,
     lot_no:              row.lotNo            || null,
     challan_no:          row.challanNo        || null,
-    qty_kg:              parseFloat(row.qtyKg)  || null,
-    qty_mtr:             parseFloat(row.qtyMtr) || null,
-    no_of_taka:          parseInt(row.noOfTa)   || null,
+    qty_kg:              row.qtyKg  !== '' && row.qtyKg  != null ? parseFloat(row.qtyKg)  : null,
+    qty_mtr:             row.qtyMtr !== '' && row.qtyMtr != null ? parseFloat(row.qtyMtr) : null,
+    no_of_taka:          row.noOfTa !== '' && row.noOfTa != null ? parseInt(row.noOfTa)   : null,
     type_of_finish:      row.typeOfFinish     || null,
     type_of_packing:     row.typeOfPacking    || null,
     remarks:             row.remarks          || null,
@@ -77,13 +77,16 @@ function toDB(row: any, sheetId: string) {
     rejection_reason:    row.rejectionReason  || null,
     submitted_on:        row.submittedOn      || null,
     received_at:         row.receivedAt       || null,
-    submit_for_approval: row.submitForApproval || false,
-    request_edit:        row.requestEdit      || false,
+    submit_for_approval: row.submitForApproval ?? false,
+    request_edit:        row.requestEdit      ?? false,
     edit_history:        row.editHistory      || {},
     edit_requested_on:   row.editRequestedOn  || null,
-    is_batch_row:        row.isBatchRow       || false,
+    is_batch_row:        row.isBatchRow       ?? false,
     updated_at:          new Date().toISOString(),
   }
+  // Include id only when we have one (existing rows) — lets PostgREST match by PK
+  if (row.id) base.id = row.id
+  return base
 }
 
 // GET /api/sheet-rows?sheet_id=X
@@ -116,15 +119,14 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action } = body
 
-  // ── Upsert one row (called on every cell change, debounced) ──────────────
+  // ── Upsert one row ────────────────────────────────────────────────────────
   if (action === 'upsert_row') {
     const { sheet_id, row } = body
-    if (!sheet_id || row?.rowIndex === undefined)
-      return NextResponse.json({ ok: false, error: 'sheet_id and row.rowIndex required' }, { status: 400 })
+    if (!sheet_id || (row?.rowIndex === undefined && row?.row_index === undefined))
+      return NextResponse.json({ ok: false, error: 'sheet_id and rowIndex required' }, { status: 400 })
 
     const dbRow = toDB(row, sheet_id)
 
-    // Use upsert (INSERT … ON CONFLICT DO UPDATE)
     const { error } = await sb('/order_sheet_rows', {
       method:  'POST',
       body:    JSON.stringify(dbRow),
@@ -134,14 +136,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
-  // ── Bulk upsert all rows at once (initial sheet save) ────────────────────
+  // ── Bulk upsert ───────────────────────────────────────────────────────────
   if (action === 'bulk_upsert') {
     const { sheet_id, rows } = body
     if (!sheet_id || !Array.isArray(rows))
       return NextResponse.json({ ok: false, error: 'sheet_id and rows[] required' }, { status: 400 })
 
-    const dbRows = rows.map((r: any, i: number) => toDB({ ...r, rowIndex: r.rowIndex ?? i }, sheet_id))
-
+    const dbRows = rows.map((r: any, i: number) =>
+      toDB({ ...r, rowIndex: r.rowIndex ?? r.row_index ?? i }, sheet_id)
+    )
     const { error } = await sb('/order_sheet_rows', {
       method:  'POST',
       body:    JSON.stringify(dbRows),
@@ -156,12 +159,8 @@ export async function POST(req: NextRequest) {
     const { sheet_id, row_index } = body
     if (!sheet_id || row_index === undefined)
       return NextResponse.json({ ok: false, error: 'sheet_id and row_index required' }, { status: 400 })
-
     const { error } = await dbInsert('order_sheet_rows', {
-      sheet_id,
-      row_index,
-      approval_status: 'draft',
-      updated_at:      new Date().toISOString(),
+      sheet_id, row_index, approval_status: 'draft', updated_at: new Date().toISOString(),
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })
@@ -184,7 +183,7 @@ export async function POST(req: NextRequest) {
     if (order_number)     patch.order_number     = order_number
     if (rejection_reason) patch.rejection_reason = rejection_reason
     if (received_at)      patch.received_at      = received_at
-    if (approval_status !== 'pending') {
+    if (approval_status !== 'pending' && approval_status !== 'edit-request') {
       patch.submit_for_approval = false
       patch.request_edit        = false
     }
