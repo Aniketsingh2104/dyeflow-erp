@@ -308,9 +308,21 @@ export default function OrdersPage() {
   const openEditModal  = (o: any) => { setSelectedOrder(o); setFormData({ ...o }); setModal('edit') }
   const openViewModal  = (o: any) => { setSelectedOrder(o); setModal('view') }
   const openAssignModal = (o: any) => { setSelectedOrder(o); setModal('assign') }
-  const openSplitModal  = (o: any) => {
+  const openSplitModal = async (o: any) => {
     setSelectedOrder(o)
-    setSplitParts([{ kg: o.qty_kg, mtr: o.qty_mtr || 0, taka: o.no_of_taka || 0 }])
+    // Fetch existing batches to calculate already-allocated qty
+    try {
+      const res = await fetch(`/api/batches?order_id=${o.id}`, { cache: 'no-store' })
+      const data = await res.json()
+      const existingBatches: any[] = data.data || []
+      const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
+      const remainingKg = Math.max(0, (parseFloat(o.qty_kg) || 0) - allocatedKg)
+      // Start with one row pre-filled with remaining qty
+      setSplitParts([{ kg: remainingKg, mtr: 0, taka: 0 }])
+    } catch {
+      // Fallback to full qty if fetch fails
+      setSplitParts([{ kg: o.qty_kg, mtr: o.qty_mtr || 0, taka: o.no_of_taka || 0 }])
+    }
     setModal('split')
   }
 
@@ -371,19 +383,30 @@ export default function OrdersPage() {
 
   const saveSplits = async () => {
     if (!selectedOrder) return
-    const totalKg   = splitParts.reduce((s, p) => s + (parseFloat(p.kg) || 0), 0)
-    const remaining = (selectedOrder.qty_kg || 0) - totalKg
-    if (Math.abs(remaining) >= 0.5 && !confirm(`Remaining ${remaining.toFixed(1)} Kg. Save anyway?`)) return
+    const totalNewKg = splitParts.reduce((s, p) => s + (parseFloat(p.kg) || 0), 0)
+    if (totalNewKg <= 0) { alert('Please enter batch quantities.'); return }
     setSaving(true)
     try {
+      // Fetch existing batches to get correct starting batch number
+      const existRes = await fetch(`/api/batches?order_id=${selectedOrder.id}`, { cache: 'no-store' })
+      const existData = await existRes.json()
+      const existingBatches: any[] = existData.data || []
+      const startIdx = existingBatches.length // new batches start after existing ones
+      const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
+      const remainingKg = Math.max(0, (parseFloat(selectedOrder.qty_kg) || 0) - allocatedKg)
+      if (totalNewKg > remainingKg + 0.5) {
+        if (!confirm(`New batches total ${totalNewKg} Kg but only ${remainingKg.toFixed(1)} Kg remaining. Save anyway?`)) {
+          setSaving(false); return
+        }
+      }
       const batches = splitParts.map((p, idx) => ({
-        batch_id:   `${selectedOrder.order_number}-B${idx + 1}`,
+        batch_id:   `${selectedOrder.order_number}-B${startIdx + idx + 1}`,
         kg:          parseFloat(p.kg) || 0,
         machine_id:  selectedOrder.machine_id || null,
       }))
       const { error } = await createSplits(selectedOrder.id, batches, selectedOrder.process_route || [])
       if (error) { alert('Error: ' + error); return }
-      showToast('✓ Batches created')
+      showToast(`✓ ${batches.length} batch${batches.length > 1 ? 'es' : ''} created`)
       setModal(null); setSelectedOrder(null); setSplitParts([]); loadAll()
     } finally { setSaving(false) }
   }
@@ -1002,7 +1025,8 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
   const upd    = (i: number, field: string, val: string) =>
     setSplitParts(p => p.map((b, j) => j === i ? { ...b, [field]: val } : b))
   const balance = () => {
-    const per = (order.qty_kg || 0) / splitParts.length
+    const total = splitParts.reduce((s, p) => s + (parseFloat(p.kg) || 0), 0) || (order.qty_kg || 0)
+    const per = total / splitParts.length
     setSplitParts(splitParts.map(() => ({ kg: per, mtr: 0, taka: 0 })))
   }
 
@@ -1015,14 +1039,14 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
         </div>
         <div style={{ background: 'var(--bg-secondary)', padding: '8px 14px', borderRadius: 8,
           marginBottom: 10, fontSize: 13, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <span><strong>Total:</strong> {order.qty_kg} Kg</span>
+          <span><strong>Order Total:</strong> {order.qty_kg} Kg</span>
           <span><strong>Article:</strong> {order.article}</span>
           <span><strong>Color:</strong> {order.color}</span>
         </div>
         <div style={{ background: ok ? 'var(--success-light)' : 'var(--danger-light)',
           color: ok ? 'var(--success)' : 'var(--danger)',
           borderRadius: 8, padding: '7px 14px', marginBottom: 10, fontSize: 13, fontWeight: 500 }}>
-          Allocated: {totalKg.toFixed(1)} Kg · Remaining: {remaining.toFixed(1)} Kg {ok ? '✓' : '⚠'}
+          This split: {totalKg.toFixed(1)} Kg · Still remaining after save: {remaining.toFixed(1)} Kg {ok ? '✓' : '⚠ (partial split)'}
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
           <thead>
