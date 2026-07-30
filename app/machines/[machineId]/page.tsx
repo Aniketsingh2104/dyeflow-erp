@@ -980,10 +980,16 @@ export default function MachinePage() {
               alignItems: 'center',
               justifyContent: 'center',
               color: 'white',
-              fontSize: '14px',
-              fontWeight: 700
+              fontSize: '13px',
+              fontWeight: 700,
+              textAlign: 'center',
+              lineHeight: 1.2,
             }}>
-              {machine.id || 'M'}
+              {(() => {
+                // Extract number from name e.g. "Long Tube Jet No. 28" → "28"
+                const match = (machine.name || '').match(/\d+$/)
+                return match ? '#' + match[0] : (machine.name || 'M').substring(0, 2).toUpperCase()
+              })()}
             </div>
             <div>
               <div style={{ fontSize: '18px', fontWeight: 700, color: '#2D3748', marginBottom: '4px' }}>
