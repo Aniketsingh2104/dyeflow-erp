@@ -429,62 +429,11 @@ export default function MachinePage() {
   }
 
   const toggleFaulty = async (batchId: string, _orderId: string, currentFaulty: boolean) => {
-    // batchId here is the UUID (b.id), not the batch_id string
     await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', id: batchId, is_faulty: !currentFaulty })
     })
     loadData()
-    if (false) { // dead code to satisfy linter
-    const db = {} as any
-    
-    for (const order of db.orders) {
-      if (order.id === orderId) {
-        const dbBatch = order.splits.find((s: any) => s.batchId === batchId)
-        if (dbBatch) {
-          dbBatch.faulty = !currentFaulty
-          
-          // If marking as faulty, add to faulty records
-          if (!currentFaulty) {
-            if (!db.faultyRecords) db.faultyRecords = []
-            
-            // Check if already exists
-            const existingRecord = db.faultyRecords.find((r: any) => r.batchId === batchId)
-            
-            if (!existingRecord) {
-              const newFaultyRecord = {
-                id: `FR${Date.now()}`,
-                batchId: batchId,
-                orderNo: order.orderNumber || '',
-                party: order.party || '',
-                faultyType: 'Process Defect',
-                quantity: parseFloat(dbBatch.kg) || 0,
-                date: new Date().toISOString().split('T')[0],
-                remarks: `Marked faulty in ${machine?.name || machineId} - ${order.processRoute?.find((p: string) => {
-                  const stored = localStorage.getItem('dyeflow_db')
-                  if (!stored) return false
-                  const db = JSON.parse(stored)
-                  const processes = db.processes || []
-                  const proc = processes.find((pr: any) => pr.code === p)
-                  return proc?.machine === machine?.name || proc?.machine === machine?.id
-                })  || 'N/A'}`,
-                status: 'open' as 'open' | 'resolved'
-              }
-              
-              db.faultyRecords.push(newFaultyRecord)
-            }
-          } else {
-            // If unmarking as faulty, update status to resolved
-            if (db.faultyRecords) {
-              const record = db.faultyRecords.find((r: any) => r.batchId === batchId)
-              if (record) {
-                record.status = 'resolved'
-                record.remarks = (record.remarks || '') + ' [Unmarked from process sheet]'
-              }
-            }
-          }
-          
-          }
   }
 
   const getNumberingReview = () => {
