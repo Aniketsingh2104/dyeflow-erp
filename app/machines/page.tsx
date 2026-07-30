@@ -183,6 +183,15 @@ export default function MachinesPage() {
                   color:      mach.status === 'running' ? 'var(--success)'       : 'var(--text-tertiary)' }}>
                   {mach.status === 'running' ? 'Running' : 'Idle'}
                 </span>
+                {/* Open machine detail page using UUID */}
+                <button
+                  onClick={() => window.location.href = `/machines/${mach.id}`}
+                  style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600,
+                    border: '1px solid var(--border-medium)', borderRadius: 6,
+                    background: 'var(--bg-primary)', color: 'var(--accent)',
+                    cursor: 'pointer' }}>
+                  Open Sheet →
+                </button>
               </div>
             </div>
 
