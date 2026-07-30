@@ -375,9 +375,8 @@ export default function MachinePage() {
           const processRoute: string[] = (b.process_route?.length ? b.process_route : null) || (o.process_route?.length ? o.process_route : null) || []
           const shadeType = getShadeTypeByColor(o.color || '')
 
-          // Find which process code in the route is assigned to THIS machine.
-          // process_machines on the order: { processCode: [machineId1, machineId2] }
-          // We look for any process whose machine list includes foundMachine.id
+          // Find which process code this machine handles using process_machines map on the order
+          // process_machines: { processCode: [machineId1, machineId2] }
           const processMachinesMap: Record<string, string[]> = o.process_machines || {}
           const machineProcessCode = (() => {
             for (const [code, machineIds] of Object.entries(processMachinesMap)) {

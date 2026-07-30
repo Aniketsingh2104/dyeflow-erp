@@ -58,16 +58,38 @@ export default function MachinesPage() {
       const orderMap: Record<string, any> = {}
       for (const o of orderList) orderMap[o.id] = o
 
+      // Process name lookup
+      const procRes = await fetch('/api/processes', { cache: 'no-store' }).then(r => r.json())
+      const procMap: Record<string, string> = {}
+      for (const p of (procRes.data || [])) procMap[p.code] = p.name || p.code
+
       // Enrich batches with order info
-      const enriched = batchList.map(b => ({
-        ...b,
-        orderNo:      orderMap[b.order_id]?.order_number || '-',
-        party:        orderMap[b.order_id]?.party        || '-',
-        article:      orderMap[b.order_id]?.article      || '-',
-        color:        orderMap[b.order_id]?.color        || '-',
-        blend:        orderMap[b.order_id]?.blend        || '',
-        processRoute: orderMap[b.order_id]?.process_route || [],
-      }))
+      const enriched = batchList.map(b => {
+        const o = orderMap[b.order_id] || {}
+        // Find which process this machine handles using process_machines map
+        const processMachinesMap: Record<string, string[]> = o.process_machines || {}
+        const machineProcessCode = (() => {
+          for (const [code, ids] of Object.entries(processMachinesMap)) {
+            if ((ids as string[]).includes(b.machine_id)) return code
+          }
+          return null
+        })()
+        const batchRoute: string[] = b.process_route?.length ? b.process_route : (o.process_route || [])
+        const displayProcess = b.current_process || machineProcessCode || batchRoute[0] || ''
+        const processName = displayProcess ? (procMap[displayProcess] || displayProcess) : '—'
+
+        return {
+          ...b,
+          orderNo:      o.order_number || '-',
+          party:        o.party        || '-',
+          article:      o.article      || '-',
+          color:        o.color        || '-',
+          blend:        o.blend        || '',
+          processRoute: batchRoute,
+          processName,
+          displayProcess,
+        }
+      })
 
       // Build per-machine data
       const data: Record<string, any> = {}
@@ -234,10 +256,12 @@ export default function MachinesPage() {
                             <td style={{ ...td, fontWeight: 500 }}>{b.article}</td>
                             <td style={{ ...td, fontWeight: 600 }}>{b.kg}</td>
                             <td style={td}>
-                              {b.current_process ? (
+                              {b.displayProcess ? (
                                 <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px',
-                                  borderRadius: 4, background: 'var(--accent)', color: '#fff' }}>
-                                  {b.current_process}
+                                  borderRadius: 4,
+                                  background: b.current_process ? 'var(--accent)' : 'var(--accent-light)',
+                                  color: b.current_process ? '#fff' : 'var(--accent)' }}>
+                                  {b.processName}
                                 </span>
                               ) : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
                             </td>
