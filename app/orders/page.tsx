@@ -322,15 +322,22 @@ export default function OrdersPage() {
     }
     setSaving(true)
     try {
+      // Strip nested join objects — PostgREST rejects 'supervisors'/'machines' as unknown columns
+      const {
+        supervisors: _s, machines: _m,
+        supervisor:  _sv, machine:  _mc,
+        ...cleanData
+      } = formData
+
       const payload = {
-        ...formData,
-        qty_kg:     parseFloat(formData.qty_kg)   || 0,
-        qty_mtr:    parseFloat(formData.qty_mtr)  || 0,
-        no_of_taka: parseInt(formData.no_of_taka) || 0,
-        status: formData.hold_approval === 'Hold' ? 'hold'
+        ...cleanData,
+        qty_kg:     parseFloat(cleanData.qty_kg)   || 0,
+        qty_mtr:    parseFloat(cleanData.qty_mtr)  || 0,
+        no_of_taka: parseInt(cleanData.no_of_taka) || 0,
+        status: cleanData.hold_approval === 'Hold' ? 'hold'
                : modal === 'new' ? 'new'
-               : formData.status,
-        process_route: formData.process_route || [],
+               : cleanData.status,
+        process_route: cleanData.process_route || [],
       }
       if (modal === 'new') {
         const { error } = await createOrder(payload)
@@ -672,9 +679,9 @@ export default function OrdersPage() {
                         )}
                         <button className="xs" onClick={() => openViewModal(order)}>View</button>
                         <button className="xs" onClick={() => openEditModal(order)}>Edit</button>
-                        {(!order.supervisor_id || order.status === 'new') && (
-                          <button className="xs primary" onClick={() => openAssignModal(order)}>Assign</button>
-                        )}
+                        <button className="xs primary" onClick={() => openAssignModal(order)}>
+                          {order.supervisor_id ? 'Re-assign' : 'Assign'}
+                        </button>
                         {order.supervisor_id && (order.process_route || []).length > 0 && (
                           <button className="xs primary" onClick={() => openSplitModal(order)}>Split</button>
                         )}
