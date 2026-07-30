@@ -299,13 +299,33 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   }
 
   // Already confirmed — show readonly
-  if (order.supervisorConfirmed) {
+  // Check both camelCase (legacy) and snake_case (Supabase API response)
+  const isConfirmed = order.supervisorConfirmed || order.supervisor_confirmed
+  const confirmedRoute = order.routeTemplateName
+    || (Array.isArray(order.process_route) && order.process_route.length ? order.process_route.join('/') : null)
+    || (Array.isArray(order.processRoute)  && order.processRoute.length  ? order.processRoute.join('/')  : null)
+    || '-'
+
+  // Get machine name from db if we have machine_id
+  const confirmedMachineName = (() => {
+    const mid = order.machine_id || order.machineId
+    if (!mid || !db) return null
+    const m = (db.machines || []).find((m: any) => m.id === mid)
+    return m?.name || null
+  })()
+
+  if (isConfirmed) {
     return (
       <div style={{ fontSize: '12px' }}>
-        <div style={{ padding: '6px 10px', background: '#D1FAE5', color: '#065F46', borderRadius: '4px', fontWeight: 600, marginBottom: '8px', display: 'inline-block' }}>
-          ✓ {order.routeTemplateName || (Array.isArray(order.processRoute) ? order.processRoute.join('/') : order.processRoute)}
+        <div style={{ padding: '6px 10px', background: '#D1FAE5', color: '#065F46', borderRadius: '4px', fontWeight: 600, marginBottom: '4px', display: 'inline-block' }}>
+          ✓ {confirmedRoute}
         </div>
-        {order.processMachines && Object.keys(order.processMachines).length > 0 && (
+        {confirmedMachineName && (
+          <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
+            Machine: {confirmedMachineName}
+          </div>
+        )}
+        {!confirmedMachineName && order.processMachines && Object.keys(order.processMachines).length > 0 && (
           <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
             Machines: {Object.entries(order.processMachines).map(([proc, machines]: [string, any]) =>
               `${proc}: ${machines[0]}`
