@@ -1,8 +1,3 @@
-/**
- * /api/sheet-rows
- * Individual row CRUD for order_sheet_rows table.
- * Each sheet row is its own DB record — no more full-blob rewrites.
- */
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 
@@ -36,21 +31,19 @@ function toClient(r: any) {
     rejectionReason:   r.rejection_reason  || '',
     submittedOn:       r.submitted_on      || '',
     receivedAt:        r.received_at       || '',
-    submitForApproval: r.submit_for_approval || false,
-    requestEdit:       r.request_edit      || false,
+    submitForApproval: r.submit_for_approval ?? false,
+    requestEdit:       r.request_edit      ?? false,
     editHistory:       r.edit_history      || {},
     editRequestedOn:   r.edit_requested_on || '',
-    isBatchRow:        r.is_batch_row      || false,
+    isBatchRow:        r.is_batch_row      ?? false,
     updatedAt:         r.updated_at,
   }
 }
 
 function toDB(row: any, sheetId: string) {
-  // BUG FIX: always include id when present so upsert matches by PK not just (sheet_id, row_index)
-  // BUG FIX: handle both camelCase rowIndex (client) and row_index (db round-trip)
-  const base: Record<string, any> = {
+  return {
     sheet_id:            sheetId,
-    row_index:           row.rowIndex ?? row.row_index,
+    row_index:           row.rowIndex ?? row.row_index ?? 0,
     party:               row.party            || null,
     sub_party:           row.subParty         || null,
     sales_person:        row.salesPerson      || null,
@@ -84,12 +77,9 @@ function toDB(row: any, sheetId: string) {
     is_batch_row:        row.isBatchRow       ?? false,
     updated_at:          new Date().toISOString(),
   }
-  // Include id only when we have one (existing rows) — lets PostgREST match by PK
-  if (row.id) base.id = row.id
-  return base
 }
 
-// GET /api/sheet-rows?sheet_id=X
+// GET /api/sheet-rows?sheet_id=X[&approval_status=Y]
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const sheet_id        = searchParams.get('sheet_id')
@@ -97,11 +87,7 @@ export async function GET(req: NextRequest) {
 
   if (!sheet_id) return NextResponse.json({ ok: false, error: 'sheet_id required' }, { status: 400 })
 
-  const query: Record<string, string> = {
-    sheet_id: `eq.${sheet_id}`,
-    order:    'row_index.asc',
-    limit:    '5000',
-  }
+  const query: Record<string, string> = { sheet_id: `eq.${sheet_id}`, order: 'row_index.asc', limit: '5000' }
   if (approval_status) query['approval_status'] = `eq.${approval_status}`
 
   const { data, error } = await dbSelect('order_sheet_rows', query,
@@ -120,19 +106,32 @@ export async function POST(req: NextRequest) {
   const { action } = body
 
   // ── Upsert one row ────────────────────────────────────────────────────────
+  // KEY FIX: if row has an id → use PATCH (update by PK, always works)
+  //          if no id         → use POST with conflict resolution (new row)
   if (action === 'upsert_row') {
     const { sheet_id, row } = body
-    if (!sheet_id || (row?.rowIndex === undefined && row?.row_index === undefined))
-      return NextResponse.json({ ok: false, error: 'sheet_id and rowIndex required' }, { status: 400 })
+    if (!sheet_id) return NextResponse.json({ ok: false, error: 'sheet_id required' }, { status: 400 })
 
     const dbRow = toDB(row, sheet_id)
 
-    const { error } = await sb('/order_sheet_rows', {
-      method:  'POST',
-      body:    JSON.stringify(dbRow),
-      headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-    })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    if (row.id) {
+      // Existing row — update by UUID primary key (most reliable)
+      const { error } = await dbUpdate('order_sheet_rows', { id: row.id }, {
+        ...dbRow,
+        // Don't overwrite sheet_id or row_index on update
+        sheet_id:  undefined,
+        row_index: undefined,
+      })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    } else {
+      // New row — insert with conflict resolution on (sheet_id, row_index)
+      const { error } = await sb('/order_sheet_rows', {
+        method:  'POST',
+        body:    JSON.stringify(dbRow),
+        headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    }
     return NextResponse.json({ ok: true })
   }
 
@@ -142,16 +141,26 @@ export async function POST(req: NextRequest) {
     if (!sheet_id || !Array.isArray(rows))
       return NextResponse.json({ ok: false, error: 'sheet_id and rows[] required' }, { status: 400 })
 
-    const dbRows = rows.map((r: any, i: number) =>
-      toDB({ ...r, rowIndex: r.rowIndex ?? r.row_index ?? i }, sheet_id)
-    )
-    const { error } = await sb('/order_sheet_rows', {
-      method:  'POST',
-      body:    JSON.stringify(dbRows),
-      headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-    })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, upserted: dbRows.length })
+    const results = await Promise.all(rows.map(async (r: any, i: number) => {
+      const dbRow = toDB({ ...r, rowIndex: r.rowIndex ?? r.row_index ?? i }, sheet_id)
+      if (r.id) {
+        // existing — patch by id
+        const { error } = await dbUpdate('order_sheet_rows', { id: r.id }, {
+          ...dbRow, sheet_id: undefined, row_index: undefined,
+        })
+        return error
+      } else {
+        // new — insert
+        const { error } = await sb('/order_sheet_rows', {
+          method: 'POST', body: JSON.stringify(dbRow),
+          headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+        })
+        return error
+      }
+    }))
+    const errors = results.filter(Boolean)
+    if (errors.length) return NextResponse.json({ ok: false, error: errors[0] }, { status: 500 })
+    return NextResponse.json({ ok: true, upserted: rows.length })
   }
 
   // ── Add blank row ─────────────────────────────────────────────────────────
