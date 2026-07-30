@@ -23,11 +23,8 @@ function buildRouteOptions(db: any, article?: string): { name: string; steps: { 
   }
 
   const seen = new Set(options.map(o => (o.steps || []).map((s: any) => s.processCode).join('/')))
-
   const processNames: Record<string, string> = {}
-  for (const p of (db.processList || [])) {
-    processNames[p.code] = p.name || p.code
-  }
+  for (const p of (db.processList || [])) processNames[p.code] = p.name || p.code
 
   const articleMap = db.articleProcessMap || {}
   const orderedArticles: string[] = []
@@ -38,7 +35,7 @@ function buildRouteOptions(db: any, article?: string): { name: string; steps: { 
 
   for (const a of orderedArticles) {
     const codes: string[] = Array.isArray(articleMap[a]) ? articleMap[a] : []
-    if (codes.length === 0) continue
+    if (!codes.length) continue
     const routeKey = codes.join('/')
     if (seen.has(routeKey)) continue
     seen.add(routeKey)
@@ -52,21 +49,74 @@ function buildRouteOptions(db: any, article?: string): { name: string; steps: { 
 }
 
 export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProps) {
-  const [db, setDb] = useState<any>(null)
-  const [routeOptions, setRouteOptions] = useState<ReturnType<typeof buildRouteOptions>>([])
+  const [db,                  setDb]                  = useState<any>(null)
+  const [routeOptions,        setRouteOptions]        = useState<ReturnType<typeof buildRouteOptions>>([])
   const [selectedTemplateIdx, setSelectedTemplateIdx] = useState<number>(-1)
-  const [machineInputs, setMachineInputs] = useState<{[key: string]: string}>({})
-  const [showMachines, setShowMachines] = useState(false)
+  const [machineInputs,       setMachineInputs]       = useState<{[key: string]: string}>({})
+  const [showMachines,        setShowMachines]        = useState(false)
 
+  // Edit-mode state
+  const [editMode,        setEditMode]        = useState(false)
+  const [batchLockStatus, setBatchLockStatus] = useState<'loading' | 'editable' | 'locked'>('loading')
+  const [lockReason,      setLockReason]      = useState('')
+
+  // ── Confirmed check (top, before db loads) ─────────────────────────────────
+  const isConfirmed = !!(order.supervisor_confirmed || order.supervisorConfirmed)
+  const confirmedRoute =
+    (Array.isArray(order.process_route) && order.process_route.length ? order.process_route.join('/') : '') ||
+    (Array.isArray(order.processRoute)  && order.processRoute.length  ? order.processRoute.join('/')  : '') ||
+    order.routeTemplateName || ''
+
+  // ── Load db (routes / machines) ────────────────────────────────────────────
   useEffect(() => { loadDb() }, [])
 
   useEffect(() => {
     if (db) {
       const opts = buildRouteOptions(db, order.article)
       setRouteOptions(opts)
-      initializeTemplate(db, opts)
+      if (!isConfirmed || editMode) initializeTemplate(db, opts)
     }
-  }, [db, order.id])
+  }, [db, order.id, editMode])
+
+  // ── Check batch lock status when confirmed ─────────────────────────────────
+  useEffect(() => {
+    if (!isConfirmed) { setBatchLockStatus('editable'); return }
+    checkBatchLock()
+  }, [order.id, isConfirmed])
+
+  const checkBatchLock = async () => {
+    setBatchLockStatus('loading')
+    try {
+      const res  = await fetch(`/api/batches?order_id=${order.id}`, { cache: 'no-store' })
+      const data = await res.json()
+      const batches: any[] = data.data || []
+
+      if (batches.length === 0) {
+        // No batches created yet — editable
+        setBatchLockStatus('editable')
+        return
+      }
+
+      // Find any batch that has started or is done
+      const lockedBatch = batches.find(b =>
+        b.is_done || b.status === 'done' || b.status === 'in-process' || b.current_process
+      )
+
+      if (lockedBatch) {
+        setBatchLockStatus('locked')
+        setLockReason(
+          lockedBatch.is_done || lockedBatch.status === 'done'
+            ? `Batch ${lockedBatch.batch_id} is completed`
+            : `Batch ${lockedBatch.batch_id} is in process`
+        )
+      } else {
+        // All batches are pending — editable
+        setBatchLockStatus('editable')
+      }
+    } catch {
+      setBatchLockStatus('editable') // default to editable on error
+    }
+  }
 
   const loadDb = async () => {
     try {
@@ -102,7 +152,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   }
 
   const initializeTemplate = (database: any, opts: ReturnType<typeof buildRouteOptions>) => {
-    if (opts.length === 0) return
+    if (!opts.length) return
     let defaultIdx = -1
 
     if (order.routeTemplateName)
@@ -118,10 +168,9 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
 
     if (defaultIdx < 0 && order.article) {
       const codes: string[] = database.articleProcessMap?.[order.article] || []
-      if (codes.length > 0) {
-        const routeKey = codes.join('/')
+      if (codes.length) {
         defaultIdx = opts.findIndex(rt =>
-          (rt.steps || []).map((s: any) => s.processCode).join('/') === routeKey
+          (rt.steps || []).map((s: any) => s.processCode).join('/') === codes.join('/')
         )
       }
     }
@@ -144,7 +193,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     const inputs: {[key: string]: string} = {}
     for (const step of machineSteps) {
       const existing = order.processMachines?.[step.processCode]?.[0] || ''
-      const smart = getSmartMachine(step.processCode, qtyKg, articleIntel, database)
+      const smart    = getSmartMachine(step.processCode, qtyKg, articleIntel, database)
       inputs[step.processCode] = existing || smart || ''
     }
     setMachineInputs(inputs)
@@ -159,23 +208,27 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   const handleConfirm = async () => {
     if (selectedTemplateIdx < 0) { alert('Please select a process route'); return }
     if (isSupervisorOrderLabRecheckBlocked(order)) {
-      alert('Lab Recheck is pending. Tick Lab Receive to enable process and machine.')
+      alert('Lab Recheck is pending. Tick Lab Receive to enable.')
       return
     }
     const rt = routeOptions[selectedTemplateIdx]
     if (!rt) return
+
     const codes = rt.steps.map((s: any) => s.processCode)
     const articleIntel = db ? getArticleIntelligence(order.article, db) : null
     const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
     let primaryMachine = ''
+
     for (const step of rt.steps) {
       if (!MACHINE_REQUIRED.includes(step.processCode)) continue
       let machine = machineInputs[step.processCode] || ''
       if (!machine && db) machine = getSmartMachine(step.processCode, qtyKg, articleIntel, db) || ''
       if (machine && !primaryMachine) primaryMachine = machine
     }
+
     const machineRecord = (db?.machines || []).find((m: any) => m.name === primaryMachine || m.id === primaryMachine)
     const machineId = machineRecord?.id || null
+
     try {
       const res = await fetch('/api/orders', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -188,70 +241,92 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       })
       const data = await res.json()
       if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return }
+      setEditMode(false)
       onUpdate()
     } catch (err: any) { alert('Network error: ' + err.message) }
   }
 
-  // ── CONFIRMED CHECK — top of render, before anything else ─────────────────
-  // Supabase returns supervisor_confirmed (snake_case); legacy used supervisorConfirmed
-  const isConfirmed = !!(order.supervisor_confirmed || order.supervisorConfirmed)
-  const confirmedRoute =
-    (Array.isArray(order.process_route) && order.process_route.length ? order.process_route.join('/') : '') ||
-    (Array.isArray(order.processRoute)  && order.processRoute.length  ? order.processRoute.join('/')  : '') ||
-    order.routeTemplateName || ''
+  // ── Render: confirmed + locked (production started) ────────────────────────
+  const machineName = (() => {
+    const mid = order.machine_id || order.machineId
+    if (!mid || !db) return null
+    return (db.machines || []).find((m: any) => m.id === mid)?.name || null
+  })()
 
-  if (isConfirmed && confirmedRoute) {
-    const machineName = (() => {
-      const mid = order.machine_id || order.machineId
-      if (!mid || !db) return null
-      return (db.machines || []).find((m: any) => m.id === mid)?.name || null
-    })()
+  if (isConfirmed && confirmedRoute && !editMode) {
     return (
       <div style={{ fontSize: '12px' }}>
-        <div style={{ padding: '5px 10px', background: '#D1FAE5', color: '#065F46', borderRadius: '4px', fontWeight: 700, display: 'inline-block', marginBottom: 2 }}>
+        {/* Confirmed view */}
+        <div style={{ padding: '5px 10px', background: '#D1FAE5', color: '#065F46', borderRadius: '4px', fontWeight: 700, display: 'inline-block', marginBottom: 4 }}>
           ✓ {confirmedRoute}
         </div>
         {machineName && (
-          <div style={{ fontSize: '11px', color: '#6B7280', marginTop: 2 }}>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginBottom: 6 }}>
             Machine: <strong>{machineName}</strong>
           </div>
         )}
-        {!machineName && !db && (
-          <div style={{ fontSize: '11px', color: '#9CA3AF', marginTop: 2 }}>Loading machine…</div>
+
+        {/* Edit / Lock state */}
+        {batchLockStatus === 'loading' && (
+          <div style={{ fontSize: '11px', color: '#9CA3AF' }}>Checking…</div>
+        )}
+        {batchLockStatus === 'editable' && (
+          <button
+            onClick={() => setEditMode(true)}
+            style={{ padding: '3px 10px', fontSize: '11px', fontWeight: 600, border: '1px solid #D97706', borderRadius: '4px', background: '#FFFBEB', color: '#92400E', cursor: 'pointer', marginTop: 2 }}>
+            ✏️ Edit Route & Machine
+          </button>
+        )}
+        {batchLockStatus === 'locked' && (
+          <div style={{ fontSize: '11px', color: '#DC2626', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+            🔒 Locked — {lockReason}
+          </div>
         )}
       </div>
     )
   }
-  // ──────────────────────────────────────────────────────────────────────────
 
+  // ── Render: loading db ──────────────────────────────────────────────────────
   if (!db) return <div style={{ padding: '8px', color: '#9CA3AF', fontSize: '12px' }}>Loading...</div>
 
+  // ── Render: lab recheck block ───────────────────────────────────────────────
   if (isSupervisorOrderLabRecheckBlocked(order)) {
-    const msg = order.inHouseLabRecheckDone
-      ? 'InHouse Lab Recheck done. Tick Lab Receive to enable process and machine.'
-      : 'Lab Recheck pending. Process and machine stopped.'
     return (
       <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B', color: '#92400E', borderRadius: '6px', padding: '10px', fontSize: '12px', fontWeight: 600 }}>
-        {msg}
+        {order.inHouseLabRecheckDone
+          ? 'InHouse Lab Recheck done. Tick Lab Receive to enable.'
+          : 'Lab Recheck pending. Process and machine stopped.'}
       </div>
     )
   }
 
+  // ── Render: no routes configured ───────────────────────────────────────────
   if (routeOptions.length === 0) {
     return (
       <div style={{ color: '#DC2626', fontSize: '12px', padding: '8px 0' }}>
         ⚠ No route templates.{' '}
-        <a href="/setup/process-machine-master" style={{ color: '#185FA5', textDecoration: 'underline' }}>
-          Configure article routes
-        </a>
+        <a href="/setup/process-machine-master" style={{ color: '#185FA5', textDecoration: 'underline' }}>Configure routes</a>
       </div>
     )
   }
 
+  // ── Render: assignment form (new OR edit mode) ──────────────────────────────
   const selectedRoute = routeOptions[selectedTemplateIdx]
 
   return (
     <div style={{ width: '100%' }}>
+      {/* Edit mode header */}
+      {editMode && (
+        <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B', borderRadius: '6px', padding: '6px 10px', marginBottom: '8px', fontSize: '11px', fontWeight: 600, color: '#92400E', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>✏️ Editing: {confirmedRoute}</span>
+          <button
+            onClick={() => { setEditMode(false); onUpdate() }}
+            style={{ fontSize: '11px', background: 'none', border: '1px solid #D97706', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer', color: '#92400E' }}>
+            Cancel
+          </button>
+        </div>
+      )}
+
       <select
         value={selectedTemplateIdx}
         onChange={e => handleTemplateChange(parseInt(e.target.value))}
@@ -259,8 +334,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         <option value="-1">-- Select Route --</option>
         {routeOptions.map((rt, idx) => {
           const codes = (rt.steps || []).map((s: any) => s.processCode).join('/')
-          const label = rt.name.startsWith(codes) ? rt.name : `${rt.name}  (${codes})`
-          return <option key={idx} value={idx}>{label}</option>
+          return <option key={idx} value={idx}>{rt.name.startsWith(codes) ? rt.name : `${rt.name}  (${codes})`}</option>
         })}
       </select>
 
@@ -270,13 +344,11 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
           {selectedRoute.steps.filter((s: any) => MACHINE_REQUIRED.includes(s.processCode)).map((step: any) => {
             const articleIntel = getArticleIntelligence(order.article, db)
             const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
-            const smartMcn = getSmartMachine(step.processCode, qtyKg, articleIntel, db)
+            const smartMcn   = getSmartMachine(step.processCode, qtyKg, articleIntel, db)
             const smartLabel = smartMcn ? getMachineDisplayNameWithQty(smartMcn, db) : ''
             return (
               <div key={step.processCode} style={{ marginBottom: '10px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#1F2937', marginBottom: '3px' }}>
-                  {step.name || step.processCode}
-                </div>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: '#1F2937', marginBottom: '3px' }}>{step.name || step.processCode}</div>
                 {smartLabel && <div style={{ fontSize: '10px', color: '#10B981', marginBottom: '4px' }}>suggest: {smartLabel}</div>}
                 <input type="text" list={`machines-${order.id}-${step.processCode}`}
                   value={machineInputs[step.processCode] || ''}
@@ -293,7 +365,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
           })}
           <button onClick={handleConfirm}
             style={{ width: '100%', padding: '6px 12px', background: '#10B981', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginTop: '6px' }}>
-            ✓ Confirm Route &amp; Machines
+            {editMode ? '✓ Update Route & Machines' : '✓ Confirm Route & Machines'}
           </button>
         </div>
       )}
@@ -301,7 +373,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       {!showMachines && selectedTemplateIdx >= 0 && (
         <button onClick={handleConfirm}
           style={{ width: '100%', padding: '6px 12px', background: '#10B981', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginTop: '6px' }}>
-          ✓ Confirm Route
+          {editMode ? '✓ Update Route' : '✓ Confirm Route'}
         </button>
       )}
     </div>
