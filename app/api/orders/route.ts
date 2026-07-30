@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
     'type_of_finish,type_of_packing,delivery_date,' +
     'status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,' +
     'hold_approval,remarks,priority,dyeing_fob,rolling_fob,' +
-    'supervisor_confirmed,supervisor_confirmed_at,' +
+    'supervisor_confirmed,supervisor_confirmed_at,process_machines,' +
     'created_at,updated_at,supervisors(id,name),machines(id,name,capacity)'
   )
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
