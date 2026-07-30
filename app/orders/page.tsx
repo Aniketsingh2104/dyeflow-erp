@@ -119,6 +119,9 @@ export default function OrdersPage() {
   const [dragIdx,      setDragIdx]      = useState<number | null>(null)
   const [dragOver,     setDragOver]     = useState<number | null>(null)
 
+  // Batch allocation map: orderId → allocated kg (to show Fully Splitted)
+  const [allocations, setAllocations] = useState<Record<string, number>>({})
+
   // Modals
   const [modal,         setModal]         = useState<string | null>(null)
   const [selectedOrder, setSelectedOrder] = useState<any>(null)
@@ -141,6 +144,18 @@ export default function OrdersPage() {
     if (machRes.data)    setMachines(machRes.data as any[])
     if (custRes.data)    setCustomers(custRes.data as any[])
     if (procRes.data)    setProcessList(procRes.data as any[])
+
+    // Load batch allocations to determine "Fully Splitted" state
+    if (ordersRes.data?.length) {
+      try {
+        const batchRes = await fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json())
+        const batchMap: Record<string, number> = {}
+        for (const b of (batchRes.data || [])) {
+          batchMap[b.order_id] = (batchMap[b.order_id] || 0) + (parseFloat(b.kg) || 0)
+        }
+        setAllocations(batchMap)
+      } catch {}
+    }
     setLoading(false)
   }, [])
 
@@ -384,6 +399,37 @@ export default function OrdersPage() {
   }
 
   // ── Save splits ────────────────────────────────────────────────────────────
+
+  // ── Full Split — one click creates single batch with full order qty ────────
+  const doFullSplit = async (order: any) => {
+    if (!order.process_route?.length) { alert('Route not assigned yet.'); return }
+    const allocatedKg = allocations[order.id] || 0
+    const remaining   = (parseFloat(order.qty_kg) || 0) - allocatedKg
+    if (remaining < 0.5) {
+      showToast('Order is already fully splitted'); return
+    }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/batches', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action:        'full_split',
+          order_id:      order.id,
+          order_number:  order.order_number,
+          qty_kg:        remaining,
+          qty_mtr:       order.qty_mtr    || 0,
+          no_of_taka:    order.no_of_taka || 0,
+          machine_id:    order.machine_id || null,
+          process_route: order.process_route || [],
+        }),
+      })
+      const data = await res.json()
+      if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return }
+      showToast(`✓ ${order.order_number} fully splitted as 1 batch`)
+      loadAll()
+    } catch (err: any) { alert('Network error: ' + err.message) }
+    finally { setSaving(false) }
+  }
 
   const saveSplits = async () => {
     if (!selectedOrder) return
@@ -711,9 +757,27 @@ export default function OrdersPage() {
                         <button className="xs primary" onClick={() => openAssignModal(order)}>
                           {order.supervisor_id ? 'Re-assign' : 'Assign'}
                         </button>
-                        {order.supervisor_id && (order.process_route || []).length > 0 && (
-                          <button className="xs primary" onClick={() => openSplitModal(order)}>Split</button>
-                        )}
+                        {order.supervisor_id && (order.process_route || []).length > 0 && (() => {
+                          const allocated = allocations[order.id] || 0
+                          const qtyKg     = parseFloat(order.qty_kg) || 0
+                          const isFull    = qtyKg > 0 && (qtyKg - allocated) < 0.5
+                          if (isFull) return (
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px',
+                              background: 'var(--success-light)', color: 'var(--success)',
+                              borderRadius: 4, border: '1px solid var(--success)', whiteSpace: 'nowrap' }}>
+                              ✅ Fully Splitted
+                            </span>
+                          )
+                          return (<>
+                            <button className="xs primary" onClick={() => openSplitModal(order)}>Split</button>
+                            <button className="xs"
+                              style={{ background: '#7C3AED', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                              onClick={() => doFullSplit(order)}
+                              disabled={saving}>
+                              ⚡ Full Split
+                            </button>
+                          </>)
+                        })()}
                       </div>
                     </td>
                   </tr>

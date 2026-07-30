@@ -166,6 +166,55 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, restored_kg: batch.kg })
     }
 
+    // ── Full split: entire order qty as one single batch ────────────────────
+    if (action === 'full_split') {
+      const { order_id, order_number, qty_kg, qty_mtr, no_of_taka, machine_id, process_route } = payload
+      if (!order_id) return NextResponse.json({ ok: false, error: 'order_id required' }, { status: 400 })
+
+      // Check if already has batches
+      const { data: existing } = await dbSelect('batches', { order_id: `eq.${order_id}`, limit: '1' }, 'id,kg')
+      if (existing?.length) {
+        return NextResponse.json({ ok: false, error: 'Order already has batches. Use Split to add more.' }, { status: 400 })
+      }
+
+      const batch = {
+        batch_id:     `${order_number}-B1`,
+        order_id,
+        machine_id:   machine_id || null,
+        batch_number: 1,
+        kg:           parseFloat(qty_kg)    || 0,
+        mtr:          parseFloat(qty_mtr)   || null,
+        taka:         parseInt(no_of_taka)  || null,
+        status:       'pending',
+        process_route: process_route || [],
+      }
+
+      const { data: created, error } = await sb<any[]>('/batches', {
+        method: 'POST', body: JSON.stringify([batch]),
+        headers: { 'Prefer': 'return=representation' },
+      })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+
+      // Update order status to splitting
+      await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
+
+      // Create batch_processes
+      if (created?.length && process_route?.length) {
+        const bpRows = process_route.map((code: string) => ({
+          batch_id: created[0].id, process_code: code, status: 'pending'
+        }))
+        await sb('/batch_processes', {
+          method: 'POST', body: JSON.stringify(bpRows),
+          headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+        })
+      }
+
+      await auditLog({ username: _user, action: 'full_split', entity_type: 'order',
+        entity_id: order_id, new_value: `1 batch · ${qty_kg}kg` })
+
+      return NextResponse.json({ ok: true, data: created })
+    }
+
     return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })
   } catch (err: any) {
     console.error('[/api/batches POST] Unexpected error:', err)
