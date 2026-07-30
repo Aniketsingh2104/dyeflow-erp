@@ -371,16 +371,24 @@ export default function MachinePage() {
         .filter((b: any) => b.machine_id === foundMachine.id)
         .map((b: any) => {
           const o = oMap[b.order_id] || {}
-          // Use batch route if non-empty, else fall back to order route ([] is truthy so must check length)
+          // Use batch route if non-empty, else fall back to order route ([] is truthy so must check .length)
           const processRoute: string[] = (b.process_route?.length ? b.process_route : null) || (o.process_route?.length ? o.process_route : null) || []
-          const currentProcess = b.current_process || processRoute[0] || ''
           const shadeType = getShadeTypeByColor(o.color || '')
 
-          // For pending batches with no current process, show first route step as "next"
-          const displayProcess = currentProcess || processRoute[0] || ''
-          const processName = displayProcess
-            ? (procMap[displayProcess] || displayProcess)
-            : '-'
+          // Find which process code in the route is assigned to THIS machine.
+          // process_machines on the order: { processCode: [machineId1, machineId2] }
+          // We look for any process whose machine list includes foundMachine.id
+          const processMachinesMap: Record<string, string[]> = o.process_machines || {}
+          const machineProcessCode = (() => {
+            for (const [code, machineIds] of Object.entries(processMachinesMap)) {
+              if ((machineIds as string[]).includes(foundMachine.id)) return code
+            }
+            return null
+          })()
+
+          // Priority: actual current_process > machine-matched process from order > first route step
+          const displayProcess = b.current_process || machineProcessCode || processRoute[0] || ''
+          const processName = displayProcess ? (procMap[displayProcess] || displayProcess) : '-'
 
           return {
             // batch fields
