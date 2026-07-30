@@ -791,7 +791,7 @@ export default function OrdersPage() {
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="small primary" onClick={() => openEditModal(selectedOrder)}>Edit</button>
                 {!selectedOrder.supervisor_id && (
-                  <button className="small primary" onClick={() => openAssignModal(selectedOrder)}>Assign</button>
+                  <button className="small primary" onClick={() => openAssignModal(selectedOrder)}>{order.supervisor_id ? 'Re-assign' : 'Assign'}</button>
                 )}
                 <button className="small" onClick={() => setModal(null)}>✕</button>
               </div>
