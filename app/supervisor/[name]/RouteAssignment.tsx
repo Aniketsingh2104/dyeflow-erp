@@ -301,6 +301,35 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     )
   }
 
+  // ── Check confirmed FIRST — before db loads, before routes build ─────────
+  // order comes from Supabase with snake_case fields
+  const isConfirmed = !!(order.supervisor_confirmed || order.supervisorConfirmed)
+  const confirmedRoute =
+    (Array.isArray(order.process_route) && order.process_route.length ? order.process_route.join('/') : null) ||
+    (Array.isArray(order.processRoute)  && order.processRoute.length  ? order.processRoute.join('/')  : null) ||
+    order.routeTemplateName || ''
+
+  if (isConfirmed && confirmedRoute) {
+    // Show confirmed view — db may still be loading, look up machine name once available
+    const machineName = (() => {
+      const mid = order.machine_id || order.machineId
+      if (!mid || !db) return null
+      return (db.machines || []).find((m: any) => m.id === mid)?.name || null
+    })()
+    return (
+      <div style={{ fontSize: '12px' }}>
+        <div style={{ padding: '5px 10px', background: '#D1FAE5', color: '#065F46', borderRadius: '4px', fontWeight: 700, display: 'inline-block', marginBottom: 2 }}>
+          ✓ {confirmedRoute}
+        </div>
+        {machineName && (
+          <div style={{ fontSize: '11px', color: '#6B7280', marginTop: 2 }}>
+            Machine: <strong>{machineName}</strong>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   if (!db) return <div style={{ padding: '8px', color: '#9CA3AF', fontSize: '12px' }}>Loading...</div>
 
   // Lab recheck blocking
