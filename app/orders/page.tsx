@@ -310,17 +310,21 @@ export default function OrdersPage() {
   const openAssignModal = (o: any) => { setSelectedOrder(o); setModal('assign') }
   const openSplitModal = async (o: any) => {
     setSelectedOrder(o)
-    // Fetch existing batches to calculate already-allocated qty
     try {
       const res = await fetch(`/api/batches?order_id=${o.id}`, { cache: 'no-store' })
       const data = await res.json()
       const existingBatches: any[] = data.data || []
-      const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
-      const remainingKg = Math.max(0, (parseFloat(o.qty_kg) || 0) - allocatedKg)
-      // Start with one row pre-filled with remaining qty
-      setSplitParts([{ kg: remainingKg, mtr: 0, taka: 0 }])
+      const allocatedKg  = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
+      const totalKg      = parseFloat(o.qty_kg)    || 0
+      const totalMtr     = parseFloat(o.qty_mtr)   || 0
+      const totalTaka    = parseInt(o.no_of_taka)  || 0
+      const remainingKg  = Math.max(0, totalKg - allocatedKg)
+      // Calculate proportional mtr and taka for the remaining qty
+      const ratio        = totalKg > 0 ? remainingKg / totalKg : 0
+      const remainingMtr = Math.round(totalMtr  * ratio)
+      const remainingTaka= Math.round(totalTaka * ratio)
+      setSplitParts([{ kg: remainingKg, mtr: remainingMtr, taka: remainingTaka }])
     } catch {
-      // Fallback to full qty if fetch fails
       setSplitParts([{ kg: o.qty_kg, mtr: o.qty_mtr || 0, taka: o.no_of_taka || 0 }])
     }
     setModal('split')
@@ -401,7 +405,9 @@ export default function OrdersPage() {
       }
       const batches = splitParts.map((p, idx) => ({
         batch_id:   `${selectedOrder.order_number}-B${startIdx + idx + 1}`,
-        kg:          parseFloat(p.kg) || 0,
+        kg:          parseFloat(p.kg)  || 0,
+        mtr:         parseFloat(p.mtr) || 0,
+        taka:        parseInt(p.taka)  || 0,
         machine_id:  selectedOrder.machine_id || null,
       }))
       const { error } = await createSplits(selectedOrder.id, batches, selectedOrder.process_route || [])
