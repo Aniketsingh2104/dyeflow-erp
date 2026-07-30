@@ -385,8 +385,11 @@ export default function MachinePage() {
             return null
           })()
 
-          // Priority: actual current_process > machine-matched process from order > first route step
-          const displayProcess = b.current_process || machineProcessCode || processRoute[0] || ''
+          // Priority: actual current_process > machine-matched process from order
+          // > first MACHINE_REQUIRED step in route (never fallback to non-machine steps like CBR)
+          const MACHINE_REQUIRED = ['S', 'D', 'S2', 'Add', 'Lev', 'Fix', 'Wash', 'Rc']
+          const firstMachineStep = processRoute.find((c: string) => MACHINE_REQUIRED.includes(c)) || ''
+          const displayProcess = b.current_process || machineProcessCode || firstMachineStep
           const processName = displayProcess ? (procMap[displayProcess] || displayProcess) : '-'
 
           return {

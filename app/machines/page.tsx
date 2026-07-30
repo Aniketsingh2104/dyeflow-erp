@@ -75,7 +75,9 @@ export default function MachinesPage() {
           return null
         })()
         const batchRoute: string[] = b.process_route?.length ? b.process_route : (o.process_route || [])
-        const displayProcess = b.current_process || machineProcessCode || batchRoute[0] || ''
+        const MACHINE_REQUIRED = ['S', 'D', 'S2', 'Add', 'Lev', 'Fix', 'Wash', 'Rc']
+        const firstMachineStep = batchRoute.find((c: string) => MACHINE_REQUIRED.includes(c)) || ''
+        const displayProcess = b.current_process || machineProcessCode || firstMachineStep
         const processName = displayProcess ? (procMap[displayProcess] || displayProcess) : '—'
 
         return {
