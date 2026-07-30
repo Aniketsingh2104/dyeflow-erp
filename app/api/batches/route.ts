@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     if (status)     query['status']     = `eq.${status}`
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,order_id,machine_id,batch_number,kg,status,current_process,' +
+      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,' +
       'fms_enter_at,fms_actual_dates,' +
