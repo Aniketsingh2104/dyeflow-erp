@@ -52,14 +52,15 @@ export async function POST(req: NextRequest) {
       await dbDelete('batches', { order_id })
 
       const rows = batches.map((b: any, idx: number) => ({
-        batch_id:     b.batch_id,
+        batch_id:      b.batch_id,
         order_id,
-        machine_id:   b.machine_id || null,
-        batch_number: idx + 1,
-        kg:           b.kg,
-        mtr:          b.mtr  || null,
-        taka:         b.taka || null,
-        status:       'pending',
+        machine_id:    b.machine_id || null,
+        batch_number:  idx + 1,
+        kg:            b.kg,
+        mtr:           b.mtr  || null,
+        taka:          b.taka || null,
+        status:        'pending',
+        process_route: process_route || [],  // save route on batch so machine page shows correct process
       }))
 
       const { data: created, error } = await sb<any[]>('/batches', {
