@@ -375,6 +375,12 @@ export default function MachinePage() {
           const currentProcess = b.current_process || processRoute[0] || ''
           const shadeType = getShadeTypeByColor(o.color || '')
 
+          // For pending batches with no current process, show first route step as "next"
+          const displayProcess = currentProcess || processRoute[0] || ''
+          const processName = displayProcess
+            ? (procMap[displayProcess] || displayProcess)
+            : '-'
+
           return {
             // batch fields
             batchId:       b.batch_id,
@@ -383,7 +389,7 @@ export default function MachinePage() {
             mtr:           b.mtr,
             taka:          b.taka,
             status:        b.status || 'pending',
-            currentProcess,
+            currentProcess: displayProcess,
             planNumber:    b.date_calc_plan?.planNumber || null,
             faulty:        b.is_faulty || false,
             orderId:       b.order_id,
@@ -405,7 +411,7 @@ export default function MachinePage() {
             typeOfPacking: o.type_of_packing || '-',
             remarks:       o.remarks        || '',
             supervisor:    o.supervisors?.name || '-',
-            processName:   procMap[currentProcess] || currentProcess,
+            processName,
             plannedDate:   '',
             shadeType,
             shadeMasterType: shadeType,
