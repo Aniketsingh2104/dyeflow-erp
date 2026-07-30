@@ -57,7 +57,7 @@ export default function Navigation() {
       setMachines(
         machineList.map((m: any) => ({
           name: m.name,
-          path: `/machines/${(m.name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`,
+          path: `/machines/${m.id}`,   // use UUID, not name slug
         }))
       )
 
