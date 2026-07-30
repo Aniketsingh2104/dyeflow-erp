@@ -27,7 +27,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   const [resizing, setResizing] = useState<{ columnId: string; startX: number; startWidth: number } | null>(null)
   const [filters, setFilters] = useState<{ [key: string]: string }>({})
 
-  useEffect(() => { loadData() }, [decodedSlug]) // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it
+  useEffect(() => { loadData() }, [decodedSlug]) // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it
 
   useEffect(() => {
     if (decodedSlug) {
