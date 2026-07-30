@@ -27,7 +27,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   const [resizing, setResizing] = useState<{ columnId: string; startX: number; startWidth: number } | null>(null)
   const [filters, setFilters] = useState<{ [key: string]: string }>({})
 
-  useEffect(() => { loadData() }, [decodedSlug]) // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it
+  useEffect(() => { loadData() }, [decodedSlug]) // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it
 
   useEffect(() => {
     if (decodedSlug) {
@@ -109,7 +109,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
 
       setOrders(mappedOrders)
       const inbox = mappedOrders.filter((o: any) =>
-        o.status === 'assigned' || o.status === 'new'
+        o.status !== 'done' && o.status !== 'cancelled'
       ).length
 
       // Faulty batches
@@ -286,7 +286,11 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     }
   }
 
-  const getInboxOrders = () => orders.filter(o => o.status === 'assigned')
+  // Show all orders that still need supervisor attention
+  // Remove only when done or cancelled
+  const getInboxOrders = () => orders.filter(o =>
+    o.status !== 'done' && o.status !== 'cancelled'
+  )
 
   const getCurrentTabData = useMemo(() => {
     let data: any[] = []
