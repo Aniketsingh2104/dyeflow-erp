@@ -371,7 +371,8 @@ export default function MachinePage() {
         .filter((b: any) => b.machine_id === foundMachine.id)
         .map((b: any) => {
           const o = oMap[b.order_id] || {}
-          const processRoute: string[] = b.process_route || o.process_route || []
+          // Use batch route if non-empty, else fall back to order route ([] is truthy so must check length)
+          const processRoute: string[] = (b.process_route?.length ? b.process_route : null) || (o.process_route?.length ? o.process_route : null) || []
           const currentProcess = b.current_process || processRoute[0] || ''
           const shadeType = getShadeTypeByColor(o.color || '')
 
