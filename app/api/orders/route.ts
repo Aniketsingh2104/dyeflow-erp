@@ -27,13 +27,50 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, data })
 }
 
+// ── Auto-assign supervisor from article_supervisor_map ──────────────────────
+// article_supervisor_map.supervisor stores the NAME; we resolve to UUID here
+async function lookupSupervisor(article: string): Promise<string | null> {
+  if (!article) return null
+  try {
+    const { data: mapRows } = await dbSelect(
+      'article_supervisor_map',
+      { article: `eq.${article}`, limit: '1' },
+      'supervisor'
+    )
+    const supervisorName = mapRows?.[0]?.supervisor
+    if (!supervisorName) return null
+
+    const { data: supRows } = await dbSelect(
+      'supervisors',
+      { name: `eq.${supervisorName}`, limit: '1' },
+      'id'
+    )
+    return supRows?.[0]?.id || null
+  } catch {
+    return null
+  }
+}
+
 // POST /api/orders
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action, _user, ...payload } = body
 
   if (action === 'create') {
-    const { data, error } = await dbInsert('orders', payload)
+    // Auto-assign supervisor if not already provided
+    let supervisorId: string | null = payload.supervisor_id || null
+    if (!supervisorId && payload.article) {
+      supervisorId = await lookupSupervisor(payload.article)
+    }
+
+    const insertPayload = {
+      ...payload,
+      supervisor_id: supervisorId || null,
+      // Auto-set to 'assigned' if supervisor found, else keep 'new'
+      status: supervisorId ? 'assigned' : (payload.status || 'new'),
+    }
+
+    const { data, error } = await dbInsert('orders', insertPayload)
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
     if (payload.process_route?.length && data?.id) {
@@ -46,9 +83,11 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    await auditLog({ username: _user, action: 'create', entity_type: 'order',
+    await auditLog({
+      username: _user, action: 'create', entity_type: 'order',
       entity_id: data?.order_number,
-      new_value: `${payload.party} · ${payload.article} · ${payload.qty_kg}kg` })
+      new_value: `${payload.party} · ${payload.article} · ${payload.qty_kg}kg · supervisor: ${supervisorId || 'none'}`,
+    })
 
     return NextResponse.json({ ok: true, data })
   }
