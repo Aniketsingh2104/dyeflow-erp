@@ -448,9 +448,14 @@ export default function MachinePage() {
   const updatePlanNumber = async (batchUUID: string, _orderId: string, value: string) => {
     const n = parseInt(value, 10)
     const planNum = (!n || n < 1) ? null : n
+    // Also calculate and save plannedDate when number is entered manually
+    const plannedDate = planNum ? getPlannedDateByNumber(planNum, new Date().toISOString().slice(0,10), machine?.id) : null
     await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', id: batchUUID, date_calc_plan: planNum ? { planNumber: planNum } : null })
+      body: JSON.stringify({
+        action: 'update', id: batchUUID,
+        date_calc_plan: planNum ? { planNumber: planNum, plannedDate } : null
+      })
     })
     loadData()
   }
@@ -734,16 +739,35 @@ export default function MachinePage() {
   }
 
   const runNumbering = () => {
-    // Get all unnumbered batches
     const unnumbered = batches.filter(b => !b.planNumber && b.status !== 'done')
-    
-    if (unnumbered.length === 0) {
-      alert('No batches to number')
-      return
+    if (unnumbered.length === 0) { alert('No batches to number'); return }
+
+    // Sort by shade type (Light → Medium → Dark → Extra Dark) before opening modal
+    // This ensures Run Numbering assigns numbers in shade sequence
+    const maxExisting = Math.max(0, ...batches.map(b => b.planNumber || 0))
+    const lastNumberedBatch = batches.find(b => b.planNumber === maxExisting)
+    const lastShadeRank = lastNumberedBatch ? getShadeTypeRank(lastNumberedBatch.color) : 1
+    const shadeCycle = [1, 2, 3, 4]
+    const circularWeight = (rank: number) => {
+      if (!shadeCycle.includes(rank)) return 99
+      const startIdx = Math.max(0, shadeCycle.indexOf(lastShadeRank))
+      const idx = shadeCycle.indexOf(rank)
+      return (idx - startIdx + shadeCycle.length) % shadeCycle.length
     }
 
-    // Open collaboration modal with unnumbered batches
-    setCollabBatches(unnumbered)
+    const sorted = [...unnumbered].sort((a, b) => {
+      // Primary: shade sequence (circular from last numbered shade)
+      const shadeDiff = circularWeight(getShadeTypeRank(a.color)) - circularWeight(getShadeTypeRank(b.color))
+      if (shadeDiff !== 0) return shadeDiff
+      // Secondary: same shade → group by process (SCQ before Dyeing within same shade)
+      const procA = a.currentProcess || ''
+      const procB = b.currentProcess || ''
+      if (procA !== procB) return procA.localeCompare(procB)
+      // Tertiary: by batch id
+      return (a.batchId || '').localeCompare(b.batchId || '')
+    })
+
+    setCollabBatches(sorted)
     setShowCollabModal(true)
   }
 
