@@ -1269,7 +1269,22 @@ export default function MachinePage() {
                               type="number"
                               min="1"
                               value={batch.planNumber || ''}
+                              data-plan-idx={idx}
                               onChange={(e) => updatePlanNumber(batch.id, batch.orderId, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  // Find next plan number input by data-plan-idx
+                                  const nextIdx = idx + 1
+                                  const nextInput = document.querySelector<HTMLInputElement>(
+                                    `input[data-plan-idx="${nextIdx}"]`
+                                  )
+                                  if (nextInput) {
+                                    nextInput.focus()
+                                    nextInput.select()
+                                  }
+                                }
+                              }}
                               placeholder="-"
                               style={{
                                 width: '100%',
