@@ -445,16 +445,34 @@ export default function MachinePage() {
     }
   }
 
-  const updatePlanNumber = async (batchUUID: string, _orderId: string, value: string) => {
+  const updatePlanNumber = async (batchUUID: string, processCode: string, value: string, existingPlan: any) => {
     const n = parseInt(value, 10)
     const planNum = (!n || n < 1) ? null : n
-    // Also calculate and save plannedDate when number is entered manually
-    const plannedDate = planNum ? getPlannedDateByNumber(planNum, new Date().toISOString().slice(0,10), machine?.id) : null
+
+    // Build per-process plan: merge into existing byProcess map
+    const byProcess = { ...(existingPlan?.byProcess || {}) }
+    if (planNum) {
+      byProcess[processCode] = planNum
+    } else {
+      delete byProcess[processCode]
+    }
+
+    // Planned date based on this process's number
+    const plannedDate = planNum
+      ? getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), machine?.id)
+      : (existingPlan?.plannedDate || null)
+
+    // Primary planNumber = min across all assigned processes (earliest process runs first)
+    const allNums = Object.values(byProcess) as number[]
+    const primaryPlan = allNums.length > 0 ? Math.min(...allNums) : null
+
     await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'update', id: batchUUID,
-        date_calc_plan: planNum ? { planNumber: planNum, plannedDate } : null
+        date_calc_plan: primaryPlan
+          ? { planNumber: primaryPlan, byProcess, plannedDate }
+          : null
       })
     })
     loadData()
@@ -1270,7 +1288,7 @@ export default function MachinePage() {
                               min="1"
                               value={batch.planNumber || ''}
                               data-plan-idx={idx}
-                              onChange={(e) => updatePlanNumber(batch.id, batch.orderId, e.target.value)}
+                              onChange={(e) => updatePlanNumber(batch.id, batch.currentProcess, e.target.value, batch.date_calc_plan_raw)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
                                   e.preventDefault()
