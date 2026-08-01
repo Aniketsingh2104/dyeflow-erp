@@ -409,7 +409,9 @@ export default function MachinePage() {
             taka:           b.taka,
             status:         b.status || 'pending',
             currentProcess: displayProcess,
-            planNumber:     b.date_calc_plan?.planNumber || null,
+            planNumber:     b.date_calc_plan?.byProcess?.[displayProcess] ?? b.date_calc_plan?.planNumber ?? null,
+            plannedDate_db: b.date_calc_plan?.plannedDate || '',
+            date_calc_plan_raw: b.date_calc_plan || null,
             faulty:         b.is_faulty || false,
             orderId:        b.order_id,
             processRoute,
@@ -430,7 +432,7 @@ export default function MachinePage() {
             remarks:        o.remarks        || '',
             supervisor:     o.supervisors?.name || '-',
             processName,
-            plannedDate:    '',
+            plannedDate:    b.date_calc_plan?.plannedDate || '',
             shadeType,
             shadeMasterType: shadeType,
           })
@@ -653,87 +655,81 @@ export default function MachinePage() {
     setShowReviewModal(false)
   }
 
-  // Handle collaboration confirmation from modal
-  const handleCollaborationConfirm = (
-    collabGroups: any[], 
+  // Handle collaboration confirmation — saves to Supabase
+  // Plan numbers are stored PER PROCESS: date_calc_plan = { planNumber: N, byProcess: { S: N1, D: N2 } }
+  // This way SCQ and Dyeing rows for the same batch get independent plan numbers
+  const handleCollaborationConfirm = async (
+    collabGroups: any[],
     skipBatchIds: string[]
   ) => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-    const db = JSON.parse(stored)
-
-    // Get next available plan number
-    const maxPlanNumber = Math.max(
-      0,
-      ...batches.map(b => b.planNumber || 0)
-    )
+    // Get max existing plan number across all batch-process rows
+    const maxPlanNumber = Math.max(0, ...batches.map(b => b.planNumber || 0))
     let currentPlanNumber = maxPlanNumber + 1
     const baseDate = new Date().toISOString().slice(0, 10)
 
-    // Process collaboration groups
+    // Build map: batchUUID → { processCode → planNumber }
+    // We need to accumulate all assignments before saving
+    const planMap: Record<string, Record<string, number>> = {}
+
+    // helper to add assignment
+    const assignPlan = (batchRowKey: string, planNum: number) => {
+      // batchRowKey is like "DYE26-0004-B1-S" — extract UUID from batches state
+      const batchRow = batches.find(b => b.rowKey === batchRowKey || b.batchId === batchRowKey)
+      if (!batchRow) return
+      const uuid = batchRow.id  // Supabase UUID
+      const proc = batchRow.currentProcess
+      if (!planMap[uuid]) planMap[uuid] = {}
+      planMap[uuid][proc] = planNum
+    }
+
+    // Process collab groups — all batches in a group get SAME plan number
     collabGroups.forEach((group: any) => {
-      // Assign same plan number to all batches in collaboration group
       group.batches.forEach((batch: any) => {
-        const order = db.orders.find((o: any) => o.id === batch.orderId)
-        if (!order) return
-
-        const batchIndex = order.splits?.findIndex((s: any) => s.batchId === batch.batchId)
-        if (batchIndex === -1 || batchIndex === undefined) return
-
-        const dbBatch = order.splits[batchIndex]
-
-        // CRITICAL: Skip planned date generation for repairing and faulty batches
-        if (dbBatch.isRepairingBatch || dbBatch.faulty) {
-          console.log(`Skipping planned number for ${dbBatch.isRepairingBatch ? 'repairing' : 'faulty'} batch: ${batch.batchId}`)
-          return
-        }
-
-        // Assign plan number
-        dbBatch.planNumber = currentPlanNumber
-        dbBatch.plannedDate = getPlannedDateByNumber(currentPlanNumber, baseDate, machine?.id)
-        dbBatch.isCollab = true
-        dbBatch.collabGroupId = group.id
+        // batch.batchId in modal is the rowKey (e.g. DYE26-0004-B1-S)
+        assignPlan(batch.batchId, currentPlanNumber)
       })
-      
       currentPlanNumber++
     })
 
-    // Process remaining single batches (not in any group and not skipped)
-    const batchesInGroups = new Set(
-      collabGroups.flatMap(g => g.batches.map((b: any) => b.batchId))
-    )
-    
-    const singleBatches = batches.filter(b => 
-      !b.planNumber && 
-      !skipBatchIds.includes(b.batchId) && 
-      !batchesInGroups.has(b.batchId) &&
+    // Process single batches not in any group and not skipped
+    const inGroupKeys = new Set(collabGroups.flatMap((g: any) => g.batches.map((b: any) => b.batchId)))
+    const singleRows = batches.filter(b =>
+      !b.planNumber &&
+      !skipBatchIds.includes(b.rowKey) &&
+      !skipBatchIds.includes(b.batchId) &&
+      !inGroupKeys.has(b.rowKey) &&
+      !inGroupKeys.has(b.batchId) &&
       b.status !== 'done'
     )
-
-    singleBatches.forEach(batch => {
-      const order = db.orders.find((o: any) => o.id === batch.orderId)
-      if (!order) return
-
-      const batchIndex = order.splits?.findIndex((s: any) => s.batchId === batch.batchId)
-      if (batchIndex === -1 || batchIndex === undefined) return
-
-      const dbBatch = order.splits[batchIndex]
-
-      // CRITICAL: Skip planned date generation for repairing and faulty batches
-      if (dbBatch.isRepairingBatch || dbBatch.faulty) {
-        console.log(`Skipping planned number for ${dbBatch.isRepairingBatch ? 'repairing' : 'faulty'} batch: ${batch.batchId}`)
-        return
-      }
-
-      dbBatch.planNumber = currentPlanNumber
-      dbBatch.plannedDate = getPlannedDateByNumber(currentPlanNumber, baseDate, machine?.id)
-      dbBatch.isCollab = false
-      
+    // Deduplicate: process each unique batch UUID only once per process
+    const seenRowKeys = new Set<string>()
+    for (const b of singleRows) {
+      if (seenRowKeys.has(b.rowKey)) continue
+      seenRowKeys.add(b.rowKey)
+      assignPlan(b.rowKey, currentPlanNumber)
       currentPlanNumber++
+    }
+
+    // Save to Supabase — one API call per unique batch UUID
+    const saves = Object.entries(planMap).map(async ([uuid, procMap]) => {
+      // Get existing date_calc_plan for this batch
+      const existingRow = batches.find(b => b.id === uuid)
+      const existing = existingRow?.date_calc_plan_raw || {}
+      const byProcess = { ...(existing.byProcess || {}), ...procMap }
+      // Primary planNumber = first process's plan number
+      const primaryPlan = Object.values(procMap)[0] as number
+      const plannedDate = getPlannedDateByNumber(primaryPlan, baseDate, machine?.id)
+      await fetch('/api/batches', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update', id: uuid,
+          date_calc_plan: { planNumber: primaryPlan, byProcess, plannedDate },
+        }),
+      })
     })
 
-    localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    loadData() // Reload to show updated data
+    await Promise.all(saves)
+    await loadData()
     setShowCollabModal(false)
   }
 
@@ -751,32 +747,18 @@ export default function MachinePage() {
     setShowCollabModal(true)
   }
 
-  const clearNumbering = () => {
+  const clearNumbering = async () => {
     if (!confirm('Are you sure you want to clear all plan numbers for this machine?')) return
-
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    let changed = false
-
-    batches.forEach(batch => {
-      for (const order of db.orders) {
-        if (order.id === batch.orderId) {
-          const dbBatch = order.splits.find((s: any) => s.batchId === batch.batchId)
-          if (dbBatch && dbBatch.planNumber) {
-            dbBatch.planNumber = null
-            changed = true
-          }
-        }
-      }
-    })
-
-    if (changed) {
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      loadData()
-      alert('✅ All numbering cleared!')
-    }
+    // Get unique batch UUIDs (deduplicate since same batch may appear twice for 2 processes)
+    const uniqueIds = [...new Set(batches.filter(b => b.planNumber).map(b => b.id))]
+    await Promise.all(uniqueIds.map(id =>
+      fetch('/api/batches', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', id, date_calc_plan: null }),
+      })
+    ))
+    await loadData()
+    alert('✅ All numbering cleared!')
   }
 
   const applyFilters = () => {
