@@ -1421,14 +1421,16 @@ export default function MachinePage() {
         isOpen={showCollabModal}
         onClose={() => setShowCollabModal(false)}
         availableBatches={collabBatches.map(b => ({
-          batchId: b.batchId,
-          orderNumber: b.orderNo,
-          orderId: b.orderId,
-          color: b.color,
-          colourProcess: b.color,
-          kg: parseFloat(b.kg) || 0,
-          type: b.type,
-          note: b.note || ''
+          batchId:      b.rowKey || b.batchId,  // use rowKey (batchId-processCode) as unique id
+          batchIdLabel: b.batchId,               // display label (without process suffix)
+          orderNumber:  b.orderNo,
+          orderId:      b.orderId,
+          color:        b.color,
+          processCode:  b.currentProcess,        // e.g. 'S', 'D'
+          processName:  b.processName,           // e.g. 'SCQ', 'Dyeing'
+          kg:           parseFloat(b.kg) || 0,
+          type:         b.type,
+          note:         b.note || ''
         }))}
         machineCapacity={machine?.capacity || 500}
         machineName={machine?.name || machineId}
