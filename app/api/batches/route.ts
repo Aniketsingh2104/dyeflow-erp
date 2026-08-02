@@ -6,6 +6,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const uuid_id    = searchParams.get('id')
+    const uuid_id    = searchParams.get('id')
     const order_id   = searchParams.get('order_id')
     const machine_id = searchParams.get('machine_id')
     const batch_id   = searchParams.get('batch_id')
@@ -13,6 +14,7 @@ export async function GET(req: NextRequest) {
     const limit      = searchParams.get('limit') || '5000'
 
     const query: Record<string, string> = { order: 'batch_number.asc', limit }
+    if (uuid_id)    query['id']         = `eq.${uuid_id}`
     if (uuid_id)    query['id']         = `eq.${uuid_id}`
     if (order_id)   query['order_id']   = `eq.${order_id}`
     if (machine_id) query['machine_id'] = `eq.${machine_id}`

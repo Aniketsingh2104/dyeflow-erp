@@ -412,7 +412,8 @@ export default function MachinePage() {
             // CRITICAL: read ONLY from byProcess[process] — never fall back to top-level planNumber
             // Fallback causes both SCQ and Dyeing rows to show the same number
             planNumber:     b.date_calc_plan?.byProcess?.[displayProcess] ?? null,
-            plannedDate_db: b.date_calc_plan?.plannedDate || '',
+            // plannedDate also per-process: read from byProcessDates[processCode] if exists
+            plannedDate_db: b.date_calc_plan?.byProcessDates?.[displayProcess] || '',
             date_calc_plan_raw: b.date_calc_plan || null,
             faulty:         b.is_faulty || false,
             orderId:        b.order_id,
@@ -434,7 +435,10 @@ export default function MachinePage() {
             remarks:        o.remarks        || '',
             supervisor:     o.supervisors?.name || '-',
             processName,
-            plannedDate:    b.date_calc_plan?.plannedDate || '',
+            // plannedDate per-process: only show date if THIS process has a plan number
+            plannedDate:    b.date_calc_plan?.byProcess?.[displayProcess]
+              ? (b.date_calc_plan?.byProcessDates?.[displayProcess] || b.date_calc_plan?.plannedDate || '')
+              : '',
             shadeType,
             shadeMasterType: shadeType,
           })
@@ -467,21 +471,32 @@ export default function MachinePage() {
       delete byProcess[processCode]
     }
 
-    // Planned date for this process's number
-    const plannedDate = planNum
-      ? getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), machine?.id)
-      : (freshPlan.plannedDate || null)
+    // Planned date per-process
+    const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
+    if (planNum) {
+      byProcessDates[processCode] = getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), machine?.id)
+    } else {
+      delete byProcessDates[processCode]
+    }
 
     // Primary planNumber = earliest (min) across all process numbers
     const allNums = Object.values(byProcess) as number[]
     const primaryPlan = allNums.length > 0 ? Math.min(...allNums) : null
+    // Primary plannedDate = date of the earliest process
+    const primaryDate = primaryPlan
+      ? Object.entries(byProcess).reduce((earliest: any, [code, num]: any) => {
+          if (!earliest || num <= (byProcess as any)[earliest]) return code
+          return earliest
+        }, null)
+      : null
+    const plannedDate = primaryDate ? byProcessDates[primaryDate] : null
 
     await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'update', id: batchUUID,
         date_calc_plan: primaryPlan
-          ? { planNumber: primaryPlan, byProcess, plannedDate }
+          ? { planNumber: primaryPlan, byProcess, byProcessDates, plannedDate }
           : null
       })
     })
@@ -753,15 +768,22 @@ export default function MachinePage() {
       } catch {}
       // Merge new assignments into fresh byProcess — won't overwrite other processes
       const byProcess = { ...(freshPlan.byProcess || {}), ...procMap }
+      // Build per-process dates
+      const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
+      for (const [code, num] of Object.entries(procMap)) {
+        byProcessDates[code] = getPlannedDateByNumber(num as number, baseDate, machine?.id)
+      }
       // Primary = earliest plan number across all processes
       const allNums = Object.values(byProcess) as number[]
       const primaryPlan = Math.min(...allNums)
-      const plannedDate = getPlannedDateByNumber(primaryPlan, baseDate, machine?.id)
+      // Primary date = date of earliest process
+      const primaryCode = Object.entries(byProcess).reduce((a: any, b: any) => b[1] <= byProcess[a] ? b[0] : a, Object.keys(byProcess)[0])
+      const plannedDate = byProcessDates[primaryCode] || getPlannedDateByNumber(primaryPlan, baseDate, machine?.id)
       await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update', id: uuid,
-          date_calc_plan: { planNumber: primaryPlan, byProcess, plannedDate },
+          date_calc_plan: { planNumber: primaryPlan, byProcess, byProcessDates, plannedDate },
         }),
       })
     })
