@@ -409,7 +409,9 @@ export default function MachinePage() {
             taka:           b.taka,
             status:         b.status || 'pending',
             currentProcess: displayProcess,
-            planNumber:     b.date_calc_plan?.byProcess?.[displayProcess] ?? b.date_calc_plan?.planNumber ?? null,
+            // CRITICAL: read ONLY from byProcess[process] — never fall back to top-level planNumber
+            // Fallback causes both SCQ and Dyeing rows to show the same number
+            planNumber:     b.date_calc_plan?.byProcess?.[displayProcess] ?? null,
             plannedDate_db: b.date_calc_plan?.plannedDate || '',
             date_calc_plan_raw: b.date_calc_plan || null,
             faulty:         b.is_faulty || false,
@@ -445,24 +447,32 @@ export default function MachinePage() {
     }
   }
 
-  const updatePlanNumber = async (batchUUID: string, processCode: string, value: string, existingPlan: any) => {
+  const updatePlanNumber = async (batchUUID: string, processCode: string, value: string, _existingPlan: any) => {
     const n = parseInt(value, 10)
     const planNum = (!n || n < 1) ? null : n
 
-    // Build per-process plan: merge into existing byProcess map
-    const byProcess = { ...(existingPlan?.byProcess || {}) }
+    // ALWAYS fetch fresh date_calc_plan from DB before merging
+    // This prevents stale React state from overwriting another process's number
+    let freshPlan: any = {}
+    try {
+      const r = await fetch(`/api/batches?id=${batchUUID}`, { cache: 'no-store' }).then(x => x.json())
+      freshPlan = r.data?.[0]?.date_calc_plan || {}
+    } catch {}
+
+    // Merge only this process's number into the fresh byProcess map
+    const byProcess = { ...(freshPlan.byProcess || {}) }
     if (planNum) {
       byProcess[processCode] = planNum
     } else {
       delete byProcess[processCode]
     }
 
-    // Planned date based on this process's number
+    // Planned date for this process's number
     const plannedDate = planNum
       ? getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), machine?.id)
-      : (existingPlan?.plannedDate || null)
+      : (freshPlan.plannedDate || null)
 
-    // Primary planNumber = min across all assigned processes (earliest process runs first)
+    // Primary planNumber = earliest (min) across all process numbers
     const allNums = Object.values(byProcess) as number[]
     const primaryPlan = allNums.length > 0 ? Math.min(...allNums) : null
 
@@ -734,13 +744,18 @@ export default function MachinePage() {
     }
 
     // Save to Supabase — one API call per unique batch UUID
+    // Fetch fresh plan for EACH batch before merging to avoid stale state cross-contamination
     const saves = Object.entries(planMap).map(async ([uuid, procMap]) => {
-      // Get existing date_calc_plan for this batch
-      const existingRow = batches.find(b => b.id === uuid)
-      const existing = existingRow?.date_calc_plan_raw || {}
-      const byProcess = { ...(existing.byProcess || {}), ...procMap }
-      // Primary planNumber = first process's plan number
-      const primaryPlan = Object.values(procMap)[0] as number
+      let freshPlan: any = {}
+      try {
+        const r = await fetch(`/api/batches?id=${uuid}`, { cache: 'no-store' }).then(x => x.json())
+        freshPlan = r.data?.[0]?.date_calc_plan || {}
+      } catch {}
+      // Merge new assignments into fresh byProcess — won't overwrite other processes
+      const byProcess = { ...(freshPlan.byProcess || {}), ...procMap }
+      // Primary = earliest plan number across all processes
+      const allNums = Object.values(byProcess) as number[]
+      const primaryPlan = Math.min(...allNums)
       const plannedDate = getPlannedDateByNumber(primaryPlan, baseDate, machine?.id)
       await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
