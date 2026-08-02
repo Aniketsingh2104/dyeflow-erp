@@ -118,60 +118,26 @@ const formatDate = (dateStr: string) => {
   }
 }
 
-const addWorkingDays = (dateStr: string, daysToAdd: number, machineId?: string): string => {
+// holidaySet is now passed as parameter (loaded from Supabase, not localStorage)
+const addWorkingDays = (dateStr: string, daysToAdd: number, holidaySet: Set<string>): string => {
   if (!dateStr || daysToAdd < 0) return dateStr
-  
   const date = new Date(dateStr)
   let daysAdded = 0
-  
-  // Get holidays from database
-  const stored = localStorage.getItem('dyeflow_db')
-  const holidays: Set<string> = new Set()
-  
-  if (stored) {
-    const db = JSON.parse(stored)
-    
-    // Add global holidays (array of strings)
-    const globalHolidays = db.holidays || []
-    globalHolidays.forEach((date: string) => {
-      holidays.add(date)
-    })
-    
-    // Add machine-specific holidays (array of objects)
-    const machineHolidays = db.machineHolidays || []
-    machineHolidays.forEach((holiday: any) => {
-      if (machineId && holiday.machineId === machineId) {
-        holidays.add(holiday.date)
-      }
-    })
-  }
-  
   while (daysAdded < daysToAdd) {
     date.setDate(date.getDate() + 1)
     const dateString = date.toISOString().slice(0, 10)
-    
-    // Skip Sundays (day 0) and holidays
-    if (date.getDay() !== 0 && !holidays.has(dateString)) {
+    if (date.getDay() !== 0 && !holidaySet.has(dateString)) {
       daysAdded++
     }
   }
-  
   return date.toISOString().slice(0, 10)
 }
 
-const getPlannedDateByNumber = (planNumber: number, baseDate: string, machineId?: string): string => {
+const getPlannedDateByNumber = (planNumber: number, baseDate: string, holidaySet: Set<string>): string => {
   if (!planNumber || planNumber < 1) return ''
-  
-  // Calculate day offset (3 batches per day)
   const dayOffset = Math.floor((planNumber - 1) / 3)
-  
-  // Use provided base date or today
   const base = baseDate || new Date().toISOString().slice(0, 10)
-  
-  // CRITICAL: Always start from the NEXT working day, not today
-  // This ensures Plan #1 starts on the first available working day
-  // Add 1 extra day to offset to skip today and start from tomorrow
-  return addWorkingDays(base, dayOffset + 1, machineId)
+  return addWorkingDays(base, dayOffset + 1, holidaySet)
 }
 
 // Column definitions
@@ -237,6 +203,7 @@ export default function MachinePage() {
   // Batch Collaboration Modal state
   const [showCollabModal, setShowCollabModal] = useState(false)
   const [collabBatches, setCollabBatches] = useState<any[]>([])
+  const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!permLoading && !canView) return
@@ -335,17 +302,24 @@ export default function MachinePage() {
   const loadData = async () => {
     try {
       // Fetch machine, batches, and orders from Supabase APIs
-      const [machRes, batchRes, orderRes, procRes] = await Promise.all([
+      const [machRes, batchRes, orderRes, procRes, holRes] = await Promise.all([
         fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
+        fetch(`/api/holidays?machine_id=${machineId}`, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
 
       const machinesList: any[] = machRes.data  || []
       const allBatches:   any[] = batchRes.data  || []
       const allOrders:    any[] = orderRes.data  || []
       const processes:    any[] = procRes.data   || []
+
+      // Build holiday set from Supabase (global + machine-specific)
+      const newHolidaySet = new Set<string>(
+        (holRes.data || []).map((h: any) => h.holiday_date?.slice(0, 10)).filter(Boolean)
+      )
+      setHolidaySet(newHolidaySet)
 
       // Resolve machine from URL param (could be UUID or name-slug)
       const foundMachine = machinesList.find((m: any) => {
@@ -435,11 +409,12 @@ export default function MachinePage() {
             remarks:        o.remarks        || '',
             supervisor:     o.supervisors?.name || '-',
             processName,
-            // RULE: no plan number for this process = no planned date, period
+            // RULE: no plan number = no date. Date recalculates on every load using latest holidays.
+            // If a holiday is added/removed, just refresh the page - all dates update automatically.
             plannedDate:    (() => {
               const num = b.date_calc_plan?.byProcess?.[displayProcess]
               if (!num) return ''
-              return getPlannedDateByNumber(num, new Date().toISOString().slice(0, 10), foundMachine.id)
+              return getPlannedDateByNumber(num, new Date().toISOString().slice(0, 10), newHolidaySet)
             })(),
             shadeType,
             shadeMasterType: shadeType,
@@ -476,7 +451,7 @@ export default function MachinePage() {
     // Planned date per-process
     const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
     if (planNum) {
-      byProcessDates[processCode] = getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), machine?.id)
+      byProcessDates[processCode] = getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), holidaySet)
     } else {
       delete byProcessDates[processCode]
     }
@@ -492,6 +467,8 @@ export default function MachinePage() {
         }, null)
       : null
     const plannedDate = primaryDate ? byProcessDates[primaryDate] : null
+    // Note: plannedDate displayed on screen is recalculated live from holidaySet in loadData
+    // This saved plannedDate is just for reference/backup
 
     await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -773,14 +750,14 @@ export default function MachinePage() {
       // Build per-process dates
       const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
       for (const [code, num] of Object.entries(procMap)) {
-        byProcessDates[code] = getPlannedDateByNumber(num as number, baseDate, machine?.id)
+        byProcessDates[code] = getPlannedDateByNumber(num as number, baseDate, holidaySet)
       }
       // Primary = earliest plan number across all processes
       const allNums = Object.values(byProcess) as number[]
       const primaryPlan = Math.min(...allNums)
       // Primary date = date of earliest process
       const primaryCode = Object.entries(byProcess).reduce((a: any, b: any) => b[1] <= byProcess[a] ? b[0] : a, Object.keys(byProcess)[0])
-      const plannedDate = byProcessDates[primaryCode] || getPlannedDateByNumber(primaryPlan, baseDate, machine?.id)
+      const plannedDate = byProcessDates[primaryCode] || getPlannedDateByNumber(primaryPlan, baseDate, holidaySet)
       await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
