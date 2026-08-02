@@ -1325,31 +1325,28 @@ export default function MachinePage() {
                             <input
                               type="number"
                               min="1"
-                              value={batch.planNumber || ''}
+                              key={batch.rowKey + '-' + (batch.planNumber || 'empty')}
+                              defaultValue={batch.planNumber || ''}
                               data-plan-idx={idx}
-                              onChange={(e) => {
-                                // Only update local display — don't save on every keystroke
-                                const input = e.target
-                                input.dataset.dirty = 'true'
-                              }}
+                              data-batch-id={batch.id}
+                              data-process={batch.currentProcess}
                               onBlur={(e) => {
-                                // Save when user leaves the field
-                                updatePlanNumber(batch.id, batch.currentProcess, e.target.value, batch.date_calc_plan_raw)
+                                const val = e.target.value
+                                if (val !== String(batch.planNumber || '')) {
+                                  updatePlanNumber(batch.id, batch.currentProcess, val, batch.date_calc_plan_raw)
+                                }
                               }}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
                                   e.preventDefault()
-                                  // Save current field first
-                                  updatePlanNumber(batch.id, batch.currentProcess, (e.target as HTMLInputElement).value, batch.date_calc_plan_raw)
-                                  // Then move to next input
-                                  const nextIdx = idx + 1
-                                  const nextInput = document.querySelector<HTMLInputElement>(
-                                    `input[data-plan-idx="${nextIdx}"]`
-                                  )
-                                  if (nextInput) {
-                                    nextInput.focus()
-                                    nextInput.select()
+                                  const val = (e.target as HTMLInputElement).value
+                                  if (val !== String(batch.planNumber || '')) {
+                                    updatePlanNumber(batch.id, batch.currentProcess, val, batch.date_calc_plan_raw)
                                   }
+                                  const nextInput = document.querySelector<HTMLInputElement>(
+                                    `input[data-plan-idx="${idx + 1}"]`
+                                  )
+                                  if (nextInput) { nextInput.focus(); nextInput.select() }
                                 }
                               }}
                               placeholder="-"
