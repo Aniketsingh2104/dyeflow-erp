@@ -1327,11 +1327,21 @@ export default function MachinePage() {
                               min="1"
                               value={batch.planNumber || ''}
                               data-plan-idx={idx}
-                              onChange={(e) => updatePlanNumber(batch.id, batch.currentProcess, e.target.value, batch.date_calc_plan_raw)}
+                              onChange={(e) => {
+                                // Only update local display — don't save on every keystroke
+                                const input = e.target
+                                input.dataset.dirty = 'true'
+                              }}
+                              onBlur={(e) => {
+                                // Save when user leaves the field
+                                updatePlanNumber(batch.id, batch.currentProcess, e.target.value, batch.date_calc_plan_raw)
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
                                   e.preventDefault()
-                                  // Find next plan number input by data-plan-idx
+                                  // Save current field first
+                                  updatePlanNumber(batch.id, batch.currentProcess, (e.target as HTMLInputElement).value, batch.date_calc_plan_raw)
+                                  // Then move to next input
                                   const nextIdx = idx + 1
                                   const nextInput = document.querySelector<HTMLInputElement>(
                                     `input[data-plan-idx="${nextIdx}"]`
