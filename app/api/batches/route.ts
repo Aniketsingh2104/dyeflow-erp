@@ -6,8 +6,6 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const uuid_id    = searchParams.get('id')
-    const uuid_id    = searchParams.get('id')
-    const uuid_id    = searchParams.get('id')
     const order_id   = searchParams.get('order_id')
     const machine_id = searchParams.get('machine_id')
     const batch_id   = searchParams.get('batch_id')
