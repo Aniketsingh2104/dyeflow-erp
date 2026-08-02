@@ -435,10 +435,15 @@ export default function MachinePage() {
             remarks:        o.remarks        || '',
             supervisor:     o.supervisors?.name || '-',
             processName,
-            // plannedDate per-process: only show date if THIS process has a plan number
-            plannedDate:    b.date_calc_plan?.byProcess?.[displayProcess]
-              ? (b.date_calc_plan?.byProcessDates?.[displayProcess] || b.date_calc_plan?.plannedDate || '')
-              : '',
+            // plannedDate per-process: ONLY show date if THIS process has a plan number
+            // NEVER fall back to top-level plannedDate — that belongs to a different process
+            plannedDate:    (() => {
+              const procNum = b.date_calc_plan?.byProcess?.[displayProcess]
+              if (!procNum) return ''  // no number for this process = no date
+              // Use per-process date if saved, otherwise calculate from the number
+              return b.date_calc_plan?.byProcessDates?.[displayProcess]
+                || getPlannedDateByNumber(procNum, new Date().toISOString().slice(0, 10), foundMachine.id)
+            })(),
             shadeType,
             shadeMasterType: shadeType,
           })
