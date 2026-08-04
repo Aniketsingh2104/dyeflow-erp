@@ -204,7 +204,6 @@ export default function MachinePage() {
   const [showCollabModal, setShowCollabModal] = useState(false)
   const [collabBatches, setCollabBatches] = useState<any[]>([])
   const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
-  const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!permLoading && !canView) return
