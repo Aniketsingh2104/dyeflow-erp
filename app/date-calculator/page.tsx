@@ -484,10 +484,20 @@ export default function DateCalculatorPage() {
     const capMap: Record<string, number> = {}
     processDurations.forEach(d => {
       const code = String(d.code || '').trim(); if (!code) return
-      dayMap[code] = d.days > 0 ? d.days : 1
-      if (d.capacity && d.capacity > 0) capMap[code] = d.capacity
+      const days = d.days > 0 ? d.days : 1
+      dayMap[code] = days
+      // Also store lowercase alias for case-insensitive matching
+      dayMap[code.toLowerCase()] = days
+      if (d.capacity && d.capacity > 0) {
+        capMap[code] = d.capacity
+        capMap[code.toLowerCase()] = d.capacity
+      }
     })
-    ALL_PROCESS_CODES.forEach(c => { if (!dayMap[c]) dayMap[c] = 1 })
+    // Default 1 day for all known process codes
+    ALL_PROCESS_CODES.forEach(code => {
+      if (!dayMap[code]) dayMap[code] = 1
+      if (!dayMap[code.toLowerCase()]) dayMap[code.toLowerCase()] = 1
+    })
     return { dayMap, capMap }
   }
 
