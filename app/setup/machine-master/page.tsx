@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 
-interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string }
+interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string; numbering_base_date?: string }
 
 const api = async (action: string, payload: Record<string, any> = {}) => {
   const res = await fetch('/api/machines', {
@@ -155,7 +155,7 @@ export default function MachineMasterPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Machine Name','Type','Capacity (Kg)','Status','Actions'].map(h => (
+                {['Machine Name','Type','Capacity (Kg)','Numbering Base Date','Status','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
                     color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
                     borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -181,6 +181,27 @@ export default function MachineMasterPage() {
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', fontSize: 13 }}>{m.capacity} Kg</td>
+                    <td style={{ padding: '12px 14px' }}>
+                      <input
+                        type="date"
+                        value={m.numbering_base_date?.slice(0,10) || ''}
+                        onChange={async (e) => {
+                          await fetch('/api/machines', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'update', id: m.id, numbering_base_date: e.target.value || null })
+                          })
+                          load()
+                        }}
+                        style={{ fontSize: 12, padding: '3px 8px', border: '1px solid var(--border-medium)',
+                          borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                      />
+                      {!m.numbering_base_date && (
+                        <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                          Not set — uses today
+                        </div>
+                      )}
+                    </td>
                     <td style={{ padding: '12px 14px' }}>
                       <select value={m.status || 'idle'} onChange={e => updateStatus(m.id, e.target.value)}
                         style={{ fontSize: 12, padding: '3px 8px', border: '1px solid var(--border-medium)',

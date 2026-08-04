@@ -415,7 +415,8 @@ export default function MachinePage() {
             plannedDate:    (() => {
               const num = b.date_calc_plan?.byProcess?.[displayProcess]
               if (!num) return ''
-              return getPlannedDateByNumber(num, new Date().toISOString().slice(0, 10), newHolidaySet)
+              const baseDate = foundMachine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
+              return getPlannedDateByNumber(num, baseDate, newHolidaySet)
             })(),
             shadeType,
             shadeMasterType: shadeType,
@@ -452,7 +453,8 @@ export default function MachinePage() {
     // Planned date per-process
     const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
     if (planNum) {
-      byProcessDates[processCode] = getPlannedDateByNumber(planNum, new Date().toISOString().slice(0, 10), holidaySet)
+      const _baseDate = machine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
+      byProcessDates[processCode] = getPlannedDateByNumber(planNum, _baseDate, holidaySet)
     } else {
       delete byProcessDates[processCode]
     }
@@ -695,7 +697,7 @@ export default function MachinePage() {
     // Get max existing plan number across all batch-process rows
     const maxPlanNumber = Math.max(0, ...batches.map(b => b.planNumber || 0))
     let currentPlanNumber = maxPlanNumber + 1
-    const baseDate = new Date().toISOString().slice(0, 10)
+    const baseDate = machine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
 
     // Build map: batchUUID → { processCode → planNumber }
     // We need to accumulate all assignments before saving
