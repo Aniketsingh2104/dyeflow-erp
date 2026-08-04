@@ -3,7 +3,7 @@ import { dbSelect, dbInsert, dbUpdate, dbDelete } from '@/lib/supabase'
 
 export async function GET() {
   const { data, error } = await dbSelect('machines', { order: 'name.asc' },
-    'id,name,capacity,status,machine_type,is_active,created_at')
+    'id,name,capacity,status,machine_type,is_active,numbering_base_date,created_at')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   return NextResponse.json({ ok: true, data })
 }
