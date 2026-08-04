@@ -169,7 +169,26 @@ export default function DateCalculatorPage() {
 
         for (const b of orderBatches) {
           // date_calc_plan is stored in batches.date_calc_plan (jsonb) or rebuild empty
-          const dateCalcPlan: Record<string, string> = b.date_calc_plan || {}
+          // Machine numbering saves dates in byProcessDates — merge them into flat dateCalcPlan
+          const rawPlan = b.date_calc_plan || {}
+          const dateCalcPlan: Record<string, string> = {}
+          // First copy any existing flat dates (from Generate Dates)
+          for (const [k, v] of Object.entries(rawPlan)) {
+            if (k !== 'byProcess' && k !== 'byProcessDates' && k !== 'planNumber' && k !== 'plannedDate' && v) {
+              dateCalcPlan[k] = String(v)
+            }
+          }
+          // Then merge machine-numbered dates from byProcessDates (convert YYYY-MM-DD to DD/MM/YYYY)
+          const byProcessDates: Record<string, string> = rawPlan.byProcessDates || {}
+          for (const [processCode, isoDate] of Object.entries(byProcessDates)) {
+            if (isoDate && typeof isoDate === 'string') {
+              // Convert 2026-08-03 → 03/08/2026 for Date Calculator display format
+              const parts = isoDate.slice(0, 10).split('-')
+              if (parts.length === 3) {
+                dateCalcPlan[processCode] = `${parts[2]}/${parts[1]}/${parts[0]}`
+              }
+            }
+          }
           const batch: Batch = {
             batchId:          b.batch_id || b.id,
             batchNumber:      b.batch_number || 0,
