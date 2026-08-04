@@ -231,10 +231,22 @@ export default function DateCalculatorPage() {
     if (pendingDateChanges.current[key]) clearTimeout(pendingDateChanges.current[key])
     pendingDateChanges.current[key] = setTimeout(async () => {
       try {
+        // Fetch fresh plan to preserve machine keys (byProcess, byProcessDates, planNumber, plannedDate)
+        let freshPlan: any = {}
+        try {
+          const r = await fetch(`/api/batches?id=${batchDbId}`, { cache: 'no-store' }).then(x => x.json())
+          freshPlan = r.data?.[0]?.date_calc_plan || {}
+        } catch {}
+        // Merge: keep machine keys, overwrite only flat date keys
+        const MACHINE_KEYS = ['byProcess', 'byProcessDates', 'planNumber', 'plannedDate']
+        const merged: Record<string, any> = { ...dateCalcPlan }
+        for (const k of MACHINE_KEYS) {
+          if (freshPlan[k] !== undefined) merged[k] = freshPlan[k]
+        }
         await fetch('/api/batches', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: batchDbId, date_calc_plan: dateCalcPlan }),
+          body: JSON.stringify({ action: 'update', id: batchDbId, date_calc_plan: merged }),
         })
       } catch { /* fire-and-forget */ }
       delete pendingDateChanges.current[key]
@@ -567,14 +579,25 @@ export default function DateCalculatorPage() {
       if (!data.ok) throw new Error(data.error || 'Save failed')
 
       // Also persist date_calc_plan back to each batch
+      // IMPORTANT: fetch fresh plan per batch to preserve machine keys
       const batchUpdates = sourceRows.filter(r => r._batchId && Object.keys(r.batch.dateCalcPlan || {}).length)
-      await Promise.all(batchUpdates.map(r =>
-        fetch('/api/batches', {
+      await Promise.all(batchUpdates.map(async r => {
+        let freshPlan: any = {}
+        try {
+          const fr = await fetch(`/api/batches?id=${r._batchId}`, { cache: 'no-store' }).then(x => x.json())
+          freshPlan = fr.data?.[0]?.date_calc_plan || {}
+        } catch {}
+        const MACHINE_KEYS = ['byProcess', 'byProcessDates', 'planNumber', 'plannedDate']
+        const merged: Record<string, any> = { ...r.batch.dateCalcPlan }
+        for (const k of MACHINE_KEYS) {
+          if (freshPlan[k] !== undefined) merged[k] = freshPlan[k]
+        }
+        return fetch('/api/batches', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: r._batchId, date_calc_plan: r.batch.dateCalcPlan, dc_generated_once: r.batch.dcGeneratedOnce }),
+          body: JSON.stringify({ action: 'update', id: r._batchId, date_calc_plan: merged, dc_generated_once: r.batch.dcGeneratedOnce }),
         }).catch(() => {})
-      ))
+      }))
 
       setSaveStatus('saved')
       if (showAlert) alert(`✅ Planned dates saved to ${updates.length} orders.`)
