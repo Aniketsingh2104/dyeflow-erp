@@ -168,7 +168,7 @@ export default function BatchCollaborationModal({
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
 
             {/* LEFT — Available Batches */}
-            <div>
+            <div style={{ display:'flex', flexDirection:'column', minHeight:0 }}>
               <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>
                 📦 Available Batches ({freeBatches.length})
               </div>
@@ -191,6 +191,7 @@ export default function BatchCollaborationModal({
                 )
               })()}
 
+              <div style={{ flex:1, overflowY:'auto', minHeight:0 }}>
               {colorGroups.length === 0 && (
                 <div style={{ padding:30, textAlign:'center', color:'#9CA3AF', fontSize:12 }}>
                   All batches are in collab groups
@@ -283,6 +284,7 @@ export default function BatchCollaborationModal({
                 )
               })}
 
+              </div>{/* end scrollable groups */}
               <button onClick={createGroup} disabled={selectedIds.size < 2}
                 style={{ width:'100%', padding:'9px 0', fontSize:13, fontWeight:600,
                   border:'none', borderRadius:6, marginTop:6,
