@@ -204,6 +204,7 @@ export default function MachinePage() {
   const [showCollabModal, setShowCollabModal] = useState(false)
   const [collabBatches, setCollabBatches] = useState<any[]>([])
   const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
+  const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!permLoading && !canView) return
@@ -467,6 +468,8 @@ export default function MachinePage() {
         }, null)
       : null
     const plannedDate = primaryDate ? byProcessDates[primaryDate] : null
+    // Note: plannedDate displayed on screen is recalculated live from holidaySet in loadData
+    // This saved plannedDate is just for reference/backup
     // Note: plannedDate displayed on screen is recalculated live from holidaySet in loadData
     // This saved plannedDate is just for reference/backup
 
