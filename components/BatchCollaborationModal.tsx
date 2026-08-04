@@ -164,8 +164,8 @@ export default function BatchCollaborationModal({
         </div>
 
         {/* Body */}
-        <div style={{ flex:1, overflow:'auto', padding:20 }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
+        <div style={{ flex:1, overflow:'hidden', padding:20 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, height:'100%' }}>
 
             {/* LEFT — Available Batches */}
             <div style={{ display:'flex', flexDirection:'column', minHeight:0 }}>
