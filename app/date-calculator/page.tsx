@@ -12,6 +12,7 @@ interface Batch {
   kg: number
   date?: string
   dateCalcPlan: Record<string, string>
+  machineAnchors?: string[]  // process codes fixed by machine numbering - engine must not overwrite
   dcRegenerate?: boolean
   dcGeneratedOnce?: boolean
   plannedDate?: string
@@ -179,13 +180,15 @@ export default function DateCalculatorPage() {
             }
           }
           // Then merge machine-numbered dates from byProcessDates (convert YYYY-MM-DD to DD/MM/YYYY)
+          // These are FIXED ANCHORS — the engine must never overwrite them
           const byProcessDates: Record<string, string> = rawPlan.byProcessDates || {}
+          const machineAnchors: string[] = []
           for (const [processCode, isoDate] of Object.entries(byProcessDates)) {
             if (isoDate && typeof isoDate === 'string') {
-              // Convert 2026-08-03 → 03/08/2026 for Date Calculator display format
               const parts = isoDate.slice(0, 10).split('-')
               if (parts.length === 3) {
                 dateCalcPlan[processCode] = `${parts[2]}/${parts[1]}/${parts[0]}`
+                machineAnchors.push(processCode)  // mark as machine-anchored
               }
             }
           }
@@ -205,8 +208,9 @@ export default function DateCalculatorPage() {
             batchId:          b.batch_id || b.id,
             batchNumber:      b.batch_number || 0,
             kg:               parseFloat(b.kg) || 0,
-            plannedDate:      machineDateSummary,   // shows machine process dates in DATE column
+            plannedDate:      machineDateSummary,
             dateCalcPlan,
+            machineAnchors,   // process codes whose dates must not be overwritten by engine
             dcGeneratedOnce:  b.dc_generated_once || false,
             dcRegenerate:     b.dc_regenerate     || false,
           }
@@ -435,6 +439,10 @@ export default function DateCalculatorPage() {
       const anchorIdx = workSeq.indexOf(anchorProc)
       if (anchorIdx < 0) { result.skipped++; continue }
 
+      // Machine anchors: dates fixed by machine numbering — engine must NEVER overwrite these
+      const machineAnchorSet = new Set<string>(batch.machineAnchors || [])
+
+      // Use anchor date as-is (no fitDate) — machine date is fixed
       const planned: Record<string, string> = { [anchorProc]: anchorYMD }
 
       // STEP 2: Walk BACKWARD from anchor WITH capacity check
@@ -463,8 +471,10 @@ export default function DateCalculatorPage() {
       for (let i = anchorIdx - 1; i >= 0; i--) {
         const c = workSeq[i]
         back = addPD(back, dayMap[c] || 1, false)
-        planned[c] = fitDateBack(c, dateToStr(back), qty)
-        back = ymdToDate(planned[c]) || back
+        if (!machineAnchorSet.has(c)) {
+          planned[c] = fitDateBack(c, dateToStr(back), qty)
+          back = ymdToDate(planned[c]) || back
+        }
       }
 
       // STEP 3: Check if first planned date < today
@@ -478,8 +488,10 @@ export default function DateCalculatorPage() {
           const c    = workSeq[i]
           const prev = i > 0 ? workSeq[i - 1] : null
           fwd = addPD(fwd, i === 0 ? (dayMap[c] || 1) : (dayMap[prev!] || 1), true)
-          planned[c] = fitDate(c, dateToStr(fwd), qty)
-          fwd = ymdToDate(planned[c]) || fwd
+          if (!machineAnchorSet.has(c)) {
+            planned[c] = fitDate(c, dateToStr(fwd), qty)
+            fwd = ymdToDate(planned[c]) || fwd
+          }
         }
         t.pushed = true
       } else {
@@ -489,8 +501,10 @@ export default function DateCalculatorPage() {
           const c    = workSeq[i]
           const prev = workSeq[i - 1]
           fwd = addPD(fwd, dayMap[prev] || 1, true)
-          planned[c] = fitDate(c, dateToStr(fwd), qty)
-          fwd = ymdToDate(planned[c]) || fwd
+          if (!machineAnchorSet.has(c)) {
+            planned[c] = fitDate(c, dateToStr(fwd), qty)
+            fwd = ymdToDate(planned[c]) || fwd
+          }
         }
       }
 
@@ -503,8 +517,15 @@ export default function DateCalculatorPage() {
       }
 
       // Write to plan in display format DD/MM/YYYY
-      workSeq.forEach(c => { if (planned[c]) plan[c] = toDisplay(planned[c]) })
-      TAIL.forEach(c => { if (planned[c]) plan[c] = toDisplay(planned[c]) })
+      // NEVER overwrite machine-anchored dates — they are fixed by machine numbering
+      workSeq.forEach(c => {
+        if (machineAnchorSet.has(c)) return  // skip — machine date is sacred
+        if (planned[c]) plan[c] = toDisplay(planned[c])
+      })
+      TAIL.forEach(c => {
+        if (machineAnchorSet.has(c)) return  // skip
+        if (planned[c]) plan[c] = toDisplay(planned[c])
+      })
 
       if (batch.dcGeneratedOnce) result.regenerated++; else result.generated++
       batch.dcGeneratedOnce = true
