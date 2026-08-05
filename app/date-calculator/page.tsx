@@ -3,273 +3,357 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchProcessList } from '@/lib/processMap'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-interface Batch {
-  batchId: string
-  batchNumber: number
-  kg: number
-  date?: string
-  dateCalcPlan: Record<string, string>
-  machineAnchors?: string[]  // process codes fixed by machine numbering - engine must not overwrite
-  dcRegenerate?: boolean
-  dcGeneratedOnce?: boolean
-  plannedDate?: string
-}
-
-interface Order {
-  id: string
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface BatchRow {
+  batchId:     string   // e.g. DYE26-0004-B1
+  batchUUID:   string   // Supabase UUID
+  kg:          number
+  color:       string
   orderNumber: string
-  article: string
-  color: string
-  qtyKg: number
-  processRoute?: string[]
-  machine?: string
-  splits?: Batch[]
-  processMachines?: Record<string, string>
+  route:       string[]
+  machine:     string
+  // Anchor dates from machine numbering (READ ONLY — engine uses these as input)
+  anchors:     Record<string, string>  // { S: '2026-08-04', D: '2026-08-07' }
+  // Generated dates (written by engine)
+  dates:       Record<string, string>  // { C: '2026-08-06', S: '2026-08-07', ... }
+  dcGeneratedOnce: boolean
+  dcRegenerate:    boolean
+  pushed:          boolean
 }
 
-interface ProcessDuration {
-  code: string
-  name: string
-  days: number
-  capacity?: number
-}
+interface ProcessDuration { code: string; name: string; days: number; capacity?: number }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Date utilities (unchanged from original)
-// ─────────────────────────────────────────────────────────────────────────────
-const ALL_PROCESS_CODES  = ['C','S','H','D','S2','Rx','O','G','F','Co','Tu','Add','Level','Rc','Fix','Wash','Dry','B','R','K','QA','Packing','Dispatch','FinalDispatch']
-const MACHINE_PROCS_PRIORITY = ['S2','Add','Level','Rc','Fix','Wash','S','D']
-const EXTRA_TAIL = ['QA','Packing','Dispatch','FinalDispatch']
+// ── Constants ─────────────────────────────────────────────────────────────────
+const ALL_PROCS = ['C','S','H','D','S2','Rx','O','G','F','Co','Tu','Add','Level','Rc','Fix','Wash','Dry','B','R','K','QA','Packing','Dispatch','FinalDispatch']
+const ANCHOR_PROCS = ['S','D','S2','Add','Level','Fix','Wash','Rc']  // machine process types
+const PNAMES: Record<string,string> = {
+  C:'CBR',S:'SCQ',H:'Heat-Set',D:'Dyeing',S2:'SCQ2',Rx:'Relax',O:'Opener',
+  G:'Ghanti',F:'Finish',Co:'Compactor',Tu:'Tubler',Add:'Addition',Level:'Levelling',
+  Rc:'RC',Fix:'Fixing',Wash:'Washing',Dry:'Dry',B:'Brushing',R:'Raising',K:'Kundi',
+  QA:'QA',Packing:'Packing',Dispatch:'Dispatch',FinalDispatch:'Final Dispatch'
+}
+let _procNameCache: Record<string,string> = { ...PNAMES }
+const getPN = (c: string) => _procNameCache[c] || c
 
-const dateToStr = (date: Date | null): string => {
-  if (!date) return ''
-  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
-}
-const dateToDisplayStr = (date: Date | null): string => {
-  if (!date) return ''
-  return `${String(date.getDate()).padStart(2,'0')}/${String(date.getMonth()+1).padStart(2,'0')}/${date.getFullYear()}`
-}
-const normalizeDate = (val: any): Date | null => {
-  if (!val) return null
-  if (typeof val === 'string' && val.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-    const [day, month, year] = val.split('/')
-    const d = new Date(parseInt(year), parseInt(month)-1, parseInt(day))
-    return isNaN(d.getTime()) ? null : d
-  }
-  const d = new Date(val)
+// ── Date helpers ──────────────────────────────────────────────────────────────
+const dateToYMD = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+const ymdToDate = (s: string): Date | null => {
+  if (!s) return null
+  const p = s.split('-')
+  if (p.length !== 3) return null
+  const d = new Date(+p[0], +p[1]-1, +p[2])
   return isNaN(d.getTime()) ? null : d
 }
-const buildHolidaySet = (holidays: any[]): Set<string> => {
-  const set = new Set<string>()
-  for (const h of holidays) {
-    const d = normalizeDate(h.holiday_date || h.date)  // support both Supabase + legacy
-    if (d) set.add(dateToStr(d))
-  }
-  return set
+
+const toDisplay = (ymd: string): string => {
+  const p = ymd?.split('-')
+  return p?.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : (ymd || '')
 }
-const addDaysSkippingHolidays = (date: Date, days: number, holidaySet: Set<string>, forward = true): Date => {
-  const d = new Date(date.getTime()); let remaining = Math.abs(days); const step = forward ? 1 : -1; let safety = 0
-  while (remaining > 0 && safety < 730) { d.setDate(d.getDate() + step); safety++; if (!holidaySet.has(dateToStr(d))) remaining-- }
+
+const fromDisplay = (s: string): string => {
+  if (!s) return ''
+  if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s
+  if (s.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+    const [d,m,y] = s.split('/'); return `${y}-${m}-${d}`
+  }
+  return ''
+}
+
+const buildHolidaySet = (holidays: any[]): Set<string> => {
+  const s = new Set<string>()
+  for (const h of holidays) {
+    const raw = h.holiday_date || h.date
+    if (raw) s.add(raw.slice(0,10))
+  }
+  return s
+}
+
+// ── Engine helpers ────────────────────────────────────────────────────────────
+const nextWD = (d: Date, holidaySet: Set<string>, fwd = true): Date => {
+  const r = new Date(d); const step = fwd ? 1 : -1
+  do { r.setDate(r.getDate() + step) } while (holidaySet.has(dateToYMD(r)))
+  return r
+}
+
+const addPD = (date: Date, n: number, holidaySet: Set<string>, fwd = true): Date => {
+  let d = new Date(date)
+  for (let i = 0; i < Math.max(1, n); i++) d = nextWD(d, holidaySet, fwd)
   return d
 }
 
-// Process name cache (filled from Supabase process list)
-let _procNameCache: Record<string, string> = {
-  'C':'CBR','S':'SCQ','H':'Heat-Set','D':'Dyeing','S2':'SCQ2','Rx':'Relax','O':'Opener',
-  'G':'Ghanti','F':'Finish','Co':'Compactor','Tu':'Tubler','Add':'Addition','Level':'Levelling',
-  'Rc':'RC','Fix':'Fixing','Wash':'Washing','Dry':'Dry','B':'Brushing','R':'Raising','K':'Kundi',
-  'QA':'QA','Packing':'Packing','Dispatch':'Dispatch','FinalDispatch':'Final Dispatch'
-}
-const getProcessName = (code: string) => _procNameCache[code] || code
-
-const toISO = (s: string): string => {
-  if (!s) return ''
-  if (s.match(/^\d{2}\/\d{2}\/\d{4}$/)) { const[d,m,y]=s.split('/'); return `${y}-${m}-${d}` }
-  if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s
-  const p = new Date(s); return isNaN(p.getTime()) ? '' : dateToStr(p)
-}
-const toDisplay = (ymd: string) => { const p = ymd.split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0]}`:ymd }
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Date Calculator Page
+// Date Calculator Engine — exact logic from reference HTML
 // ─────────────────────────────────────────────────────────────────────────────
+function runEngine(
+  rows: BatchRow[],
+  dayMap: Record<string, number>,
+  capMap: Record<string, number>,
+  holidaySet: Set<string>,
+  todayYMD: string
+): { generated: number; pushed: number; skipped: number } {
+  // loadMap: proc → { YYYY-MM-DD → kg } — tracks committed capacity
+  const loadMap: Record<string, Record<string, number>> = {}
+
+  // Pre-load already-generated batches (not re-generating) into loadMap
+  for (const row of rows) {
+    if (row.dcGeneratedOnce && !row.dcRegenerate) {
+      const qty = row.kg
+      for (const [proc, ymd] of Object.entries(row.dates)) {
+        if (!ymd) continue
+        if (!loadMap[proc]) loadMap[proc] = {}
+        loadMap[proc][ymd] = (loadMap[proc][ymd] || 0) + qty
+      }
+    }
+  }
+
+  // fitDate forward: find first date >= candidate with available capacity
+  const fitDate = (proc: string, candidateYMD: string, qty: number): string => {
+    if (!candidateYMD) return ''
+    let cur = ymdToDate(candidateYMD)
+    if (!cur) return candidateYMD
+    while (holidaySet.has(dateToYMD(cur))) cur = nextWD(cur, holidaySet, true)
+    const cap = capMap[proc]
+    if (!cap || qty <= 0) return dateToYMD(cur)
+    if (!loadMap[proc]) loadMap[proc] = {}
+    for (let i = 0; i < 730; i++) {
+      const ymd = dateToYMD(cur)
+      if (holidaySet.has(ymd)) { cur = nextWD(cur, holidaySet, true); continue }
+      const existing = loadMap[proc][ymd] || 0
+      if (existing + qty <= cap + 0.001) {
+        loadMap[proc][ymd] = existing + qty
+        return ymd
+      }
+      cur = nextWD(cur, holidaySet, true)
+    }
+    return dateToYMD(cur)
+  }
+
+  const TAIL = ['QA', 'Packing', 'Dispatch', 'FinalDispatch']
+  let generated = 0, pushed = 0, skipped = 0
+
+  for (const row of rows) {
+    if (row.dcGeneratedOnce && !row.dcRegenerate) { skipped++; continue }
+
+    const qty = row.kg || 0
+    const workSeq = [...new Set(row.route)]
+      .map(c => ALL_PROCS.find(p => p.toLowerCase() === c.toLowerCase()) || c)
+      .filter(Boolean)
+    if (!workSeq.length) { skipped++; continue }
+
+    // Build anchor map from machine anchor dates (SEPARATE from generated dates)
+    // anchors = { S: '2026-08-04', D: '2026-08-07' }
+    const anchorsInRoute: Record<string, string> = {}
+    for (const c of workSeq) {
+      if (row.anchors[c]) anchorsInRoute[c] = row.anchors[c]
+    }
+    if (!Object.keys(anchorsInRoute).length) { skipped++; continue }
+
+    // STEP 1: Pick anchor = LATEST date among anchors in route
+    let anchorProc = '', anchorYMD = ''
+    for (const [proc, ymd] of Object.entries(anchorsInRoute)) {
+      if (!anchorYMD || ymd > anchorYMD) { anchorYMD = ymd; anchorProc = proc }
+    }
+    const anchorIdx = workSeq.indexOf(anchorProc)
+    if (anchorIdx < 0) { skipped++; continue }
+
+    const planned: Record<string, string> = { [anchorProc]: anchorYMD }
+
+    // STEP 2: Walk BACKWARD from anchor (no capacity check — historical estimates)
+    let back = ymdToDate(anchorYMD)!
+    for (let i = anchorIdx - 1; i >= 0; i--) {
+      const c = workSeq[i]
+      back = addPD(back, dayMap[c] || 1, holidaySet, false)
+      planned[c] = dateToYMD(back)
+    }
+
+    // STEP 3: Check if first planned date < today → ALL IN PAST
+    const firstYMD = planned[workSeq[0]]
+    const isPast = firstYMD < todayYMD
+
+    if (isPast) {
+      // STEP 3A: Recalculate ALL forward from today with capacity check
+      let fwd = ymdToDate(todayYMD)!
+      for (let i = 0; i < workSeq.length; i++) {
+        const c = workSeq[i]
+        const prev = i > 0 ? workSeq[i-1] : null
+        fwd = addPD(fwd, i === 0 ? (dayMap[c]||1) : (dayMap[prev!]||1), holidaySet, true)
+        planned[c] = fitDate(c, dateToYMD(fwd), qty)
+        fwd = ymdToDate(planned[c]) || fwd
+      }
+      row.pushed = true; pushed++
+    } else {
+      // STEP 3B: Future → keep backward dates, walk FORWARD from anchor with capacity check
+      let fwd = ymdToDate(anchorYMD)!
+      for (let i = anchorIdx + 1; i < workSeq.length; i++) {
+        const c = workSeq[i]
+        const prev = workSeq[i-1]
+        fwd = addPD(fwd, dayMap[prev]||1, holidaySet, true)
+        planned[c] = fitDate(c, dateToYMD(fwd), qty)
+        fwd = ymdToDate(planned[c]) || fwd
+      }
+    }
+
+    // STEP 4: Append tail (QA/Packing/Dispatch) only if NOT already in route
+    const workSeqLower = workSeq.map(x => x.toLowerCase())
+    let endDate = ymdToDate(planned[workSeq[workSeq.length-1]])!
+    for (const c of TAIL) {
+      if (workSeqLower.includes(c.toLowerCase())) continue  // already in route
+      endDate = addPD(endDate, dayMap[c]||1, holidaySet, true)
+      planned[c] = fitDate(c, dateToYMD(endDate), qty)
+      endDate = ymdToDate(planned[c]) || endDate
+    }
+
+    // Write ALL planned dates to row.dates (including anchor processes)
+    // This is the key difference: anchor dates from machine are INPUT only
+    // The engine freely writes calculated dates for ALL processes including D and S
+    for (const [c, ymd] of Object.entries(planned)) {
+      if (ymd) row.dates[c] = ymd
+    }
+    for (const c of TAIL) {
+      if (planned[c]) row.dates[c] = planned[c]
+    }
+
+    row.dcGeneratedOnce = true
+    row.dcRegenerate    = false
+    generated++
+  }
+
+  return { generated, pushed, skipped }
+}
+
+// ── Page Component ────────────────────────────────────────────────────────────
 export default function DateCalculatorPage() {
-  // ERP rows (from Supabase batches/orders)
-  const [rows,             setRows]             = useState<any[]>([])
-  // Excel upload rows (pure client-side, no Supabase)
-  const [excelRows,        setExcelRows]        = useState<any[]>([])
-  const [showExcelRows,    setShowExcelRows]    = useState(false)
-  const [excelUploading,   setExcelUploading]   = useState(false)
-  const [excelFileName,    setExcelFileName]    = useState('')
+  const [rows,            setRows]            = useState<BatchRow[]>([])
+  const [processDurations,setProcessDurations]= useState<ProcessDuration[]>([])
+  const [holidays,        setHolidays]        = useState<any[]>([])
+  const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
+  const [showPDModal,     setShowPDModal]     = useState(false)
+  const [tempDurations,   setTempDurations]   = useState<Record<string,{days:number;capacity:string}>>({})
+  const [saveStatus,      setSaveStatus]      = useState<'idle'|'saving'|'saved'>('idle')
+  const [loadStatus,      setLoadStatus]      = useState<'loading'|'ready'|'error'>('loading')
+  const pendingSaves = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
-  const [allProcesses]  = useState<string[]>(ALL_PROCESS_CODES)
-  const [processDurations, setProcessDurations] = useState<ProcessDuration[]>([])
-  const [holidays,         setHolidays]         = useState<any[]>([])
-  const [showPDModal,      setShowPDModal]      = useState(false)
-  const [tempDurations,    setTempDurations]    = useState<Record<string, {days:number; capacity:string}>>({})
-  const [selectedBatches,  setSelectedBatches]  = useState<Set<string>>(new Set())
-  const [saveStatus,       setSaveStatus]       = useState<'idle'|'saving'|'saved'>('idle')
-  const [loadStatus,       setLoadStatus]       = useState<'loading'|'ready'|'error'>('loading')
+  const buildMaps = () => {
+    const dayMap: Record<string,number> = {}
+    const capMap: Record<string,number> = {}
+    ALL_PROCS.forEach(c => { dayMap[c] = 1 })
+    for (const d of processDurations) {
+      if (!d.code) continue
+      dayMap[d.code] = d.days > 0 ? d.days : 1
+      if (d.capacity && d.capacity > 0) capMap[d.code] = d.capacity
+    }
+    return { dayMap, capMap }
+  }
 
-  const pendingDateChanges = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-
-  // ── Load all data from Supabase ──────────────────────────────────────────
+  // ── Load data ───────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoadStatus('loading')
     try {
-      const [oRes, bRes, hRes, pdRes, procList] = await Promise.all([
-        fetch('/api/orders?limit=2000',  { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=10000',{ cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/setup/holidays',     { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/setup/settings?key=processDurations', { cache: 'no-store' }).then(r => r.json()),
+      const [oRes, bRes, dpRes, hRes, pdRes, procList] = await Promise.all([
+        fetch('/api/orders?limit=2000',  { cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/batches?limit=10000',{ cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/setup/holidays',      { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
+        fetch('/api/setup/settings?key=processDurations',{ cache:'no-store' }).then(r=>r.json()).catch(()=>({value:[]})),
         fetchProcessList(),
       ])
 
-      // Build process name cache
-      procList.forEach(p => { _procNameCache[p.code] = p.name })
-
-      // Holidays
+      procList.forEach((p: any) => { _procNameCache[p.code] = p.name })
       setHolidays(hRes.data || [])
+      setProcessDurations(pdRes.value || [])
 
-      // Process durations from settings
-      const savedDurations: ProcessDuration[] = pdRes.value || []
-      setProcessDurations(savedDurations)
+      const orders:    any[] = oRes.data  || []
+      const batches:   any[] = bRes.data  || []
+      const datePlans: any[] = dpRes.data || []
 
-      // Shape orders + batches into the legacy {order, batch} row format
-      const orders:  any[] = oRes.data  || []
-      const batches: any[] = bRes.data  || []
+      // Build lookup maps
+      const orderMap: Record<string,any> = {}
+      for (const o of orders) orderMap[o.id] = o
 
-      // Group batches by order_id
-      const batchByOrder: Record<string, any[]> = {}
+      const dpMap: Record<string,any> = {}
+      for (const dp of datePlans) dpMap[dp.batch_id] = dp
+
+      const batchRows: BatchRow[] = []
       for (const b of batches) {
-        if (!batchByOrder[b.order_id]) batchByOrder[b.order_id] = []
-        batchByOrder[b.order_id].push(b)
-      }
+        const o = orderMap[b.order_id] || {}
+        const dp = dpMap[b.id] || {}
 
-      const batchRows: any[] = []
-      for (const order of orders) {
-        const orderBatches = batchByOrder[order.id] || []
-        if (!orderBatches.length) continue
+        // Extract anchor dates from batch_date_plans.anchor_* columns
+        const anchors: Record<string,string> = {}
+        if (dp.anchor_s)   anchors['S']     = dp.anchor_s
+        if (dp.anchor_d)   anchors['D']     = dp.anchor_d
+        if (dp.anchor_s2)  anchors['S2']    = dp.anchor_s2
+        if (dp.anchor_add) anchors['Add']   = dp.anchor_add
+        if (dp.anchor_lev) anchors['Level'] = dp.anchor_lev
+        if (dp.anchor_fix) anchors['Fix']   = dp.anchor_fix
+        if (dp.anchor_wash)anchors['Wash']  = dp.anchor_wash
+        if (dp.anchor_rc)  anchors['Rc']    = dp.anchor_rc
 
-        const legacyOrder: Order = {
-          id:           order.id,
-          orderNumber:  order.order_number,
-          article:      order.article || '',
-          color:        order.color   || '',
-          qtyKg:        parseFloat(order.qty_kg) || 0,
-          processRoute: order.process_route || [],
-          machine:      order.machines?.name || '',
-          // processMachines: map each anchor process to itself
-          processMachines: Object.fromEntries(
-            MACHINE_PROCS_PRIORITY.filter(p => (order.process_route || []).includes(p)).map(p => [p, p])
-          ),
+        // Extract generated dates from batch_date_plans.d_* columns
+        const dates: Record<string,string> = {}
+        const PROC_MAP: Record<string,string> = {
+          C:'d_c',S:'d_s',H:'d_h',D:'d_d',S2:'d_s2',Rx:'d_rx',O:'d_o',
+          G:'d_g',F:'d_f',Co:'d_co',Tu:'d_tu',Add:'d_add',Level:'d_level',
+          Rc:'d_rc',Fix:'d_fix',Wash:'d_wash',Dry:'d_dry',B:'d_b',R:'d_r',
+          K:'d_k',QA:'d_qa',Packing:'d_packing',Dispatch:'d_dispatch',FinalDispatch:'d_finaldispatch'
+        }
+        for (const [proc, col] of Object.entries(PROC_MAP)) {
+          if (dp[col]) dates[proc] = dp[col].slice(0,10)
         }
 
-        for (const b of orderBatches) {
-          // date_calc_plan is stored in batches.date_calc_plan (jsonb) or rebuild empty
-          // Machine numbering saves dates in byProcessDates — merge them into flat dateCalcPlan
-          const rawPlan = b.date_calc_plan || {}
-          const dateCalcPlan: Record<string, string> = {}
-          // First copy any existing flat dates (from Generate Dates)
-          for (const [k, v] of Object.entries(rawPlan)) {
-            if (k !== 'byProcess' && k !== 'byProcessDates' && k !== 'planNumber' && k !== 'plannedDate' && v) {
-              dateCalcPlan[k] = String(v)
-            }
-          }
-          // Merge machine-numbered dates from byProcessDates
-          // RULE: only fill a column if flat plan does NOT already have a date for it
-          // This preserves engine-generated dates while still providing machine dates as fallback anchor
-          const byProcessDates: Record<string, string> = rawPlan.byProcessDates || {}
-          const machineAnchors: string[] = []
-          for (const [processCode, isoDate] of Object.entries(byProcessDates)) {
-            if (isoDate && typeof isoDate === 'string') {
-              const parts = isoDate.slice(0, 10).split('-')
-              if (parts.length === 3) {
-                const displayDate = `${parts[2]}/${parts[1]}/${parts[0]}`
-                // Only overwrite if flat plan has no date for this process
-                if (!dateCalcPlan[processCode]) {
-                  dateCalcPlan[processCode] = displayDate
-                }
-                machineAnchors.push(processCode)  // mark as anchor regardless
-              }
-            }
-          }
-          // plannedDate for DATE column: show machine process dates summary
-          // Format: "S: 05/08 / D: 03/08" from byProcessDates
-          const byPD = rawPlan.byProcessDates || {}
-          const machineDateSummary = Object.entries(byPD)
-            .filter(([, v]) => v)
-            .map(([k, v]) => {
-              const parts = String(v).slice(0,10).split('-')
-              const display = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : String(v)
-              return `${k}: ${display}`
-            })
-            .join(' / ')
-
-          const batch: Batch = {
-            batchId:          b.batch_id || b.id,
-            batchNumber:      b.batch_number || 0,
-            kg:               parseFloat(b.kg) || 0,
-            plannedDate:      machineDateSummary,
-            dateCalcPlan,
-            machineAnchors,   // process codes whose dates must not be overwritten by engine
-            dcGeneratedOnce:  b.dc_generated_once || false,
-            dcRegenerate:     b.dc_regenerate     || false,
-          }
-          batchRows.push({ order: legacyOrder, batch, _batchId: b.id })
-        }
+        batchRows.push({
+          batchId:     b.batch_id || b.id,
+          batchUUID:   b.id,
+          kg:          parseFloat(b.kg) || 0,
+          color:       o.color || '',
+          orderNumber: o.order_number || '',
+          route:       b.process_route || o.process_route || [],
+          machine:     o.machines?.name || '',
+          anchors,
+          dates,
+          dcGeneratedOnce: dp.dc_generated_once || false,
+          dcRegenerate:    dp.dc_regenerate     || false,
+          pushed:          dp.pushed            || false,
+        })
       }
 
-      setRows(batchRows)
+      setRows(batchRows.filter(r => r.route.length > 0))
       setLoadStatus('ready')
     } catch (err) {
-      console.error('Date calc load error:', err)
+      console.error('Date calc loadData error:', err)
       setLoadStatus('error')
     }
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
 
-  // ── Persist a date change for one batch cell to Supabase ────────────────
-  const persistDateChange = useCallback((batchDbId: string, dateCalcPlan: Record<string, string>) => {
-    // Debounce: save 400ms after last keystroke
-    const key = batchDbId
-    if (pendingDateChanges.current[key]) clearTimeout(pendingDateChanges.current[key])
-    pendingDateChanges.current[key] = setTimeout(async () => {
-      try {
-        // Fetch fresh plan to preserve machine keys (byProcess, byProcessDates, planNumber, plannedDate)
-        let freshPlan: any = {}
-        try {
-          const r = await fetch(`/api/batches?id=${batchDbId}`, { cache: 'no-store' }).then(x => x.json())
-          freshPlan = r.data?.[0]?.date_calc_plan || {}
-        } catch {}
-        // Merge: keep machine keys, overwrite only flat date keys
-        const MACHINE_KEYS = ['byProcess', 'byProcessDates', 'planNumber', 'plannedDate']
-        const merged: Record<string, any> = { ...dateCalcPlan }
-        for (const k of MACHINE_KEYS) {
-          if (freshPlan[k] !== undefined) merged[k] = freshPlan[k]
-        }
-        await fetch('/api/batches', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: batchDbId, date_calc_plan: merged }),
+  // ── Persist a date change ───────────────────────────────────────────────────
+  const persistRow = useCallback((row: BatchRow) => {
+    const key = row.batchUUID
+    if (pendingSaves.current[key]) clearTimeout(pendingSaves.current[key])
+    pendingSaves.current[key] = setTimeout(async () => {
+      await fetch('/api/date-plans', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'upsert', batch_id: row.batchUUID, batch_id_str: row.batchId,
+          dates: row.dates, anchors: row.anchors,
+          dc_generated_once: row.dcGeneratedOnce, dc_regenerate: row.dcRegenerate, pushed: row.pushed,
         })
-      } catch { /* fire-and-forget */ }
-      delete pendingDateChanges.current[key]
+      }).catch(() => {})
+      delete pendingSaves.current[key]
     }, 400)
   }, [])
 
-  const handleDateChange = (rowIdx: number, pc: string, value: string) => {
+  const handleDateChange = (rowIdx: number, proc: string, value: string) => {
     setRows(prev => {
       const updated = [...prev]
-      const row = { ...updated[rowIdx] }
-      row.batch = { ...row.batch, dateCalcPlan: { ...row.batch.dateCalcPlan, [pc]: value } }
+      const row = { ...updated[rowIdx], dates: { ...updated[rowIdx].dates } }
+      const ymd = fromDisplay(value) || value
+      row.dates[proc] = ymd
       updated[rowIdx] = row
-      // Debounce persist
-      if (row._batchId) persistDateChange(row._batchId, row.batch.dateCalcPlan)
+      persistRow(row)
       return updated
     })
   }
@@ -277,581 +361,156 @@ export default function DateCalculatorPage() {
   const handleRegenerateToggle = (rowIdx: number, checked: boolean) => {
     setRows(prev => {
       const updated = [...prev]
-      updated[rowIdx] = { ...updated[rowIdx], batch: { ...updated[rowIdx].batch, dcRegenerate: checked } }
+      const row = { ...updated[rowIdx], dcRegenerate: checked }
+      updated[rowIdx] = row
+      persistRow(row)
       return updated
     })
-    // Persist flag to Supabase
-    const row = rows[rowIdx]
-    if (row._batchId) {
-      fetch('/api/batches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update', id: row._batchId, dc_regenerate: checked }),
+  }
+
+  // ── Generate Dates ──────────────────────────────────────────────────────────
+  const generateDates = async () => {
+    const { dayMap, capMap } = buildMaps()
+    const holidaySet = buildHolidaySet(holidays)
+    const todayYMD   = new Date().toISOString().slice(0,10)
+
+    // Deep clone rows for engine
+    const workRows = rows.map(r => ({
+      ...r, dates: { ...r.dates }, anchors: { ...r.anchors }
+    }))
+
+    const result = runEngine(workRows, dayMap, capMap, holidaySet, todayYMD)
+    setRows(workRows)
+
+    // Save all generated rows to batch_date_plans
+    setSaveStatus('saving')
+    await Promise.all(workRows.map(row =>
+      fetch('/api/date-plans', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'upsert', batch_id: row.batchUUID, batch_id_str: row.batchId,
+          dates: row.dates, anchors: row.anchors,
+          dc_generated_once: row.dcGeneratedOnce, dc_regenerate: row.dcRegenerate, pushed: row.pushed,
+        })
       }).catch(() => {})
+    ))
+
+    // Also save to orders.planned_dates
+    await savePlannedDatesToOrders(workRows, false)
+    setSaveStatus('saved')
+    setTimeout(() => setSaveStatus('idle'), 3000)
+    alert(`✓ Done!\nGenerated: ${result.generated} · Pushed: ${result.pushed} · Skipped: ${result.skipped}`)
+  }
+
+  // ── Save to orders ──────────────────────────────────────────────────────────
+  const savePlannedDatesToOrders = async (sourceRows = rows, showAlert = true) => {
+    setSaveStatus('saving')
+    try {
+      const orderPlans: Record<string,Record<string,string>> = {}
+      for (const row of sourceRows) {
+        const orderId = rows.find(r => r.batchId === row.batchId)?.batchUUID || ''
+        // We need order ID — get from batch lookup
+      }
+
+      // Simpler: group by orderNumber from rows
+      const orderMap: Record<string, string> = {}
+      const orderPlanMap: Record<string, Record<string,string>> = {}
+      for (const row of sourceRows) {
+        if (!row.dates || !Object.keys(row.dates).length) continue
+        // Find order UUID via orderNumber — we'll use a fresh fetch
+      }
+
+      // Fetch orders to get IDs
+      const oRes = await fetch('/api/orders?limit=2000', { cache:'no-store' }).then(r=>r.json())
+      for (const o of (oRes.data || [])) orderMap[o.order_number] = o.id
+
+      for (const row of sourceRows) {
+        const oId = orderMap[row.orderNumber]; if (!oId) continue
+        if (!orderPlanMap[oId]) orderPlanMap[oId] = {}
+        for (const [proc, ymd] of Object.entries(row.dates)) {
+          if (ymd) orderPlanMap[oId][proc] = ymd
+        }
+        if (!orderPlanMap[oId]['Dispatch']) {
+          const isos = Object.values(orderPlanMap[oId]).filter(Boolean).sort()
+          if (isos.length) orderPlanMap[oId]['Dispatch'] = isos[isos.length-1]
+        }
+      }
+
+      const updates = Object.entries(orderPlanMap).map(([id, planned_dates]) => ({ id, planned_dates }))
+      if (!updates.length) { if (showAlert) alert('No planned dates to save.'); return }
+
+      const res = await fetch('/api/orders', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'update_planned_dates', updates })
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Save failed')
+      setSaveStatus('saved')
+      if (showAlert) alert(`✅ Saved planned dates to ${updates.length} orders.`)
+    } catch (err: any) {
+      setSaveStatus('idle')
+      if (showAlert) alert('Save failed: ' + err.message)
     }
   }
 
-  const handleBatchSelection = (batchId: string, checked: boolean) =>
-    setSelectedBatches(prev => { const s = new Set(prev); checked ? s.add(batchId) : s.delete(batchId); return s })
-
+  // ── Clear selected ──────────────────────────────────────────────────────────
   const handleClearSelected = async () => {
     if (!selectedBatches.size) { alert('Select batches first'); return }
-    if (!confirm(`Clear Date Calculator dates for ${selectedBatches.size} batch(es)?\nMachine plan numbers and planned dates will NOT be cleared.`)) return
+    if (!confirm(`Clear Date Calculator dates for ${selectedBatches.size} batch(es)?\nMachine anchor dates (S/D) will NOT be cleared.`)) return
     let cleared = 0
     for (const row of rows) {
-      if (!selectedBatches.has(row.batch.batchId)) continue
-      // Fetch fresh date_calc_plan to preserve machine numbering keys
-      let freshPlan: any = {}
-      try {
-        const r = await fetch(`/api/batches?id=${row._batchId}`, { cache: 'no-store' }).then(x => x.json())
-        freshPlan = r.data?.[0]?.date_calc_plan || {}
-      } catch {}
-
-      // Only keep machine numbering data — remove all flat process date keys
-      const MACHINE_KEYS = ['byProcess', 'byProcessDates', 'planNumber', 'plannedDate']
-      const clearedPlan: Record<string, any> = {}
-      for (const key of MACHINE_KEYS) {
-        if (freshPlan[key] !== undefined) clearedPlan[key] = freshPlan[key]
-      }
-
-      await fetch('/api/batches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          id: row._batchId,
-          date_calc_plan: Object.keys(clearedPlan).length ? clearedPlan : null,
-          dc_generated_once: false,
-          dc_regenerate: false
-        }),
+      if (!selectedBatches.has(row.batchId)) continue
+      await fetch('/api/date-plans', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'clear', batch_id: row.batchUUID })
       }).catch(() => {})
       cleared++
     }
     setSelectedBatches(new Set())
     await loadData()
-    alert(`✓ Cleared Date Calculator dates for ${cleared} batch(es).\nMachine plan numbers preserved.`)
+    alert(`✓ Cleared ${cleared} batch(es). Machine anchor dates preserved.`)
   }
 
-  // ── Date calculation engine — exact match to reference HTML algorithm ──────
-  const dcPlanAllRows = (
-    workRows: any[],
-    dayMap:  Record<string, number>,
-    capMap:  Record<string, number>,
-    holidaySet: Set<string>,
-    externalLoadMap?: Record<string, Record<string,number>>
-  ) => {
-    const todayYMD = new Date().toISOString().slice(0, 10)
-
-    // ── loadMap: tracks kg committed per process per date ──────────────────
-    const loadMap: Record<string, Record<string, number>> = {}
-
-    // Seed from external (Excel pre-existing rows)
-    if (externalLoadMap) {
-      for (const [proc, dates] of Object.entries(externalLoadMap)) {
-        loadMap[proc] = {}
-        for (const [ymd, kg] of Object.entries(dates)) {
-          loadMap[proc][ymd] = (loadMap[proc][ymd] || 0) + kg
-        }
-      }
-    }
-
-    // Mark each row: go=true means needs generation
-    const tasks = workRows.map(r => ({
-      ...r,
-      go: !(!!r.batch.dcGeneratedOnce && !r.batch.dcRegenerate),
-      pushed: false,
-    }))
-
-    // Pre-load already-committed (skipped) batches into loadMap
-    for (const t of tasks) {
-      if (t.go) continue
-      const plan = t.batch.dateCalcPlan || {}
-      const qty  = parseFloat(String(t.batch.kg)) || t.order.qtyKg || 0
-      for (const [code, ds] of Object.entries(plan)) {
-        const ymd = toYMD_from_display(ds as string); if (!ymd) continue
-        if (!loadMap[code]) loadMap[code] = {}
-        loadMap[code][ymd] = (loadMap[code][ymd] || 0) + qty
-      }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-    const nextWD = (d: Date, fwd = true): Date => {
-      const r = new Date(d)
-      const step = fwd ? 1 : -1
-      do { r.setDate(r.getDate() + step) } while (holidaySet.has(dateToStr(r)))
-      return r
-    }
-
-    const addPD = (date: Date, n: number, fwd = true): Date => {
-      let d = new Date(date)
-      for (let i = 0; i < Math.max(1, n); i++) d = nextWD(d, fwd)
-      return d
-    }
-
-    // fitDate: find first date >= candidate (skipping holidays) where load + qty <= cap
-    // Commits the load. Returns YYYY-MM-DD.
-    const fitDate = (proc: string, candidateYMD: string, qty: number): string => {
-      if (!candidateYMD) return ''
-      let cur = ymdToDate(candidateYMD); if (!cur) return candidateYMD
-      // Skip holidays on candidate itself
-      while (holidaySet.has(dateToStr(cur))) cur = nextWD(cur, true)
-      const cap = capMap[proc]
-      if (!cap || qty <= 0) return dateToStr(cur)
-      if (!loadMap[proc]) loadMap[proc] = {}
-      for (let i = 0; i < 730; i++) {
-        const ymd = dateToStr(cur)
-        if (holidaySet.has(ymd)) { cur = nextWD(cur, true); continue }
-        const existing = loadMap[proc][ymd] || 0
-        if (existing + qty <= cap + 0.001) {
-          loadMap[proc][ymd] = existing + qty
-          return ymd
-        }
-        cur = nextWD(cur, true)
-      }
-      return dateToStr(cur)
-    }
-
-    const TAIL = ['QA', 'Packing', 'Dispatch']
-    const result = { generated: 0, regenerated: 0, skipped: 0 }
-
-    for (const t of tasks) {
-      if (!t.go) { result.skipped++; continue }
-      const { order, batch } = t
-      if (!batch.dateCalcPlan) batch.dateCalcPlan = {}
-      const plan = batch.dateCalcPlan
-      const qty  = parseFloat(String(batch.kg)) || order.qtyKg || 0
-
-      // Build work sequence from order route
-      const routeSeq: string[] = Array.isArray(order.processRoute) ? order.processRoute.filter(Boolean) : []
-      const workSeq: string[] = [...new Set(routeSeq)]
-        .map((c: string) => ALL_PROCESS_CODES.find(p => p.toLowerCase() === c.toLowerCase()) || c)
-        .filter(Boolean)
-      if (!workSeq.length) { result.skipped++; continue }
-
-      // Find anchors in route that have dates in plan (YYYY-MM-DD or DD/MM/YYYY)
-      const anchorsInRoute: Record<string, string> = {}
-      for (const c of workSeq) {
-        const ymd = toYMD_from_display(plan[c] || '')
-        if (ymd) anchorsInRoute[c] = ymd
-      }
-      if (!Object.keys(anchorsInRoute).length) { result.skipped++; continue }
-
-      // STEP 1: Pick anchor = latest date among anchors in route
-      let anchorProc = '', anchorYMD = ''
-      for (const [proc, ymd] of Object.entries(anchorsInRoute)) {
-        if (!anchorYMD || ymd > anchorYMD) { anchorYMD = ymd; anchorProc = proc }
-      }
-      const anchorIdx = workSeq.indexOf(anchorProc)
-      if (anchorIdx < 0) { result.skipped++; continue }
-
-      // Machine anchors: dates fixed by machine numbering — engine must NEVER overwrite these
-      const machineAnchorSet = new Set<string>(batch.machineAnchors || [])
-
-      // Use anchor date as-is (no fitDate) — machine date is fixed
-      const planned: Record<string, string> = { [anchorProc]: anchorYMD }
-
-      // STEP 2: Walk BACKWARD from anchor WITH capacity check
-      // fitDateBack: find nearest working date <= candidate with available capacity
-      const fitDateBack = (proc: string, candidateYMD: string, qty: number): string => {
-        if (!candidateYMD) return ''
-        let cur = ymdToDate(candidateYMD); if (!cur) return candidateYMD
-        while (holidaySet.has(dateToStr(cur))) cur = nextWD(cur, false)
-        const cap = capMap[proc]
-        if (!cap || qty <= 0) return dateToStr(cur)
-        if (!loadMap[proc]) loadMap[proc] = {}
-        for (let i = 0; i < 730; i++) {
-          const ymd = dateToStr(cur)
-          if (holidaySet.has(ymd)) { cur = nextWD(cur, false); continue }
-          const existing = loadMap[proc][ymd] || 0
-          if (existing + qty <= cap + 0.001) {
-            loadMap[proc][ymd] = existing + qty
-            return ymd
-          }
-          cur = nextWD(cur, false)  // go further back if over capacity
-        }
-        return dateToStr(cur)
-      }
-
-      let back = ymdToDate(anchorYMD)!
-      for (let i = anchorIdx - 1; i >= 0; i--) {
-        const c = workSeq[i]
-        back = addPD(back, dayMap[c] || 1, false)
-        if (!machineAnchorSet.has(c)) {
-          planned[c] = fitDateBack(c, dateToStr(back), qty)
-          back = ymdToDate(planned[c]) || back
-        }
-      }
-
-      // STEP 3: Check if first planned date < today
-      const firstPlannedYMD = planned[workSeq[0]]
-      const useForward = firstPlannedYMD < todayYMD
-
-      if (useForward) {
-        // STEP 3A: All in past → recalculate ALL forward from today with capacity check
-        let fwd = ymdToDate(todayYMD)!
-        for (let i = 0; i < workSeq.length; i++) {
-          const c    = workSeq[i]
-          const prev = i > 0 ? workSeq[i - 1] : null
-          fwd = addPD(fwd, i === 0 ? (dayMap[c] || 1) : (dayMap[prev!] || 1), true)
-          if (!machineAnchorSet.has(c)) {
-            planned[c] = fitDate(c, dateToStr(fwd), qty)
-            fwd = ymdToDate(planned[c]) || fwd
-          }
-        }
-        t.pushed = true
-      } else {
-        // STEP 3B: Future anchor → keep backward dates, walk forward from anchor with capacity check
-        let fwd = ymdToDate(anchorYMD)!
-        for (let i = anchorIdx + 1; i < workSeq.length; i++) {
-          const c    = workSeq[i]
-          const prev = workSeq[i - 1]
-          fwd = addPD(fwd, dayMap[prev] || 1, true)
-          if (!machineAnchorSet.has(c)) {
-            planned[c] = fitDate(c, dateToStr(fwd), qty)
-            fwd = ymdToDate(planned[c]) || fwd
-          }
-        }
-      }
-
-      // STEP 4: Append tail (QA, Packing, Dispatch) with capacity check
-      let endDate = ymdToDate(planned[workSeq[workSeq.length - 1]])!
-      for (const c of TAIL) {
-        endDate = addPD(endDate, dayMap[c] || 1, true)
-        planned[c] = fitDate(c, dateToStr(endDate), qty)
-        endDate = ymdToDate(planned[c]) || endDate
-      }
-
-      // Write to plan in display format DD/MM/YYYY
-      // NEVER overwrite machine-anchored dates — they are fixed by machine numbering
-      workSeq.forEach(c => {
-        if (machineAnchorSet.has(c)) return  // skip — machine date is sacred
-        if (planned[c]) plan[c] = toDisplay(planned[c])
-      })
-      TAIL.forEach(c => {
-        if (machineAnchorSet.has(c)) return  // skip
-        if (planned[c]) plan[c] = toDisplay(planned[c])
-      })
-
-      if (batch.dcGeneratedOnce) result.regenerated++; else result.generated++
-      batch.dcGeneratedOnce = true
-      batch.dcRegenerate    = false
-    }
-    return result
-  }
-
-  // ── Helper: convert display DD/MM/YYYY or YYYY-MM-DD → YYYY-MM-DD ────────
-  const toYMD_from_display = (s: string): string => {
-    if (!s) return ''
-    if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s
-    if (s.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-      const [d, m, y] = s.split('/'); return `${y}-${m}-${d}`
-    }
-    return ''
-  }
-
-  // ── Helper: YYYY-MM-DD string → Date object ───────────────────────────────
-  const ymdToDate = (s: string): Date | null => {
-    if (!s) return null
-    const p = s.split('-'); if (p.length !== 3) return null
-    const d = new Date(+p[0], +p[1] - 1, +p[2])
-    return isNaN(d.getTime()) ? null : d
-  }
-
-  // Build dayMap and capMap from processDurations
-  const buildMaps = () => {
-    const dayMap: Record<string, number> = {}
-    const capMap: Record<string, number> = {}
-    processDurations.forEach(d => {
-      const code = String(d.code || '').trim(); if (!code) return
-      const days = d.days > 0 ? d.days : 1
-      dayMap[code] = days
-      // Also store lowercase alias for case-insensitive matching
-      dayMap[code.toLowerCase()] = days
-      if (d.capacity && d.capacity > 0) {
-        capMap[code] = d.capacity
-        capMap[code.toLowerCase()] = d.capacity
-      }
-    })
-    // Default 1 day for all known process codes
-    ALL_PROCESS_CODES.forEach(code => {
-      if (!dayMap[code]) dayMap[code] = 1
-      if (!dayMap[code.toLowerCase()]) dayMap[code.toLowerCase()] = 1
-    })
-    return { dayMap, capMap }
-  }
-
-  // ── Generate Dates (ERP mode) ─────────────────────────────────────────────
-  const generateDates = async () => {
-    const { dayMap, capMap } = buildMaps()
-    const holidaySet = buildHolidaySet(holidays)
-    const workRows   = rows.map(r => ({ ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan } } }))
-    const result     = dcPlanAllRows(workRows, dayMap, capMap, holidaySet)
-    setRows(workRows)
-    await savePlannedDatesToOrders(workRows, false)
-    setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 3000)
-    alert(`✓ Done!\nGenerated: ${result.generated}\nRe-generated: ${result.regenerated}\nSkipped: ${result.skipped}`)
-  }
-
-  // ── Save planned dates to Supabase orders ─────────────────────────────────
-  const savePlannedDatesToOrders = async (sourceRows = rows, showAlert = true): Promise<void> => {
-    setSaveStatus('saving')
-    try {
-      // Group by order id, merge all batches' dateCalcPlan
-      const orderPlans: Record<string, Record<string, string>> = {}
-      for (const { order, batch } of sourceRows) {
-        const plan: Record<string, string> = batch.dateCalcPlan || {}
-        if (!Object.keys(plan).length) continue
-        if (!orderPlans[order.id]) orderPlans[order.id] = {}
-        for (const [code, dateStr] of Object.entries(plan)) {
-          const iso = toISO(dateStr); if (!iso) continue
-          orderPlans[order.id][code] = iso
-        }
-        // Dispatch from FinalDispatch
-        if (plan['FinalDispatch']) orderPlans[order.id]['Dispatch'] = toISO(plan['FinalDispatch'])
-        // Last date becomes Dispatch if missing
-        if (!orderPlans[order.id]['Dispatch']) {
-          const isos = Object.values(orderPlans[order.id]).sort()
-          if (isos.length) orderPlans[order.id]['Dispatch'] = isos[isos.length - 1]
-        }
-      }
-
-      const updates = Object.entries(orderPlans).map(([id, planned_dates]) => ({ id, planned_dates }))
-      if (!updates.length) { if (showAlert) alert('No planned dates to save.'); return }
-
-      const res  = await fetch('/api/orders', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ action: 'update_planned_dates', updates }),
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error || 'Save failed')
-
-      // Also persist date_calc_plan back to each batch
-      // IMPORTANT: fetch fresh plan per batch to preserve machine keys
-      const batchUpdates = sourceRows.filter(r => r._batchId && Object.keys(r.batch.dateCalcPlan || {}).length)
-      await Promise.all(batchUpdates.map(async r => {
-        let freshPlan: any = {}
-        try {
-          const fr = await fetch(`/api/batches?id=${r._batchId}`, { cache: 'no-store' }).then(x => x.json())
-          freshPlan = fr.data?.[0]?.date_calc_plan || {}
-        } catch {}
-        const MACHINE_KEYS = ['byProcess', 'byProcessDates', 'planNumber', 'plannedDate']
-        const merged: Record<string, any> = { ...r.batch.dateCalcPlan }
-        for (const k of MACHINE_KEYS) {
-          if (freshPlan[k] !== undefined) merged[k] = freshPlan[k]
-        }
-        return fetch('/api/batches', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: r._batchId, date_calc_plan: merged, dc_generated_once: r.batch.dcGeneratedOnce }),
-        }).catch(() => {})
-      }))
-
-      setSaveStatus('saved')
-      if (showAlert) alert(`✅ Planned dates saved to ${updates.length} orders.`)
-    } catch (err: any) {
-      setSaveStatus('idle')
-      if (showAlert) alert('Save failed: ' + (err?.message || String(err)))
-    }
-  }
-
-  // ── Process Days modal ────────────────────────────────────────────────────
+  // ── Process Days modal ──────────────────────────────────────────────────────
   const openProcessDaysModal = () => {
-    const savedByCode: Record<string, ProcessDuration> = {}
-    processDurations.forEach(d => { if (d.code) savedByCode[d.code] = d })
-    const temp: Record<string, {days:number; capacity:string}> = {}
-    ALL_PROCESS_CODES.forEach(code => {
-      const saved = savedByCode[code]
-      temp[code] = { days: saved?.days ?? 1, capacity: saved?.capacity?.toString() || '' }
+    const byCode: Record<string,ProcessDuration> = {}
+    processDurations.forEach(d => { if (d.code) byCode[d.code] = d })
+    const temp: Record<string,{days:number;capacity:string}> = {}
+    ALL_PROCS.forEach(c => {
+      temp[c] = { days: byCode[c]?.days ?? 1, capacity: byCode[c]?.capacity?.toString() || '' }
     })
     setTempDurations(temp); setShowPDModal(true)
   }
 
   const saveProcessDays = async () => {
-    const newDurations: ProcessDuration[] = ALL_PROCESS_CODES.map(code => ({
-      code,
-      name:     getProcessName(code),
-      days:     Math.max(1, tempDurations[code]?.days || 1),
-      capacity: tempDurations[code]?.capacity ? parseFloat(tempDurations[code].capacity) : undefined,
+    const newDurations: ProcessDuration[] = ALL_PROCS.map(c => ({
+      code: c, name: getPN(c),
+      days: Math.max(1, tempDurations[c]?.days || 1),
+      capacity: tempDurations[c]?.capacity ? parseFloat(tempDurations[c].capacity) : undefined,
     }))
     setProcessDurations(newDurations)
     await fetch('/api/setup/settings', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ key: 'processDurations', value: newDurations }),
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ key:'processDurations', value: newDurations })
     })
-    setShowPDModal(false); alert('✓ Process days saved to Supabase!')
+    setShowPDModal(false)
+    alert('✓ Process days saved!')
   }
 
-  // ── Excel upload (pure client-side, no Supabase) ─────────────────────────
-  const loadXLSX = (): Promise<any> => new Promise((resolve, reject) => {
-    if ((window as any).XLSX) { resolve((window as any).XLSX); return }
-    const s = document.createElement('script')
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
-    s.onload = () => resolve((window as any).XLSX)
-    s.onerror = () => reject(new Error('Failed to load xlsx'))
-    document.head.appendChild(s)
-  })
-
-  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return
-    setExcelUploading(true); setExcelFileName(file.name)
-    try {
-      const buf  = await file.arrayBuffer()
-      const XLSX = await loadXLSX()
-      const wb   = XLSX.read(new Uint8Array(buf), { type: 'array', raw: false })
-      const ws   = wb.Sheets[wb.SheetNames[0]]
-      const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
-      if (!data || data.length < 2) { alert('File is empty.'); return }
-      const headers = (data[0] as any[]).map((h: any) => String(h || '').trim())
-
-      const find = (kws: string[]) => {
-        for (const kw of kws) { const i = headers.findIndex((h:string) => h.toLowerCase()===kw.toLowerCase()); if(i>=0) return i }
-        for (const kw of kws) { const i = headers.findIndex((h:string) => h.toLowerCase().includes(kw.toLowerCase())); if(i>=0) return i }
-        return -1
-      }
-      const bc   = find(['batch no','batch id','batchid','batch'])
-      const rc   = find(['process','route'])
-      const qtyc = find(['qty','kg','weight','quantity'])
-      const anchorCols: Record<string,number> = {
-        'S': find(['s date','sdate']), 'D': find(['d date','ddate']),
-        'Add': find(['add dt','add date']), 'Fix': find(['fix date','fixdate']),
-        'Level': find(['level date','leveldate','level dat']), 'Rc': find(['rc date','rcdate']),
-        'Wash': find(['washing date','wash date']),
-      }
-      const GEN_PROCS = ['C','S','H','D','F','G','O','B','R','K','Add','Level','Wash','Fix','Dry','Rc','Rx','Co','Qa','Packing','Dispatch']
-      const genCols: Record<string,number> = {}
-      for (const proc of GEN_PROCS) { const idx = headers.findIndex((h:string) => h.trim()===proc); if(idx>=0) genCols[proc]=idx }
-      if (!genCols['QA'] && genCols['Qa']!==undefined) genCols['QA'] = genCols['Qa']
-      if (bc < 0) { alert('Batch No column not found.\nHeaders: ' + headers.join(', ')); return }
-
-      const parseDate = (val: any): string => {
-        if (!val) return ''
-        const s = String(val).trim()
-        if (!s || s==='null') return ''
-        if (s.match(/^\d{2}\/\d{2}\/\d{4}$/)) return s
-        const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(ymd) return `${ymd[3]}/${ymd[2]}/${ymd[1]}`
-        const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(mdy) return `${mdy[2].padStart(2,'0')}/${mdy[1].padStart(2,'0')}/${mdy[3]}`
-        const d = new Date(s); return isNaN(d.getTime()) ? '' : dateToDisplayStr(d)
-      }
-
-      const preLoadMap: Record<string, Record<string,number>> = {}
-      let existingCount = 0
-      for (let i=1; i<data.length; i++) {
-        const row = data[i] as any[]
-        const batchId = String(row[bc]||'').trim(); if(!batchId) continue
-        const qty = qtyc>=0 ? parseFloat(String(row[qtyc]).replace(/[^0-9.]/g,''))||0 : 0
-        if(qty<=0) continue
-        const hasGenDates = Object.values(genCols).some(col => row[col]&&String(row[col]).trim())
-        if(!hasGenDates) continue
-        existingCount++
-        for(const [proc,col] of Object.entries(genCols)) {
-          const ds = parseDate(row[col]); if(!ds) continue
-          if(!preLoadMap[proc]) preLoadMap[proc]={}
-          preLoadMap[proc][ds] = (preLoadMap[proc][ds]||0)+qty
-        }
-      }
-
-      const parsed: any[] = []
-      for (let i=1; i<data.length; i++) {
-        const row = data[i] as any[]
-        const batchId = String(row[bc]||'').trim(); if(!batchId) continue
-        const hasGenDates = Object.values(genCols).some(col => row[col]&&String(row[col]).trim())
-        if(hasGenDates) continue
-        const qty      = qtyc>=0 ? parseFloat(String(row[qtyc]).replace(/[^0-9.]/g,''))||0 : 0
-        const routeRaw = rc>=0 ? String(row[rc]||'').trim() : ''
-        const routeParts = routeRaw ? routeRaw.split('/').map((x:string)=>x.trim()).filter(Boolean) : []
-        const dateCalcPlan: Record<string,string> = {}
-        for(const [proc,col] of Object.entries(anchorCols)) {
-          if(col<0) continue; const ds=parseDate(row[col]); if(ds) dateCalcPlan[proc]=ds
-        }
-        if(!Object.keys(dateCalcPlan).length) continue
-        parsed.push({
-          order: { id:`xl-${i}`, orderNumber:batchId, article:'', color:'', qtyKg:qty,
-            processRoute:routeParts, machine:'',
-            processMachines:Object.fromEntries(Object.keys(dateCalcPlan).map(p=>[p,p])) },
-          batch: { batchId, batchNumber:i, kg:qty, plannedDate:Object.values(dateCalcPlan)[0]||'',
-            dateCalcPlan, dcGeneratedOnce:false, dcRegenerate:false, _fromExcel:true }
-        })
-      }
-      if(!parsed.length) { alert(`✓ File read!\nExisting rows: ${existingCount}\nRows needing generation: 0`); return }
-      ;(window as any).__excelPreLoadMap = preLoadMap
-      setExcelRows(parsed); setShowExcelRows(true)
-      alert(`✓ File loaded!\nExisting rows (load pre-built): ${existingCount}\nRows to generate: ${parsed.length}`)
-    } catch(err:any) { alert('Error: '+(err?.message||String(err))) }
-    finally { setExcelUploading(false); e.target.value='' }
-  }
-
-  const handleExcelDateChange = (batchId: string, pc: string, value: string) =>
-    setExcelRows(prev => prev.map(r => r.batch.batchId===batchId ? {...r, batch:{...r.batch, dateCalcPlan:{...r.batch.dateCalcPlan,[pc]:value}}} : r))
-
-  const generateExcelDates = () => {
-    const { dayMap, capMap } = buildMaps()
-    const holidaySet = buildHolidaySet(holidays)
-    const workRows   = excelRows.map(r => ({ ...r, batch: { ...r.batch, dateCalcPlan: { ...r.batch.dateCalcPlan } } }))
-    const preLoadMap = (window as any).__excelPreLoadMap || {}
-    const result     = dcPlanAllRows(workRows, dayMap, capMap, holidaySet, preLoadMap)
-    setExcelRows(workRows)
-    alert(`✓ Dates generated for ${result.generated} batches!\nCapacity respected.`)
-  }
-
-  const exportExcelWithDates = async () => {
-    if(!excelRows.length) return
-    const XLSX = await loadXLSX()
-    const hdrs = ['Batch ID','Color','Article','Qty (Kg)','Route','Machine',...ALL_PROCESS_CODES]
-    const dataRows = excelRows.map(({order,batch}) => [
-      batch.batchId, order.color, order.article, batch.kg||order.qtyKg,
-      (order.processRoute||[]).join('/'), order.machine,
-      ...ALL_PROCESS_CODES.map(pc => batch.dateCalcPlan?.[pc]||'')
-    ])
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdrs,...dataRows]), 'Dates')
-    XLSX.writeFile(wb, 'date_calculator_output.xlsx')
-  }
-
-  const getMachinePlannedDates = (order: Order, batch: any) => {
-    const mPcs = Object.keys(order.processMachines || {}); if(!mPcs.length) return '-'
-    const entries = mPcs.map(pc => ({pc, date: batch.dateCalcPlan?.[pc]})).filter(e => e.date)
-    if(!entries.length&&batch.plannedDate) { try{const d=normalizeDate(batch.plannedDate);return d?dateToDisplayStr(d):batch.plannedDate}catch{return batch.plannedDate} }
-    return entries.map(e=>`${e.pc}: ${e.date}`).join(' / ')
-  }
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   if (loadStatus === 'loading') return (
-    <div className="content" style={{ textAlign: 'center', padding: 80 }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>📅</div>
-      <div style={{ fontSize: 14, color: 'var(--text-tertiary)' }}>Loading batches from Supabase…</div>
+    <div className="content" style={{ textAlign:'center', padding:80 }}>
+      <div style={{ fontSize:32, marginBottom:12 }}>📅</div>
+      <div style={{ fontSize:14, color:'var(--text-tertiary)' }}>Loading from Supabase…</div>
     </div>
   )
 
   if (loadStatus === 'error') return (
     <div className="content">
-      <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger)' }}>Failed to load data from Supabase</div>
-        <button className="primary" style={{ marginTop: 16 }} onClick={loadData}>Retry</button>
-      </div>
-    </div>
-  )
-
-  if (!rows.length && !showExcelRows) return (
-    <div className="content">
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Date Calculator Sheet</span>
-          <label style={{ padding:'8px 16px', fontSize:13, fontWeight:600, borderRadius:6, cursor:'pointer', background:'var(--accent)', color:'#fff', display:'inline-flex', alignItems:'center', gap:6 }}>
-            {excelUploading ? '⏳ Loading…' : '📤 Upload Excel to Calculate Dates'}
-            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcelUpload} style={{ position:'absolute', width:1, height:1, opacity:0, overflow:'hidden' }} />
-          </label>
-        </div>
-        <div style={{ padding:'40px', textAlign:'center' }}>
-          <div style={{ fontSize:40, marginBottom:12 }}>📅</div>
-          <div style={{ fontSize:15, fontWeight:600, marginBottom:8 }}>No split batches found</div>
-          <div style={{ fontSize:13, color:'var(--text-tertiary)', marginBottom:16 }}>
-            Split some orders first, or upload your full Excel file for standalone date calculation.
-          </div>
-          <button className="small" onClick={loadData}>↻ Refresh from Supabase</button>
-        </div>
+      <div className="card" style={{ textAlign:'center', padding:40 }}>
+        <div style={{ fontSize:32, marginBottom:12 }}>⚠️</div>
+        <div style={{ fontSize:14, fontWeight:600, color:'var(--danger)' }}>Failed to load data</div>
+        <button className="primary" style={{ marginTop:16 }} onClick={loadData}>Retry</button>
       </div>
     </div>
   )
@@ -859,112 +518,110 @@ export default function DateCalculatorPage() {
   return (
     <div className="content" style={{ height:'100vh', display:'flex', flexDirection:'column', overflow:'hidden', padding:0 }}>
       <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', margin:0, borderRadius:0, border:'none' }}>
+
+        {/* Header */}
         <div className="card-header">
-          <span className="card-title">Date Calculator Sheet <span style={{ fontSize:11, fontWeight:400, color:'var(--text-tertiary)' }}>Supabase · {rows.length} batches</span></span>
-          <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
-            <label style={{ padding:'6px 12px', fontSize:12, fontWeight:600, borderRadius:6, cursor:'pointer', background:'var(--bg-secondary)', border:'1px solid var(--border-light)', color:'var(--text-primary)', display:'inline-flex', alignItems:'center', gap:5 }}>
-              {excelUploading ? '⏳ Loading…' : '📤 Upload Excel'}
-              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcelUpload} style={{ position:'absolute', width:1, height:1, opacity:0, overflow:'hidden' }} />
-            </label>
-            {showExcelRows && (<>
-              <button className="small success" onClick={generateExcelDates}>⚙ Generate Dates (Excel)</button>
-              <button className="small" onClick={exportExcelWithDates} style={{ background:'#059669', color:'#fff', border:'none', fontWeight:600 }}>⬇ Download Output</button>
-              <button className="small danger" onClick={() => { setExcelRows([]); setShowExcelRows(false); setExcelFileName(''); (window as any).__excelPreLoadMap=null }}>✕ Clear Excel</button>
-            </>)}
-            <span style={{ width:1, height:20, background:'var(--border-light)', display:'inline-block' }} />
+          <span className="card-title">
+            Date Calculator Sheet
+            <span style={{ fontSize:11, fontWeight:400, color:'var(--text-tertiary)', marginLeft:8 }}>
+              Supabase · {rows.length} batches
+            </span>
+          </span>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
             <button className="small success" onClick={generateDates}>⚙ Generate Dates</button>
-            <button className="small" onClick={() => savePlannedDatesToOrders(rows, true)}
-              style={{ background:saveStatus==='saved'?'#1D9E75':'var(--accent)', color:'#fff', border:'none', fontWeight:600 }}>
-              {saveStatus==='saving' ? '⏳ Saving…' : saveStatus==='saved' ? '✓ Saved' : '⬇ Save to Orders'}
+            <button className="small"
+              style={{ background: saveStatus==='saved'?'#1D9E75':'var(--accent)', color:'#fff', border:'none', fontWeight:600 }}
+              onClick={() => savePlannedDatesToOrders(rows, true)}>
+              {saveStatus==='saving'?'⏳ Saving…':saveStatus==='saved'?'✓ Saved':'⬇ Save to Orders'}
             </button>
             <button className="small primary" onClick={openProcessDaysModal}>Process Days</button>
-            <button className="small" onClick={handleClearSelected}
-              style={{ background:selectedBatches.size>0?'#DC2626':'#E5E7EB', color:selectedBatches.size>0?'white':'#9CA3AF', border:'none' }}>
+            <button className="small"
+              style={{ background: selectedBatches.size>0?'#DC2626':'#E5E7EB', color: selectedBatches.size>0?'white':'#9CA3AF', border:'none' }}
+              onClick={handleClearSelected}>
               Clear Selected ({selectedBatches.size})
             </button>
             <button className="small" onClick={loadData}>↻ Refresh</button>
           </div>
         </div>
-        <div style={{ fontSize:'11px', color:'var(--text-tertiary)', padding:'3px 16px', flexShrink:0, background:'var(--bg-secondary)' }}>
-          Data from Supabase · Changes saved automatically · ⚙ Generate then ⬇ Save to push planned dates to orders
+
+        <div style={{ fontSize:11, color:'var(--text-tertiary)', padding:'3px 16px', flexShrink:0, background:'var(--bg-secondary)' }}>
+          Anchor dates (S/D) come from machine sheet · Generate Dates calculates all process dates · Save pushes to orders
         </div>
 
-        {/* Excel view */}
-        {showExcelRows && excelRows.length > 0 && (
-          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderTop:'2px solid var(--accent)' }}>
-            <div style={{ padding:'6px 16px', background:'var(--accent-light)', display:'flex', alignItems:'center', gap:12, flexShrink:0 }}>
-              <span style={{ fontSize:12, fontWeight:700, color:'var(--accent-dark)' }}>📤 {excelRows.length} rows from "{excelFileName}"</span>
-              <span style={{ fontSize:11, color:'var(--text-tertiary)' }}>🔵 = machine process columns · green = date assigned</span>
-            </div>
-            <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-                <thead>
-                  <tr style={{ background:'#EFF6FF', position:'sticky', top:0, zIndex:10 }}>
-                    <th style={thStyle}>BATCH ID</th><th style={thStyle}>KG</th><th style={thStyle}>ROUTE</th>
-                    {ALL_PROCESS_CODES.map(pc => (
-                      <th key={pc} style={{ ...thStyle, background:MACHINE_PROCS_PRIORITY.includes(pc)?'#BFDBFE':'#F9FAFB', color:MACHINE_PROCS_PRIORITY.includes(pc)?'#1D4ED8':'#6B7280' }}>{pc}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {excelRows.map(({order,batch}) => {
-                    const plan: Record<string,string> = batch.dateCalcPlan || {}
-                    return (
-                      <tr key={batch.batchId} style={{ borderBottom:'1px solid #E5E7EB' }}>
-                        <td style={{ ...tdStyle, fontWeight:700, color:'#2563EB' }}>{batch.batchId}</td>
-                        <td style={{ ...tdStyle, fontWeight:700 }}>{batch.kg||'-'}</td>
-                        <td style={tdStyle}>{(order.processRoute||[]).join('/')||'-'}</td>
-                        {ALL_PROCESS_CODES.map(pc => (
-                          <td key={pc} style={{ padding:0, borderRight:'1px solid #E5E7EB', background:plan[pc]?(MACHINE_PROCS_PRIORITY.includes(pc)?'#DBEAFE':'#F0FDF4'):'transparent' }}>
-                            <input type="text" value={plan[pc]||''} onChange={e=>handleExcelDateChange(batch.batchId,pc,e.target.value)}
-                              style={{ width:'100%', minWidth:100, height:32, border:0, background:'transparent', padding:'2px 6px', fontSize:11, textAlign:'center', outline:'none' }} />
-                          </td>
-                        ))}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+        {/* Table */}
+        {rows.length === 0 ? (
+          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12, color:'var(--text-tertiary)' }}>
+            <div style={{ fontSize:40 }}>📅</div>
+            <div style={{ fontSize:15, fontWeight:600 }}>No batches found</div>
+            <div style={{ fontSize:13 }}>Split some orders first, then number them on the machine sheet.</div>
+            <button className="small" onClick={loadData}>↻ Refresh</button>
           </div>
-        )}
-
-        {/* ERP rows view */}
-        {rows.length > 0 && !showExcelRows && (
+        ) : (
           <div style={{ flex:1, overflowX:'auto', overflowY:'auto' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
               <thead>
                 <tr style={{ background:'#F9FAFB', position:'sticky', top:0, zIndex:10 }}>
-                  <th style={thStyle}>SELECT</th><th style={thStyle}>COLOUR</th><th style={thStyle}>BATCH</th>
-                  <th style={thStyle}>QTY(KG)</th><th style={thStyle}>ROUTE</th><th style={thStyle}>MACHINE</th>
-                  <th style={thStyle}>DATE</th>
-                  {allProcesses.map(pc => <th key={pc} style={thStyle}>{pc}</th>)}
-                  <th style={thStyle}>RE-GEN</th>
+                  <th style={TH}>SELECT</th>
+                  <th style={TH}>COLOUR</th>
+                  <th style={TH}>BATCH</th>
+                  <th style={TH}>QTY(KG)</th>
+                  <th style={TH}>ROUTE</th>
+                  <th style={TH}>MACHINE</th>
+                  <th style={TH}>DATE (Anchors)</th>
+                  {ALL_PROCS.map(pc => (
+                    <th key={pc} style={{ ...TH, background: ANCHOR_PROCS.includes(pc)?'#DBEAFE':'#F9FAFB', color: ANCHOR_PROCS.includes(pc)?'#1D4ED8':'#6B7280' }}>
+                      {pc}
+                    </th>
+                  ))}
+                  <th style={TH}>STATUS</th>
+                  <th style={TH}>RE-GEN</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({order, batch}, idx) => {
-                  const route = (order.processRoute||[]).map((c:string) => getProcessName(c)).join('/')
-                  const plan: Record<string,string> = batch.dateCalcPlan || {}
+                {rows.map((row, idx) => {
+                  const routeDisplay = row.route.map(c => getPN(c)).join('/')
+                  // Build anchor summary for DATE column
+                  const anchorSummary = Object.entries(row.anchors)
+                    .filter(([,v]) => v)
+                    .map(([k,v]) => `${k}:${toDisplay(v)}`)
+                    .join(' / ')
+
                   return (
-                    <tr key={`${order.id}-${batch.batchId}`} style={{ borderBottom:'1px solid #E5E7EB' }}>
-                      <td style={{ ...tdStyle, textAlign:'center' }}>
-                        <input type="checkbox" checked={selectedBatches.has(batch.batchId)} onChange={e=>handleBatchSelection(batch.batchId,e.target.checked)} style={{ cursor:'pointer' }} />
+                    <tr key={row.batchId} style={{ borderBottom:'1px solid #E5E7EB', background: row.pushed?'#FFFBEB':'' }}>
+                      <td style={{ ...TD, textAlign:'center' }}>
+                        <input type="checkbox" checked={selectedBatches.has(row.batchId)}
+                          onChange={e => setSelectedBatches(prev => { const s=new Set(prev); e.target.checked?s.add(row.batchId):s.delete(row.batchId); return s })}
+                          style={{ cursor:'pointer' }} />
                       </td>
-                      <td style={tdStyle}>{order.color||'-'}</td>
-                      <td style={{ ...tdStyle, fontWeight:700, color:'#2563EB' }}>{batch.batchId||'-'}</td>
-                      <td style={{ ...tdStyle, fontWeight:700 }}>{batch.kg||order.qtyKg||'-'}</td>
-                      <td style={{ ...tdStyle, fontWeight:700, color:'#2563EB' }}>{route||'-'}</td>
-                      <td style={tdStyle}>{order.machine||'-'}</td>
-                      <td style={{ ...tdStyle, fontSize:'11px' }}>{getMachinePlannedDates(order,batch)}</td>
-                      {allProcesses.map(pc => (
-                        <td key={pc} style={{ padding:0, borderRight:'1px solid #E5E7EB' }}>
-                          <input type="text" value={plan[pc]||''} onChange={e=>handleDateChange(idx,pc,e.target.value)}
-                            style={{ width:'100%', minWidth:'110px', height:'36px', border:0, background:'transparent', padding:'4px 8px', fontSize:'12px', textAlign:'center', outline:'none' }} />
-                        </td>
-                      ))}
-                      <td style={{ ...tdStyle, textAlign:'center' }}>
-                        <input type="checkbox" checked={batch.dcRegenerate||false} onChange={e=>handleRegenerateToggle(idx,e.target.checked)} style={{ cursor:'pointer' }} />
+                      <td style={TD}>{row.color||'-'}</td>
+                      <td style={{ ...TD, fontWeight:700, color:'#2563EB' }}>{row.batchId}</td>
+                      <td style={{ ...TD, fontWeight:700 }}>{row.kg||'-'}</td>
+                      <td style={{ ...TD, color:'#2563EB', fontWeight:600, fontSize:11 }}>{routeDisplay||'-'}</td>
+                      <td style={TD}>{row.machine||'-'}</td>
+                      <td style={{ ...TD, fontSize:10, color:'#6B7280' }}>{anchorSummary||'-'}</td>
+                      {ALL_PROCS.map(pc => {
+                        const ymd = row.dates[pc] || ''
+                        const display = ymd ? toDisplay(ymd) : ''
+                        const isAnchorProc = ANCHOR_PROCS.includes(pc)
+                        return (
+                          <td key={pc} style={{ padding:0, borderRight:'1px solid #E5E7EB',
+                            background: display ? (isAnchorProc?'#DBEAFE':'#F0FDF4') : '' }}>
+                            <input type="text" value={display}
+                              onChange={e => handleDateChange(idx, pc, e.target.value)}
+                              style={{ width:'100%', minWidth:100, height:32, border:0, background:'transparent',
+                                padding:'2px 6px', fontSize:11, textAlign:'center', outline:'none' }} />
+                          </td>
+                        )
+                      })}
+                      <td style={{ ...TD, textAlign:'center' }}>
+                        {row.pushed ? <span style={{ fontSize:10, background:'#FEF9C3', color:'#854D0E', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>📅 Pushed</span>
+                          : row.dcGeneratedOnce ? <span style={{ fontSize:10, background:'#DCFCE7', color:'#166534', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>✓ Done</span>
+                          : <span style={{ fontSize:10, background:'#FEE2E2', color:'#991B1B', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>Pending</span>}
+                      </td>
+                      <td style={{ ...TD, textAlign:'center' }}>
+                        <input type="checkbox" checked={row.dcRegenerate||false}
+                          onChange={e => handleRegenerateToggle(idx, e.target.checked)}
+                          style={{ cursor:'pointer' }} />
                       </td>
                     </tr>
                   )
@@ -975,38 +632,44 @@ export default function DateCalculatorPage() {
         )}
       </div>
 
-      {/* Process Days modal */}
+      {/* Process Days Modal */}
       {showPDModal && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}
           onClick={() => setShowPDModal(false)}>
-          <div style={{ background:'white', borderRadius:8, padding:24, maxWidth:600, width:'90%', maxHeight:'80vh', overflow:'auto' }}
+          <div style={{ background:'white', borderRadius:8, padding:24, maxWidth:620, width:'90%', maxHeight:'85vh', overflow:'auto' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-              <h3 style={{ margin:0, fontSize:16, fontWeight:700 }}>Process Days Setup</h3>
+              <h3 style={{ margin:0, fontSize:16, fontWeight:700 }}>Process Days & Capacity</h3>
               <button onClick={() => setShowPDModal(false)} style={{ border:'none', background:'none', fontSize:20, cursor:'pointer' }}>✕</button>
             </div>
             <div style={{ padding:'10px 14px', background:'#EFF6FF', borderRadius:8, fontSize:12, color:'#1D4ED8', marginBottom:16 }}>
-              💡 Set <strong>Capacity (KG/Day)</strong> per process. Saved to Supabase — shared across all devices.
+              💡 <strong>Days</strong> = how long this process takes before the next starts.<br/>
+              <strong>Capacity</strong> = max kg/day. Leave blank = no limit.
             </div>
-            <div style={{ maxHeight:'50vh', overflow:'auto', marginBottom:16 }}>
+            <div style={{ maxHeight:'55vh', overflow:'auto', marginBottom:16 }}>
               <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                <thead><tr style={{ background:'#F9FAFB', borderBottom:'2px solid #E5E7EB' }}>
-                  {['PROCESS','NAME','DAYS','CAPACITY (KG/DAY)'].map(h => <th key={h} style={{ padding:10, textAlign:'left', fontSize:11, fontWeight:700, color:'#6B7280' }}>{h}</th>)}
-                </tr></thead>
+                <thead>
+                  <tr style={{ background:'#F9FAFB', borderBottom:'2px solid #E5E7EB' }}>
+                    {['Process','Name','Days','Capacity (kg/day)'].map(h => (
+                      <th key={h} style={{ padding:'8px 10px', textAlign:'left', fontSize:11, fontWeight:700, color:'#6B7280' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
                 <tbody>
-                  {ALL_PROCESS_CODES.map(code => (
+                  {ALL_PROCS.map(code => (
                     <tr key={code} style={{ borderBottom:'1px solid #E5E7EB' }}>
-                      <td style={{ padding:10, fontWeight:700, color:'#2563EB' }}>{code}</td>
-                      <td style={{ padding:10 }}>{getProcessName(code)}</td>
-                      <td style={{ padding:10 }}>
+                      <td style={{ padding:'8px 10px', fontWeight:700, color:'#2563EB' }}>{code}</td>
+                      <td style={{ padding:'8px 10px', color:'#6B7280' }}>{getPN(code)}</td>
+                      <td style={{ padding:'8px 10px' }}>
                         <input type="number" min="1" step="1" value={tempDurations[code]?.days||1}
                           onChange={e => setTempDurations(prev => ({...prev,[code]:{...prev[code],days:parseInt(e.target.value)||1}}))}
-                          style={{ width:80, padding:6, border:'1px solid #D1D5DB', borderRadius:4 }} />
+                          style={{ width:70, padding:'4px 6px', border:'1px solid #D1D5DB', borderRadius:4 }} />
                       </td>
-                      <td style={{ padding:10 }}>
-                        <input type="number" min="0" step="0.01" value={tempDurations[code]?.capacity||''}
+                      <td style={{ padding:'8px 10px' }}>
+                        <input type="number" min="0" step="100" value={tempDurations[code]?.capacity||''}
                           onChange={e => setTempDurations(prev => ({...prev,[code]:{...prev[code],capacity:e.target.value}}))}
-                          style={{ width:120, padding:6, border:'1px solid #D1D5DB', borderRadius:4 }} placeholder="e.g. 10000" />
+                          style={{ width:120, padding:'4px 6px', border:'1px solid #BFDBFE', borderRadius:4, background:'#EFF6FF' }}
+                          placeholder="e.g. 10000" />
                       </td>
                     </tr>
                   ))}
@@ -1014,7 +677,7 @@ export default function DateCalculatorPage() {
               </table>
             </div>
             <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={saveProcessDays}>Save Process Days</button>
+              <button className="primary" onClick={saveProcessDays}>✓ Save Process Days</button>
               <button onClick={() => setShowPDModal(false)}>Cancel</button>
             </div>
           </div>
@@ -1024,11 +687,11 @@ export default function DateCalculatorPage() {
   )
 }
 
-const thStyle: React.CSSProperties = {
-  padding:'8px 12px', textAlign:'left', fontSize:'10px', fontWeight:700, color:'#6B7280',
+const TH: React.CSSProperties = {
+  padding:'7px 10px', textAlign:'left', fontSize:10, fontWeight:700, color:'#6B7280',
   textTransform:'uppercase', letterSpacing:'0.5px', borderBottom:'2px solid #E5E7EB',
   borderRight:'1px solid #E5E7EB', whiteSpace:'nowrap', background:'#F9FAFB'
 }
-const tdStyle: React.CSSProperties = {
-  padding:'8px 12px', fontSize:'12px', borderRight:'1px solid #E5E7EB', whiteSpace:'nowrap'
+const TD: React.CSSProperties = {
+  padding:'6px 10px', fontSize:12, borderRight:'1px solid #E5E7EB', whiteSpace:'nowrap'
 }
