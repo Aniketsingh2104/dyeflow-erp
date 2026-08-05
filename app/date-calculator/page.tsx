@@ -437,12 +437,34 @@ export default function DateCalculatorPage() {
 
       const planned: Record<string, string> = { [anchorProc]: anchorYMD }
 
-      // STEP 2: Walk BACKWARD from anchor (no capacity check — historical estimates)
+      // STEP 2: Walk BACKWARD from anchor WITH capacity check
+      // fitDateBack: find nearest working date <= candidate with available capacity
+      const fitDateBack = (proc: string, candidateYMD: string, qty: number): string => {
+        if (!candidateYMD) return ''
+        let cur = ymdToDate(candidateYMD); if (!cur) return candidateYMD
+        while (holidaySet.has(dateToStr(cur))) cur = nextWD(cur, false)
+        const cap = capMap[proc]
+        if (!cap || qty <= 0) return dateToStr(cur)
+        if (!loadMap[proc]) loadMap[proc] = {}
+        for (let i = 0; i < 730; i++) {
+          const ymd = dateToStr(cur)
+          if (holidaySet.has(ymd)) { cur = nextWD(cur, false); continue }
+          const existing = loadMap[proc][ymd] || 0
+          if (existing + qty <= cap + 0.001) {
+            loadMap[proc][ymd] = existing + qty
+            return ymd
+          }
+          cur = nextWD(cur, false)  // go further back if over capacity
+        }
+        return dateToStr(cur)
+      }
+
       let back = ymdToDate(anchorYMD)!
       for (let i = anchorIdx - 1; i >= 0; i--) {
         const c = workSeq[i]
         back = addPD(back, dayMap[c] || 1, false)
-        planned[c] = dateToStr(back)
+        planned[c] = fitDateBack(c, dateToStr(back), qty)
+        back = ymdToDate(planned[c]) || back
       }
 
       // STEP 3: Check if first planned date < today
