@@ -66,9 +66,9 @@ export async function dbInsert<T = any>(
 }
 
 export async function dbUpsert<T = any>(
-  table: string, row: Record<string, any>
+  table: string, row: Record<string, any>, onConflict = 'id'
 ): Promise<{ data: T | null; error: string | null }> {
-  const { data, error } = await sb<T[]>(`/${table}`, {
+  const { data, error } = await sb<T[]>(`/${table}?on_conflict=${onConflict}`, {
     method: 'POST', body: JSON.stringify(row),
     headers: { 'Prefer': 'resolution=merge-duplicates,return=representation' },
   })
