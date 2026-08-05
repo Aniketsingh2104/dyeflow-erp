@@ -460,9 +460,30 @@ export default function DateCalculatorPage() {
     let cleared = 0
     for (const row of rows) {
       if (!selectedBatches.has(row.batchId)) continue
+      // 1. Clear d_* columns in batch_date_plans (new table)
       await fetch('/api/date-plans', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'clear', batch_id: row.batchUUID })
+      }).catch(() => {})
+      // 2. Also clear flat date keys in batches.date_calc_plan (old storage)
+      // Fetch fresh to preserve machine keys
+      let freshPlan: any = {}
+      try {
+        const r = await fetch(`/api/batches?id=${row.batchUUID}`, { cache:'no-store' }).then(x=>x.json())
+        freshPlan = r.data?.[0]?.date_calc_plan || {}
+      } catch {}
+      const MACHINE_KEYS = ['byProcess','byProcessDates','planNumber','plannedDate']
+      const preserved: Record<string,any> = {}
+      for (const k of MACHINE_KEYS) {
+        if (freshPlan[k] !== undefined) preserved[k] = freshPlan[k]
+      }
+      await fetch('/api/batches', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          action:'update', id: row.batchUUID,
+          date_calc_plan: Object.keys(preserved).length ? preserved : null,
+          dc_generated_once: false, dc_regenerate: false
+        })
       }).catch(() => {})
       cleared++
     }
