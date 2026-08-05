@@ -56,6 +56,7 @@ export default function FirstProcessBatchPage() {
           process_route: route,
           first_process: route[0] || '',
           sub_party:     order.sub_party     || '-',
+          sub_party:     order.sub_party     || '-',
           supervisor:    order.supervisors?.name || '-',
           machine_name:  b.machines?.name || '-',
           // All order fields filled at time of order entry
@@ -266,6 +267,9 @@ export default function FirstProcessBatchPage() {
                         {b.machine_name}
                       </span>
                     )}
+                  </td>
+                  <td style={{ ...td, maxWidth: 150, whiteSpace: 'normal', fontSize: 11 }}>
+                    {b.remarks !== '-' ? b.remarks : ''}
                   </td>
                   <td style={{ ...td, maxWidth: 150, whiteSpace: 'normal', fontSize: 11 }}>
                     {b.remarks !== '-' ? b.remarks : ''}
