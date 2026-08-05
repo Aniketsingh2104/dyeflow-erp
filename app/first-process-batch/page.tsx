@@ -18,15 +18,22 @@ export default function FirstProcessBatchPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [batchRes, orderRes] = await Promise.all([
+      const [batchRes, orderRes, dpRes] = await Promise.all([
         getBatches(),
         getOrders({ limit: 1000 }),
+        fetch('/api/date-plans', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
 
       const batches: any[] = batchRes.data  || []
       const orders:  any[] = orderRes.data  || []
+      const datePlans: any[] = dpRes.data   || []
+
       const oMap: Record<string, any> = {}
       for (const o of orders) oMap[o.id] = o
+
+      // Build date plan map: batch UUID → date plan row
+      const dpMap: Record<string, any> = {}
+      for (const dp of datePlans) dpMap[dp.batch_id] = dp
 
       // First process batches: batches with no current_process yet but have a process route
       const firstProcess = batches.filter(b => {
@@ -50,6 +57,25 @@ export default function FirstProcessBatchPage() {
           first_process: route[0] || '',
           supervisor:    order.supervisors?.name || '-',
           machine_name:  b.machines?.name || '-',
+          // Planned date of first process from batch_date_plans
+          planned_date:  (() => {
+            const dp = dpMap[b.id] || {}
+            const firstProc = route[0] || ''
+            // Map process code to d_* column name
+            const colMap: Record<string,string> = {
+              C:'d_c', S:'d_s', H:'d_h', D:'d_d', S2:'d_s2', Rx:'d_rx',
+              O:'d_o', G:'d_g', F:'d_f', Co:'d_co', Tu:'d_tu', Add:'d_add',
+              Level:'d_level', Rc:'d_rc', Fix:'d_fix', Wash:'d_wash',
+              Dry:'d_dry', B:'d_b', R:'d_r', K:'d_k',
+              QA:'d_qa', Packing:'d_packing', Dispatch:'d_dispatch'
+            }
+            const col = colMap[firstProc]
+            if (!col || !dp[col]) return '-'
+            // Format date: 2026-08-06 → 06/08/2026
+            const ymd = String(dp[col]).slice(0,10)
+            const parts = ymd.split('-')
+            return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : ymd
+          })(),
         }
       })
 
@@ -173,7 +199,7 @@ export default function FirstProcessBatchPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)', position: 'sticky', top: 0 }}>
               <tr>
-                {['Batch ID','Order #','Party','Article','Color','Kg','First Process','Supervisor','Machine','Actions'].map(h => (
+                {['Batch ID','Order #','Party','Article','Color','Kg','Route','First Process','Planned Date','Supervisor','Machine','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -192,6 +218,9 @@ export default function FirstProcessBatchPage() {
                   <td style={{ ...td, fontWeight: 500 }}>{b.article}</td>
                   <td style={td}>{b.color}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{b.kg} Kg</td>
+                  <td style={{ ...td, fontSize: 11 }}>
+                    {(b.process_route || []).join(' → ')}
+                  </td>
                   <td style={td}>
                     {b.first_process ? (
                       <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px',
@@ -199,6 +228,10 @@ export default function FirstProcessBatchPage() {
                         {b.first_process}
                       </span>
                     ) : <span style={{ color: 'var(--danger)', fontSize: 11 }}>No route!</span>}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700,
+                    color: b.planned_date !== '-' ? 'var(--success)' : 'var(--text-tertiary)' }}>
+                    {b.planned_date}
                   </td>
                   <td style={td}>{b.supervisor}</td>
                   <td style={td}>
