@@ -4,7 +4,6 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 const COLUMNS = [
-  { key: 'select',          label: '',               defaultWidth: 40  },
   { key: 'batch_id',        label: 'BATCH ID',       defaultWidth: 140 },
   { key: 'order_number',    label: 'ORDER #',         defaultWidth: 120 },
   { key: 'party',           label: 'PARTY',           defaultWidth: 100 },
@@ -30,7 +29,7 @@ const COLUMNS = [
   { key: 'delivery_date',   label: 'DELIVERY DATE',   defaultWidth: 110 },
   { key: 'supervisor',      label: 'SUPERVISOR',      defaultWidth: 110 },
   { key: 'machine',         label: 'MACHINE',         defaultWidth: 160 },
-  { key: 'actions',         label: 'ACTIONS',         defaultWidth: 150 },
+  { key: 'actions',         label: 'SELECT',          defaultWidth: 80  },
 ]
 
 const PROC_COL_MAP: Record<string,string> = {
@@ -314,22 +313,24 @@ export default function FirstProcessBatchPage() {
                     style={{ padding:'6px 8px', borderBottom:'1px solid var(--border-light)',
                       borderRight:'1px solid var(--border-light)',
                       width:colWidths[col.key], minWidth:colWidths[col.key], maxWidth:colWidths[col.key] }}>
-                    {col.key !== 'actions' && col.key !== 'select' && (
+                    {col.key !== 'actions' && (
                       <input value={colFilters[col.key]||''} placeholder="Filter…"
                         onChange={e => setColFilters(p => ({...p,[col.key]:e.target.value}))}
                         style={{ width:'100%', padding:'3px 6px', fontSize:11,
                           border:'1px solid var(--border-medium)', borderRadius:4,
                           background:'var(--bg-primary)', color:'var(--text-primary)' }} />
                     )}
-                    {col.key === 'select' && (
+                    {col.key === 'actions' && (
                       <input type="checkbox"
                         checked={filtered.length > 0 && filtered.every(b => selectedBatches.has(b.id))}
                         onChange={e => {
                           if (e.target.checked) setSelectedBatches(new Set(filtered.map(b => b.id)))
                           else setSelectedBatches(new Set())
                         }}
-                        style={{ cursor:'pointer', accentColor:'var(--accent)' }} />
+                        title="Select All"
+                        style={{ cursor:'pointer', accentColor:'var(--accent)', width:15, height:15 }} />
                     )}
+
                   </th>
                 ))}
               </tr>
@@ -378,18 +379,7 @@ export default function FirstProcessBatchPage() {
                       textOverflow:'ellipsis', whiteSpace:'nowrap', verticalAlign:'middle'
                     }
                     switch(col.key) {
-                      case 'select': return (
-                        <td key={col.key} style={{...tdStyle, textAlign:'center', padding:'9px 6px'}}>
-                          <input type="checkbox"
-                            checked={selectedBatches.has(b.id)}
-                            onChange={e => setSelectedBatches(prev => {
-                              const n = new Set(prev)
-                              e.target.checked ? n.add(b.id) : n.delete(b.id)
-                              return n
-                            })}
-                            style={{ cursor:'pointer', accentColor:'var(--accent)', width:15, height:15 }} />
-                        </td>
-                      )
+
                       case 'batch_id': return (
                         <td key={col.key} style={{...tdStyle,fontWeight:700,color:'var(--accent)'}}>{b.batch_id}</td>
                       )
@@ -459,17 +449,15 @@ export default function FirstProcessBatchPage() {
                         </td>
                       )
                       case 'actions': return (
-                        <td key={col.key} style={{...tdStyle,whiteSpace:'nowrap'}}>
-                          <div style={{ display:'flex', gap:4 }}>
-                            <button className="xs primary" onClick={() => handleDispatch(b)} disabled={saving}>
-                              🚀 Dispatch
-                            </button>
-                            <button className="xs"
-                              onClick={() => window.open(`/machines/${b.id}`, '_blank')}
-                              style={{ fontSize:11 }}>
-                              FMS →
-                            </button>
-                          </div>
+                        <td key={col.key} style={{...tdStyle, textAlign:'center', padding:'9px 6px'}}>
+                          <input type="checkbox"
+                            checked={selectedBatches.has(b.id)}
+                            onChange={e => setSelectedBatches(prev => {
+                              const n = new Set(prev)
+                              e.target.checked ? n.add(b.id) : n.delete(b.id)
+                              return n
+                            })}
+                            style={{ cursor:'pointer', accentColor:'var(--accent)', width:16, height:16 }} />
                         </td>
                       )
                       default: return (
