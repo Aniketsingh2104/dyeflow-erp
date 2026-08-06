@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 const COLUMNS = [
+  { key: 'select',          label: '',               defaultWidth: 40  },
   { key: 'batch_id',        label: 'BATCH ID',       defaultWidth: 140 },
   { key: 'order_number',    label: 'ORDER #',         defaultWidth: 120 },
   { key: 'party',           label: 'PARTY',           defaultWidth: 100 },
@@ -56,6 +57,8 @@ export default function FirstProcessBatchPage() {
   const [colWidths,  setColWidths]  = useState<Record<string,number>>(() =>
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultWidth]))
   )
+  const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
+  const [sending, setSending] = useState(false)
   const [resizing, setResizing] = useState<{key:string;startX:number;startW:number}|null>(null)
   const colMenuRef = useRef<HTMLDivElement>(null)
 
@@ -177,6 +180,34 @@ export default function FirstProcessBatchPage() {
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
 
+  // ── Send to First Process ────────────────────────────────────────────────
+  const handleSendToProcess = async () => {
+    const selected = batches.filter(b => selectedBatches.has(b.id))
+    if (!selected.length) { alert('Select at least one batch'); return }
+    if (!confirm(`Send ${selected.length} batch(es) to their first process?`)) return
+    setSending(true)
+    try {
+      await Promise.all(selected.map(b =>
+        fetch('/api/batches', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:          'update',
+            id:              b.id,
+            current_process: b.first_process,
+            status:          'in-process',
+          })
+        })
+      ))
+      setSelectedBatches(new Set())
+      await load()
+      // Group by process for toast message
+      const byProcess: Record<string,number> = {}
+      selected.forEach(b => { byProcess[b.first_process] = (byProcess[b.first_process]||0)+1 })
+      const msg = Object.entries(byProcess).map(([p,n]) => `${n} → ${p}`).join(', ')
+      alert(`✓ Sent: ${msg}`)
+    } finally { setSending(false) }
+  }
+
   // ── Dispatch ──────────────────────────────────────────────────────────────
   const handleDispatch = async (batch: any) => {
     if (!confirm(`Dispatch ${batch.batch_id}?`)) return
@@ -283,12 +314,21 @@ export default function FirstProcessBatchPage() {
                     style={{ padding:'6px 8px', borderBottom:'1px solid var(--border-light)',
                       borderRight:'1px solid var(--border-light)',
                       width:colWidths[col.key], minWidth:colWidths[col.key], maxWidth:colWidths[col.key] }}>
-                    {col.key !== 'actions' && (
+                    {col.key !== 'actions' && col.key !== 'select' && (
                       <input value={colFilters[col.key]||''} placeholder="Filter…"
                         onChange={e => setColFilters(p => ({...p,[col.key]:e.target.value}))}
                         style={{ width:'100%', padding:'3px 6px', fontSize:11,
                           border:'1px solid var(--border-medium)', borderRadius:4,
                           background:'var(--bg-primary)', color:'var(--text-primary)' }} />
+                    )}
+                    {col.key === 'select' && (
+                      <input type="checkbox"
+                        checked={filtered.length > 0 && filtered.every(b => selectedBatches.has(b.id))}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedBatches(new Set(filtered.map(b => b.id)))
+                          else setSelectedBatches(new Set())
+                        }}
+                        style={{ cursor:'pointer', accentColor:'var(--accent)' }} />
                     )}
                   </th>
                 ))}
@@ -338,6 +378,18 @@ export default function FirstProcessBatchPage() {
                       textOverflow:'ellipsis', whiteSpace:'nowrap', verticalAlign:'middle'
                     }
                     switch(col.key) {
+                      case 'select': return (
+                        <td key={col.key} style={{...tdStyle, textAlign:'center', padding:'9px 6px'}}>
+                          <input type="checkbox"
+                            checked={selectedBatches.has(b.id)}
+                            onChange={e => setSelectedBatches(prev => {
+                              const n = new Set(prev)
+                              e.target.checked ? n.add(b.id) : n.delete(b.id)
+                              return n
+                            })}
+                            style={{ cursor:'pointer', accentColor:'var(--accent)', width:15, height:15 }} />
+                        </td>
+                      )
                       case 'batch_id': return (
                         <td key={col.key} style={{...tdStyle,fontWeight:700,color:'var(--accent)'}}>{b.batch_id}</td>
                       )
