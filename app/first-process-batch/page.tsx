@@ -288,10 +288,12 @@ export default function FirstProcessBatchPage() {
               </div>
             )}
           </div>
-          <button onClick={() => window.location.href = '/'}
-            style={{ padding:'6px 12px', fontSize:12, border:'1px solid var(--border-medium)',
-              borderRadius:6, background:'var(--bg-primary)', cursor:'pointer' }}>
-            ⚡ Dispatch All ({filtered.length})
+          <button onClick={handleSendToProcess} disabled={sending || selectedBatches.size === 0}
+            style={{ padding:'6px 16px', fontSize:12, fontWeight:700, border:'none',
+              borderRadius:6, cursor: selectedBatches.size > 0 ? 'pointer' : 'not-allowed',
+              background: selectedBatches.size > 0 ? '#2563EB' : '#CBD5E0',
+              color:'white' }}>
+            {sending ? 'Sending…' : `🚀 Send to Process${selectedBatches.size > 0 ? ` (${selectedBatches.size})` : ''}`}
           </button>
           <button onClick={load}
             style={{ padding:'6px 10px', fontSize:13, border:'1px solid var(--border-medium)',
