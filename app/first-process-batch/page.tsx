@@ -111,7 +111,13 @@ export default function FirstProcessBatchPage() {
             route,
             first_process:   firstProc,
             planned_date:    plannedDate,
-            delivery_date:   order.delivery_date ? toDisplay(order.delivery_date) : '-',
+            // Delivery date = FinalDispatch date from batch_date_plans, fallback to Dispatch, then order delivery_date
+          delivery_date:   (() => {
+            if (dp.d_finaldispatch) return toDisplay(dp.d_finaldispatch)
+            if (dp.d_dispatch)      return toDisplay(dp.d_dispatch)
+            if (order.delivery_date) return toDisplay(order.delivery_date)
+            return '-'
+          })(),
             supervisor:      order.supervisors?.name || '-',
             machine:         b.machines?.name    || order.machines?.name || '-',
             process_route:   route,
