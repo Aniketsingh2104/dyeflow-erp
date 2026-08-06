@@ -56,6 +56,9 @@ export default function FirstProcessBatchPage() {
           process_route: route,
           first_process: route[0] || '',
           sub_party:     order.sub_party     || '-',
+          sales_person:  order.sales_person   || '-',
+          blend:         order.blend          || '-',
+          width:         order.width          || '-',
           sub_party:     order.sub_party     || '-',
           supervisor:    order.supervisors?.name || '-',
           machine_name:  b.machines?.name || '-',
@@ -213,7 +216,7 @@ export default function FirstProcessBatchPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)', position: 'sticky', top: 0 }}>
               <tr>
-                {['Batch ID','Order #','Party','Sub Party','Article','GSM','Color','Lab No','Lot No','Challan No','Qty (KG)','Qty (MTR)','Taka','Route','First Process','Planned Date','Delivery Date','Finish','Packing','Supervisor','Machine','Remarks','Actions'].map(h => (
+                {['Batch ID','Order #','Party','Sub Party','Sales Person','Article','Blend','Width','GSM','Color','Lab No','Lot No','Challan No','Qty (KG)','Qty (MTR)','Taka','Finish','Packing','Remarks','Route','First Process','Planned Date','Delivery Date','Supervisor','Machine','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -228,18 +231,24 @@ export default function FirstProcessBatchPage() {
                   borderBottom: '1px solid var(--border-light)' }}>
                   <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{b.batch_id}</td>
                   <td style={{ ...td, fontWeight: 600 }}>{b.order_number}</td>
-                  <td style={td}>{b.party}</td>
-                  <td style={td}>{b.sub_party || '-'}</td>
+                  <td style={{ ...td, color:'var(--accent)', fontWeight:600 }}>{b.party}</td>
+                  <td style={td}>{b.sub_party}</td>
+                  <td style={{ ...td, color:'var(--accent)' }}>{b.sales_person}</td>
                   <td style={{ ...td, fontWeight: 500 }}>{b.article}</td>
-                  <td style={td}>{b.gsm}</td>
+                  <td style={{ ...td, color:'var(--warning)' }}>{b.blend}</td>
+                  <td style={td}>{b.width}</td>
+                  <td style={{ ...td, color:'var(--accent)', fontWeight:700 }}>{b.gsm}</td>
                   <td style={td}>{b.color}</td>
-                  <td style={td}>{b.lab_no}</td>
+                  <td style={{ ...td, color:'var(--accent)' }}>{b.lab_no}</td>
                   <td style={td}>{b.lot_no}</td>
-                  <td style={td}>{b.challan_no}</td>
-                  <td style={{ ...td, fontWeight: 700 }}>{b.kg} Kg</td>
-                  <td style={td}>{b.qty_mtr}</td>
-                  <td style={td}>{b.no_of_taka}</td>
-                  <td style={{ ...td, fontSize: 11, maxWidth: 200 }}>
+                  <td style={{ ...td, color:'var(--accent)' }}>{b.challan_no}</td>
+                  <td style={{ ...td, fontWeight: 700, color:'var(--accent)' }}>{b.kg} Kg</td>
+                  <td style={{ ...td, fontWeight:700, color:'var(--accent)' }}>{b.qty_mtr}</td>
+                  <td style={{ ...td, fontWeight:700, color:'var(--accent)' }}>{b.no_of_taka}</td>
+                  <td style={td}>{b.type_of_finish}</td>
+                  <td style={{ ...td, color:'var(--accent)' }}>{b.type_of_packing}</td>
+                  <td style={{ ...td, fontSize:11, maxWidth:120 }}>{b.remarks !== '-' ? b.remarks : ''}</td>
+                  <td style={{ ...td, fontSize: 11, maxWidth: 200, whiteSpace:'normal' }}>
                     {(b.process_route || []).join(' → ')}
                   </td>
                   <td style={td}>
@@ -255,10 +264,8 @@ export default function FirstProcessBatchPage() {
                     {b.planned_date}
                   </td>
                   <td style={{ ...td, color: 'var(--warning)', fontWeight: 600 }}>
-                    {b.delivery_date}
+                    {b.delivery_date !== '-' ? b.delivery_date : '-'}
                   </td>
-                  <td style={td}>{b.type_of_finish}</td>
-                  <td style={td}>{b.type_of_packing}</td>
                   <td style={td}>{b.supervisor}</td>
                   <td style={td}>
                     {b.machine_name !== '-' && (
@@ -267,9 +274,6 @@ export default function FirstProcessBatchPage() {
                         {b.machine_name}
                       </span>
                     )}
-                  </td>
-                  <td style={{ ...td, maxWidth: 150, whiteSpace: 'normal', fontSize: 11 }}>
-                    {b.remarks !== '-' ? b.remarks : ''}
                   </td>
                   <td style={{ ...td, maxWidth: 150, whiteSpace: 'normal', fontSize: 11 }}>
                     {b.remarks !== '-' ? b.remarks : ''}
