@@ -207,7 +207,9 @@ export default function FmsProcessPage() {
           plannedDate:     planned,
           actualDate:      actual,
           delivery_date:   dispatchDate || order.delivery_date || '-',
-          isCompleted:     bp?.status === 'done' && !!actual,
+          // isCompleted: only true if this specific process step is marked done
+          // bp.status must be 'done' — if reset_process ran, it's 'pending'
+          isCompleted:     bp?.status === 'done',
           delayText:       delay.text,
           delayLate:       delay.late,
           isFaulty:        b.is_faulty,
