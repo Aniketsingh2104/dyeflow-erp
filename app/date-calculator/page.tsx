@@ -303,8 +303,20 @@ export default function DateCalculatorPage() {
         const o  = orderMap[b.order_id] || {}
         const dp = dpMap[b.id] || {}
 
-        // Dates and anchors stored as JSONB in batch_date_plans
-        const dates:   Record<string,string> = dp.dates   || {}
+        // Dates from JSONB column (new) — merge with legacy d_* fixed columns
+        const datesJSONB: Record<string,string> = dp.dates || {}
+        // Legacy fixed column map for migration
+        const LEGACY_MAP: Record<string,string> = {
+          C:'d_c',S:'d_s',H:'d_h',D:'d_d',S2:'d_s2',Rx:'d_rx',O:'d_o',
+          G:'d_g',F:'d_f',Co:'d_co',Tu:'d_tu',Add:'d_add',Level:'d_level',
+          Rc:'d_rc',Fix:'d_fix',Wash:'d_wash',Dry:'d_dry',B:'d_b',R:'d_r',
+          K:'d_k',QA:'d_qa',Packing:'d_packing',Dispatch:'d_dispatch',FinalDispatch:'d_finaldispatch'
+        }
+        const dates: Record<string,string> = { ...datesJSONB }
+        // Fill from legacy d_* columns only where JSONB is empty
+        for (const [proc, col] of Object.entries(LEGACY_MAP)) {
+          if (!dates[proc] && dp[col]) dates[proc] = dp[col].slice(0,10)
+        }
         const anchors: Record<string,string> = dp.anchors || {}
 
         batchRows.push({
