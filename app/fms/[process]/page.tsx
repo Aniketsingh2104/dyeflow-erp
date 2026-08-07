@@ -122,7 +122,7 @@ export default function FmsProcessPage() {
     setLoading(true)
     try {
       const [batchRes, orderRes, dpRes] = await Promise.all([
-        getBatches({ status: 'in-process' }),
+        getBatches({ limit: 5000 }),  // fetch all batches, filter by current_process below
         getOrders({ limit: 1000 }),
         fetch('/api/date-plans', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
@@ -146,12 +146,19 @@ export default function FmsProcessPage() {
         Dispatch:'d_dispatch'
       }
 
-      // Filter to ONLY batches whose current_process matches this page's code
-      // Do NOT use route.some() — that would show batch on ALL process pages in its route
-      const filtered = batches.filter(b =>
-        b.current_process?.toUpperCase() === processCode ||
-        b.current_process === processCode
-      )
+      // Show batches that are currently AT this process (active)
+      // OR have been processed here (batch_processes shows done for this code)
+      const filtered = batches.filter(b => {
+        // Active: currently at this process
+        const isActive = b.current_process?.toUpperCase() === processCode ||
+                         b.current_process === processCode
+        // Done here: batch_processes has a done entry for this process code
+        const isDoneHere = (b.batch_processes || []).some((bp: any) =>
+          (bp.process_code?.toUpperCase() === processCode || bp.process_code === processCode) &&
+          bp.status === 'done'
+        )
+        return isActive || isDoneHere
+      })
 
       // Get planned dates from batch_processes
       const enriched = filtered.map(b => {
@@ -318,13 +325,14 @@ export default function FmsProcessPage() {
         })
       })
 
-      // 2. Reset current process's batch_process row: clear done_at, set status pending
+      // 2. Reset current process's batch_process row using RPC
+      // Use the process we're rolling BACK FROM (processCode = current page = C, H, D etc)
       await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action:       'reset_process',
-          batch_id:     row.id,
-          process_code: row.current_process || processCode,
+          batch_id:     row.id,         // batch UUID
+          process_code: processCode,    // the process we're rolling back from
         })
       })
 
