@@ -226,13 +226,12 @@ export async function POST(req: NextRequest) {
       if (!batch_id || !process_code) {
         return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
       }
-      // Clear done_at and set status back to pending for this process step
-      const { data, error } = await sb('/batch_processes', {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'pending', done_at: null }),
-        params: { batch_id: `eq.${batch_id}`, process_code: `eq.${process_code}` },
-        headers: { 'Prefer': 'return=representation' },
-      })
+      // Use dbUpdate to reset the batch_process row
+      const { data, error } = await dbUpdate(
+        'batch_processes',
+        { batch_id, process_code },
+        { status: 'pending', done_at: null, sent_at: null }
+      )
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
       return NextResponse.json({ ok: true, data })
     }

@@ -146,15 +146,12 @@ export default function FmsProcessPage() {
         Dispatch:'d_dispatch'
       }
 
-      // Filter to batches whose current_process matches this page's code
-      const filtered = batches.filter(b => {
-        const order = orderMap[b.order_id]
-        const route: string[] = order?.process_route || []
-        return (
-          b.current_process?.toUpperCase() === processCode ||
-          route.some((c: string) => c.toUpperCase() === processCode)
-        )
-      })
+      // Filter to ONLY batches whose current_process matches this page's code
+      // Do NOT use route.some() — that would show batch on ALL process pages in its route
+      const filtered = batches.filter(b =>
+        b.current_process?.toUpperCase() === processCode ||
+        b.current_process === processCode
+      )
 
       // Get planned dates from batch_processes
       const enriched = filtered.map(b => {
@@ -173,11 +170,12 @@ export default function FmsProcessPage() {
           : ''
         // Delivery date = d_dispatch from batch_date_plans
         const dispatchDate = dp.d_dispatch ? dp.d_dispatch.slice(0, 10) : ''
-        // Actual date from batch_processes
+        // Actual date from batch_processes for THIS specific process
         const bp = (b.batch_processes || []).find((p: any) =>
           p.process_code?.toUpperCase() === processCode ||
           p.process_code === processCode
         )
+        // Only mark as completed if this process step is done AND it's still the current process
         const actual = bp?.done_at ? bp.done_at.split('T')[0] : ''
         const delay  = delayMeta(planned, actual, now)
         // Timestamp = sent_at on batch (when it arrived at this process)
@@ -209,7 +207,7 @@ export default function FmsProcessPage() {
           plannedDate:     planned,
           actualDate:      actual,
           delivery_date:   dispatchDate || order.delivery_date || '-',
-          isCompleted:     !!actual,
+          isCompleted:     bp?.status === 'done' && !!actual,
           delayText:       delay.text,
           delayLate:       delay.late,
           isFaulty:        b.is_faulty,
