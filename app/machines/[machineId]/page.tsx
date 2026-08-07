@@ -812,8 +812,10 @@ export default function MachinePage() {
       return fetch('/api/date-plans', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'update_anchors', batch_id: uuid,
-          batch_id_str: batchRow.batchId, anchors
+          action:       'update_anchors',
+          batch_id:     uuid,
+          batch_id_str: batchRow.batchId,
+          anchors       // JSONB: { S: '2026-08-04', D: '2026-08-07' }
         })
       }).catch(() => {})
     })
