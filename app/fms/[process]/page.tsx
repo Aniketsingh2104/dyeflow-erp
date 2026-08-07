@@ -152,10 +152,10 @@ export default function FmsProcessPage() {
         // Active: currently at this process
         const isActive = b.current_process?.toUpperCase() === processCode ||
                          b.current_process === processCode
-        // Done here: batch_processes has a done entry for this process code
+        // Done/faulty here: batch_processes has done or faulty entry for this process code
         const isDoneHere = (b.batch_processes || []).some((bp: any) =>
           (bp.process_code?.toUpperCase() === processCode || bp.process_code === processCode) &&
-          bp.status === 'done'
+          (bp.status === 'done' || bp.status === 'faulty')
         )
         return isActive || isDoneHere
       })
@@ -214,9 +214,8 @@ export default function FmsProcessPage() {
           plannedDate:     planned,
           actualDate:      actual,
           delivery_date:   dispatchDate || order.delivery_date || '-',
-          // isCompleted: only true if this specific process step is marked done
-          // bp.status must be 'done' — if reset_process ran, it's 'pending'
-          isCompleted:     bp?.status === 'done',
+          // isCompleted: true if process step is done OR faulty
+          isCompleted:     bp?.status === 'done' || bp?.status === 'faulty',
           delayText:       delay.text,
           delayLate:       delay.late,
           isFaulty:        b.is_faulty,
@@ -369,6 +368,7 @@ export default function FmsProcessPage() {
         order_id:    row.order_id,
         order_number: row.orderNo,
         party:        row.party,
+        color:        row.color,
         faulty_type:  faultyReason,
         faulty_kg:    parseFloat(row.kg) || 0,
         process_code: processCode,

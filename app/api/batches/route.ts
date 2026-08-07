@@ -122,30 +122,27 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'mark_faulty') {
-      const { batch_id, order_id, faulty_type, faulty_kg, process_code, order_number, party } = payload
+      const { batch_id, order_id, faulty_type, faulty_kg, process_code, order_number, party, color } = payload
       const now = new Date().toISOString()
 
       // 1. Update batch: faulty status + clear current_process so it leaves FMS page
       await dbUpdate('batches', { id: batch_id }, {
         is_faulty:       true,
         status:          'faulty',
-        current_process: null,   // remove from process page
+        current_process: null,
       })
 
-      // 2. Set done_at on batch_processes for this process so Actual Date shows
-      await sb('/batch_processes', {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'faulty', done_at: now }),
-        params: { batch_id: `eq.${batch_id}`, process_code: `eq.${process_code}` },
-        headers: { 'Prefer': 'return=minimal' },
+      // 2. Set done_at on batch_processes using RPC (reliable composite key update)
+      await sb('/rpc/mark_process_faulty', {
+        method: 'POST',
+        body: JSON.stringify({ p_batch_id: batch_id, p_process_code: process_code, p_done_at: now }),
       })
 
-      // 3. Create faulty record
+      // 3. Create faulty record with color
       const { data, error } = await dbInsert('faulty_records', {
-        batch_id, order_id, order_number, party,
+        batch_id, order_id, order_number, party, color: color || null,
         faulty_type, faulty_kg, process_code,
         status: 'open',
-        created_at: now,
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 

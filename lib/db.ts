@@ -104,7 +104,7 @@ export async function markProcessDone(batchId: string, processCode: string, next
 
 export async function markBatchFaulty(payload: {
   batch_id: string; order_id: string; order_number: string; party: string;
-  faulty_type: string; faulty_kg: number; process_code: string;
+  color?: string; faulty_type: string; faulty_kg: number; process_code: string;
 }): Promise<{ error: string | null }> {
   try {
     const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'mark_faulty', ...payload }) })
