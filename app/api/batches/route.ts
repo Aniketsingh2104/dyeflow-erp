@@ -226,16 +226,10 @@ export async function POST(req: NextRequest) {
       if (!batch_id || !process_code) {
         return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
       }
-      // PATCH batch_processes where batch_id=UUID AND process_code=code
-      // Must use query params for both filters
-      const { error } = await sb('/batch_processes', {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'pending', done_at: null }),
-        params: {
-          batch_id:     `eq.${batch_id}`,
-          process_code: `eq.${process_code}`,
-        },
-        headers: { 'Prefer': 'return=minimal' },
+      // Use Supabase RPC for reliable composite key update
+      const { error } = await sb('/rpc/reset_batch_process', {
+        method: 'POST',
+        body: JSON.stringify({ p_batch_id: batch_id, p_process_code: process_code }),
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
       return NextResponse.json({ ok: true })
