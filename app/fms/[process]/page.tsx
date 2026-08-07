@@ -325,16 +325,31 @@ export default function FmsProcessPage() {
         })
       })
 
-      // 2. Reset current process's batch_process row using RPC
-      // Use the process we're rolling BACK FROM (processCode = current page = C, H, D etc)
+      // 2. Reset BOTH:
+      //    a) The process we're rolling back FROM (current page) - mark as pending  
+      //    b) The process we're going BACK TO (prevProcess) - so it can be marked Done again
+      
+      // Reset current process (where batch is now leaving)
       await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action:       'reset_process',
-          batch_id:     row.id,         // batch UUID
-          process_code: processCode,    // the process we're rolling back from
+          batch_id:     row.id,
+          process_code: processCode,   // current page (e.g. H - leaving this)
         })
       })
+
+      // Reset previous process (where batch is going back to, so Done works)
+      if (prevProcess) {
+        await fetch('/api/batches', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:       'reset_process',
+            batch_id:     row.id,
+            process_code: prevProcess,  // where batch goes back (e.g. C - needs to be active)
+          })
+        })
+      }
 
       showToast(prevProcess
         ? `↩ ${row.batch_id} rolled back to ${prevProcess}`
