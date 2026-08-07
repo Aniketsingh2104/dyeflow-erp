@@ -77,7 +77,7 @@ const DEFAULT_COLS = [
   { id: 'planned_date',     label: 'PLANNED DATE',     visible: true,  width: 120, minWidth: 80  },
   { id: 'actual_date',      label: 'ACTUAL DATE',      visible: true,  width: 120, minWidth: 80  },
   { id: 'delivery_date',    label: 'DELIVERY DATE',    visible: true,  width: 120, minWidth: 80  },
-  { id: 'actions',          label: 'ACTIONS',          visible: true,  width: 220, minWidth: 160 },
+  { id: 'actions',          label: 'ACTIONS',          visible: true,  width: 290, minWidth: 200 },
   { id: 'time_delay',       label: 'TIME DELAY',       visible: true,  width: 110, minWidth: 80  },
 ]
 
@@ -275,6 +275,62 @@ export default function FmsProcessPage() {
       const { error } = await markProcessDone(row.id, row.current_process, next)
       if (error) { alert('Error: ' + error); return }
       showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'complete'}`)
+      loadRows()
+    } finally { setSaving(false) }
+  }
+
+  // ── Rollback — send batch back to previous process ──────────────────────
+  const handleRollback = async (row: any) => {
+    const route: string[] = row.process_route || row.routeStr?.split('/') || []
+    const currentIdx = route.findIndex((c: string) =>
+      c.toUpperCase() === processCode || c === row.current_process
+    )
+
+    let prevProcess: string | null = null
+    let newStatus = 'in-process'
+
+    if (currentIdx <= 0) {
+      // First process — rollback to pending (back to First Process page)
+      prevProcess = null
+      newStatus   = 'pending'
+    } else {
+      // Not first — rollback to previous process
+      prevProcess = route[currentIdx - 1]
+      newStatus   = 'in-process'
+    }
+
+    const msg = prevProcess
+      ? `Roll back ${row.batch_id} from ${processCode} to ${prevProcess}?`
+      : `Roll back ${row.batch_id} from ${processCode} to First Process page (pending)?`
+
+    if (!confirm(msg)) return
+    setSaving(true)
+    try {
+      // 1. Update batch: set current_process to previous, clear sent_at
+      await fetch('/api/batches', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action:          'update',
+          id:              row.id,
+          current_process: prevProcess,
+          status:          newStatus,
+          sent_at:         null,
+        })
+      })
+
+      // 2. Reset current process's batch_process row: clear done_at, set status pending
+      await fetch('/api/batches', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action:       'reset_process',
+          batch_id:     row.id,
+          process_code: row.current_process || processCode,
+        })
+      })
+
+      showToast(prevProcess
+        ? `↩ ${row.batch_id} rolled back to ${prevProcess}`
+        : `↩ ${row.batch_id} returned to First Process page`)
       loadRows()
     } finally { setSaving(false) }
   }
@@ -512,6 +568,15 @@ export default function FmsProcessPage() {
                                     cursor: done ? 'not-allowed' : 'pointer',
                                     background: 'transparent', color: 'var(--purple)', opacity: done ? 0.4 : 1 }}>
                                   + FOB
+                                </button>
+                                <button onClick={() => handleRollback(row)}
+                                  disabled={saving}
+                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                                    border: '1px solid #DC2626', borderRadius: 4,
+                                    cursor: 'pointer', background: 'transparent',
+                                    color: '#DC2626' }}
+                                  title="Roll back to previous process">
+                                  ↩ Delete
                                 </button>
                               </div>
                             </td>
