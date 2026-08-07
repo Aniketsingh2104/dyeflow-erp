@@ -183,6 +183,15 @@ export default function FirstProcessBatchPage() {
   const handleSendToProcess = async () => {
     const selected = batches.filter(b => selectedBatches.has(b.id))
     if (!selected.length) { alert('Select at least one batch'); return }
+
+    // Block if any selected batch has no planned date
+    const noDates = selected.filter(b => !b.planned_date || b.planned_date === '-')
+    if (noDates.length > 0) {
+      const ids = noDates.map(b => b.batch_id).join(', ')
+      alert(`Cannot send — planned date not generated for:\n${ids}\n\nPlease generate dates in Date Calculator first.`)
+      return
+    }
+
     if (!confirm(`Send ${selected.length} batch(es) to their first process?`)) return
     setSending(true)
     try {
@@ -294,7 +303,8 @@ export default function FirstProcessBatchPage() {
             style={{ padding:'6px 16px', fontSize:12, fontWeight:700, border:'none',
               borderRadius:6, cursor: selectedBatches.size > 0 ? 'pointer' : 'not-allowed',
               background: selectedBatches.size > 0 ? '#2563EB' : '#CBD5E0',
-              color:'white' }}>
+              color:'white' }}
+            title={selectedBatches.size === 0 ? 'Select batches with planned dates to send' : ''}>
             {sending ? 'Sending…' : `🚀 Send to Process${selectedBatches.size > 0 ? ` (${selectedBatches.size})` : ''}`}
           </button>
           <button onClick={load}
@@ -328,8 +338,11 @@ export default function FirstProcessBatchPage() {
                       <input type="checkbox"
                         checked={filtered.length > 0 && filtered.every(b => selectedBatches.has(b.id))}
                         onChange={e => {
-                          if (e.target.checked) setSelectedBatches(new Set(filtered.map(b => b.id)))
-                          else setSelectedBatches(new Set())
+                          if (e.target.checked) {
+                            // Only select batches that have a planned date
+                            const eligible = filtered.filter(b => b.planned_date && b.planned_date !== '-')
+                            setSelectedBatches(new Set(eligible.map(b => b.id)))
+                          } else setSelectedBatches(new Set())
                         }}
                         title="Select All"
                         style={{ cursor:'pointer', accentColor:'var(--accent)', width:15, height:15 }} />
@@ -433,8 +446,9 @@ export default function FirstProcessBatchPage() {
                       )
                       case 'planned_date': return (
                         <td key={col.key} style={{...tdStyle, fontWeight:700,
-                          color: b.planned_date !== '-' ? 'var(--success)' : 'var(--text-tertiary)'}}>
-                          {b.planned_date}
+                          color: b.planned_date && b.planned_date !== '-' ? 'var(--success)' : 'var(--danger)',
+                          background: (!b.planned_date || b.planned_date === '-') ? 'var(--danger-light)' : ''}}>
+                          {b.planned_date && b.planned_date !== '-' ? b.planned_date : '⚠ No Date'}
                         </td>
                       )
                       case 'delivery_date': return (
@@ -456,12 +470,18 @@ export default function FirstProcessBatchPage() {
                         <td key={col.key} style={{...tdStyle, textAlign:'center', padding:'9px 6px'}}>
                           <input type="checkbox"
                             checked={selectedBatches.has(b.id)}
+                            disabled={!b.planned_date || b.planned_date === '-'}
+                            title={!b.planned_date || b.planned_date === '-' ? 'Generate planned date first in Date Calculator' : ''}
                             onChange={e => setSelectedBatches(prev => {
                               const n = new Set(prev)
                               e.target.checked ? n.add(b.id) : n.delete(b.id)
                               return n
                             })}
-                            style={{ cursor:'pointer', accentColor:'var(--accent)', width:16, height:16 }} />
+                            style={{
+                              cursor: (!b.planned_date || b.planned_date === '-') ? 'not-allowed' : 'pointer',
+                              accentColor:'var(--accent)', width:16, height:16,
+                              opacity: (!b.planned_date || b.planned_date === '-') ? 0.3 : 1
+                            }} />
                         </td>
                       )
                       default: return (
