@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
       'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,' +
-      'fms_enter_at,fms_actual_dates,' +
+      'fms_enter_at,fms_actual_dates,sent_at,' +
       'created_at,updated_at,' +
       'machines(id,name,capacity),' +
       'batch_processes(id,process_code,status,sent_at,received_at,done_at)'
