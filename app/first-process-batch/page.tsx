@@ -186,6 +186,7 @@ export default function FirstProcessBatchPage() {
     if (!confirm(`Send ${selected.length} batch(es) to their first process?`)) return
     setSending(true)
     try {
+      const now = new Date().toISOString()
       await Promise.all(selected.map(b =>
         fetch('/api/batches', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -194,6 +195,7 @@ export default function FirstProcessBatchPage() {
             id:              b.id,
             current_process: b.first_process,
             status:          'in-process',
+            sent_at:         now,           // timestamp when batch arrived at process
           })
         })
       ))

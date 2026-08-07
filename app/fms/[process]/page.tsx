@@ -121,15 +121,30 @@ export default function FmsProcessPage() {
   const loadRows = useCallback(async () => {
     setLoading(true)
     try {
-      const [batchRes, orderRes] = await Promise.all([
+      const [batchRes, orderRes, dpRes] = await Promise.all([
         getBatches({ status: 'in-process' }),
         getOrders({ limit: 1000 }),
+        fetch('/api/date-plans', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
 
       const batches: any[] = batchRes.data  || []
       const orders: any[]  = orderRes.data  || []
       const orderMap: Record<string, any> = {}
       for (const o of orders) orderMap[o.id] = o
+
+      // Date plans map: batch UUID → date plan row
+      const datePlans: any[] = dpRes.data || []
+      const dpMap: Record<string, any> = {}
+      for (const dp of datePlans) dpMap[dp.batch_id] = dp
+
+      // Map process code to d_* column in batch_date_plans
+      const PROC_COL: Record<string, string> = {
+        C:'d_c', S:'d_s', H:'d_h', D:'d_d', S2:'d_s2', Rx:'d_rx', O:'d_o',
+        G:'d_g', F:'d_f', Co:'d_co', Tu:'d_tu', Add:'d_add', Level:'d_level',
+        Rc:'d_rc', Fix:'d_fix', Wash:'d_wash', Dry:'d_dry', B:'d_b',
+        R:'d_r', K:'d_k', QA:'d_qa', Qa:'d_qa', Packing:'d_packing',
+        Dispatch:'d_dispatch'
+      }
 
       // Filter to batches whose current_process matches this page's code
       const filtered = batches.filter(b => {
@@ -148,16 +163,29 @@ export default function FmsProcessPage() {
         const mach    = b.machines?.name || '-'
         const route: string[] = order.process_route || []
 
-        // Find planned date from batch_processes array (nested from getBatches)
+        // Planned date from batch_date_plans for THIS process
+        const dp = dpMap[b.id] || {}
+        const procColKey = PROC_COL[processCode] || PROC_COL[
+          Object.keys(PROC_COL).find(k => k.toUpperCase() === processCode) || ''
+        ] || ''
+        const planned = procColKey && dp[procColKey]
+          ? dp[procColKey].slice(0, 10)  // YYYY-MM-DD
+          : ''
+        // Delivery date = d_dispatch from batch_date_plans
+        const dispatchDate = dp.d_dispatch ? dp.d_dispatch.slice(0, 10) : ''
+        // Actual date from batch_processes
         const bp = (b.batch_processes || []).find((p: any) =>
-          p.process_code?.toUpperCase() === processCode
+          p.process_code?.toUpperCase() === processCode ||
+          p.process_code === processCode
         )
-        const planned = bp?.planned_date || ''
-        const actual  = bp?.done_at ? bp.done_at.split('T')[0] : ''
-        const delay   = delayMeta(planned, actual, now)
+        const actual = bp?.done_at ? bp.done_at.split('T')[0] : ''
+        const delay  = delayMeta(planned, actual, now)
+        // Timestamp = sent_at on batch (when it arrived at this process)
+        const sentAt = b.sent_at || b.updated_at || b.created_at || ''
 
         return {
           ...b,
+          sentAt,          // when batch arrived at this process
           orderNo:         order.order_number    || '-',
           party:           order.party           || '-',
           sub_party:       order.sub_party       || '-',
@@ -180,7 +208,7 @@ export default function FmsProcessPage() {
           routeStr:        route.join('/'),
           plannedDate:     planned,
           actualDate:      actual,
-          delivery_date:   order.delivery_date   || '-',
+          delivery_date:   dispatchDate || order.delivery_date || '-',
           isCompleted:     !!actual,
           delayText:       delay.text,
           delayLate:       delay.late,
@@ -428,7 +456,7 @@ export default function FmsProcessPage() {
                         color: 'var(--text-primary)', overflow: 'hidden',
                         textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: col.width }
                       switch (col.id) {
-                        case 'created_at':    return <td key={col.id} style={{ ...s, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(row.created_at)}</td>
+                        case 'created_at':    return <td key={col.id} style={{ ...s, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(row.sentAt || row.created_at)}</td>
                         case 'orderNo':       return <td key={col.id} style={{ ...s, fontWeight: 700 }}>{row.orderNo}</td>
                         case 'batch_id':      return <td key={col.id} style={{ ...s, fontWeight: 700, color: 'var(--accent)' }}>{row.batch_id}</td>
                         case 'party':         return <td key={col.id} style={s}>{row.party}</td>
@@ -452,7 +480,7 @@ export default function FmsProcessPage() {
                         case 'remarks':       return <td key={col.id} style={{ ...s, fontSize:11, whiteSpace:'normal' }}>{row.remarks}</td>
                         case 'delivery_date': return <td key={col.id} style={{ ...s, fontWeight:700, color:'var(--warning)' }}>{row.delivery_date !== '-' ? fmtDate(row.delivery_date) : '-'}</td>
                         case 'process_route': return <td key={col.id} style={{ ...s, fontWeight: 600, color: 'var(--accent)' }}>{row.routeStr}</td>
-                        case 'planned_date':  return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.plannedDate ? 'var(--accent)' : 'var(--text-tertiary)' }}>{fmtDate(row.plannedDate)}</td>
+                        case 'planned_date':  return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.plannedDate ? 'var(--success)' : 'var(--text-tertiary)' }}>{row.plannedDate ? fmtDate(row.plannedDate) : '-'}</td>
                         case 'actual_date':   return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.actualDate ? 'var(--success)' : 'var(--text-tertiary)' }}>{fmtDate(row.actualDate)}</td>
                         case 'time_delay':    return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.delayLate ? 'var(--danger)' : 'var(--success)' }}>{row.delayText}</td>
                         case 'actions': {
