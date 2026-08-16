@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
-import { sb } from '@/lib/supabase'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -385,22 +384,22 @@ export default function FmsProcessPage() {
     setSaving(true)
     try {
       const row = fobModal
-      const { error } = await sb('/fob_records', {
+      const fobRes = await fetch('/api/fob', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          batch_id:    row.id,
-          order_id:    row.order_id,
+          action:       'create',
+          batch_id:     row.id,
+          order_id:     row.order_id,
           order_number: row.orderNo,
           party:        row.party,
           fob_kg:       parseFloat(row.kg) || 0,
           process_code: processCode,
           fob_type:     fobType,
-          status:       'open',
           notes:        fobReason,
         }),
-        headers: { 'Prefer': 'return=minimal' },
-      })
-      if (error) { alert('Error: ' + error); return }
+      }).then(r => r.json())
+      if (!fobRes.ok) { alert('Error: ' + fobRes.error); return }
       showToast(`✓ FOB entry created for ${row.batch_id}`)
       setFobModal(null); setFobReason('')
       loadRows()
