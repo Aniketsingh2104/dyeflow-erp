@@ -525,11 +525,11 @@ export default function FmsProcessPage() {
               <tbody>
                 {displayRows.map((row, idx) => (
                   <tr key={row.id || idx} style={{
-                    background: row.isCompleted ? 'var(--success-light)'
-                              : row.isFaulty   ? 'var(--danger-light)'
+                    background: row.isFaulty    ? '#FEE2E2'
+                              : row.isCompleted ? 'var(--success-light)'
                               : idx % 2 === 0  ? 'var(--bg-primary)' : 'var(--bg-secondary)',
-                    borderBottom: '1px solid var(--border-light)',
-                    opacity: row.isCompleted ? 0.85 : 1 }}>
+                    borderBottom: row.isFaulty ? '1px solid #FCA5A5' : '1px solid var(--border-light)',
+                    opacity: 1 }}>
                     {visible.map(col => {
                       const s: React.CSSProperties = { padding: '9px 8px', fontSize: 12,
                         color: 'var(--text-primary)', overflow: 'hidden',
@@ -567,41 +567,56 @@ export default function FmsProcessPage() {
                           const faulty = row.isFaulty
                           return (
                             <td key={col.id} style={{ ...s, overflow: 'visible' }}>
-                              <div style={{ display: 'flex', gap: 4 }}>
-                                <button onClick={() => !done && handleDone(row)} disabled={done || saving}
-                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                    border: 'none', borderRadius: 4, cursor: done ? 'default' : 'pointer',
-                                    background: done ? 'var(--success-light)' : 'var(--success)',
-                                    color: done ? 'var(--success)' : '#fff' }}>
-                                  {done ? '✓ Done' : 'Done'}
-                                </button>
-                                <button onClick={() => { setFaultyModal(row); setFaultyReason('') }}
-                                  disabled={done || saving}
-                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                    border: '1px solid var(--danger)', borderRadius: 4,
-                                    cursor: done ? 'not-allowed' : 'pointer',
-                                    background: faulty ? 'var(--danger-light)' : 'transparent',
-                                    color: 'var(--danger)', opacity: done ? 0.4 : 1 }}>
-                                  {faulty ? '⚠ Faulty' : 'Faulty'}
-                                </button>
-                                <button onClick={() => { setFobModal(row); setFobType('dyeing'); setFobReason('') }}
-                                  disabled={done || saving}
-                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                    border: '1px solid var(--purple)', borderRadius: 4,
-                                    cursor: done ? 'not-allowed' : 'pointer',
-                                    background: 'transparent', color: 'var(--purple)', opacity: done ? 0.4 : 1 }}>
-                                  + FOB
-                                </button>
-                                <button onClick={() => handleRollback(row)}
-                                  disabled={saving}
-                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                    border: '1px solid #DC2626', borderRadius: 4,
-                                    cursor: 'pointer', background: 'transparent',
-                                    color: '#DC2626' }}
-                                  title="Roll back to previous process">
-                                  ↩ Delete
-                                </button>
-                              </div>
+                              {faulty ? (
+                                // Faulty batch — show prominent badge + rollback only
+                                <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+                                  <span style={{ padding:'4px 10px', fontSize:11, fontWeight:700,
+                                    background:'#DC2626', color:'white', borderRadius:4,
+                                    display:'flex', alignItems:'center', gap:4 }}>
+                                    ⚠ FAULTY
+                                  </span>
+                                  <button onClick={() => handleRollback(row)} disabled={saving}
+                                    style={{ padding:'4px 8px', fontSize:11, fontWeight:600,
+                                      border:'1px solid #DC2626', borderRadius:4,
+                                      cursor:'pointer', background:'transparent', color:'#DC2626' }}
+                                    title="Roll back — undo faulty">
+                                    ↩ Undo
+                                  </button>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <button onClick={() => !done && handleDone(row)} disabled={done || saving}
+                                    style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                                      border: 'none', borderRadius: 4, cursor: done ? 'default' : 'pointer',
+                                      background: done ? 'var(--success-light)' : 'var(--success)',
+                                      color: done ? 'var(--success)' : '#fff' }}>
+                                    {done ? '✓ Done' : 'Done'}
+                                  </button>
+                                  <button onClick={() => { setFaultyModal(row); setFaultyReason('') }}
+                                    disabled={done || saving}
+                                    style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                                      border: '1px solid var(--danger)', borderRadius: 4,
+                                      cursor: done ? 'not-allowed' : 'pointer',
+                                      background: 'transparent', color: 'var(--danger)', opacity: done ? 0.4 : 1 }}>
+                                    Faulty
+                                  </button>
+                                  <button onClick={() => { setFobModal(row); setFobType('dyeing'); setFobReason('') }}
+                                    disabled={done || saving}
+                                    style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                                      border: '1px solid var(--purple)', borderRadius: 4,
+                                      cursor: done ? 'not-allowed' : 'pointer',
+                                      background: 'transparent', color: 'var(--purple)', opacity: done ? 0.4 : 1 }}>
+                                    + FOB
+                                  </button>
+                                  <button onClick={() => handleRollback(row)} disabled={saving}
+                                    style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600,
+                                      border: '1px solid #DC2626', borderRadius: 4,
+                                      cursor: 'pointer', background: 'transparent', color: '#DC2626' }}
+                                    title="Roll back to previous process">
+                                    ↩ Delete
+                                  </button>
+                                </div>
+                              )}
                             </td>
                           )
                         }
