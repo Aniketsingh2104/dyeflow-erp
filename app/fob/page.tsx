@@ -1,5 +1,5 @@
-import ReprocessModal from '@/components/ReprocessModal'
 'use client'
+import ReprocessModal from '@/components/ReprocessModal'
 
 import { useEffect, useState, useCallback } from 'react'
 
