@@ -131,8 +131,18 @@ export async function POST(req: NextRequest) {
         is_faulty:false, status:'repairing', current_process:null,
       })
     } else {
+      // For partial: calculate remaining mtr and taka proportionally
+      const totalKg = parseFloat(faulty_kg) || 0
+      const ratio = totalKg > 0 ? remainKg / totalKg : 0
+      // Fetch current batch values
+      const { data: batchData } = await dbSelect('batches', { id: `eq.${batch_id}` }, 'id,mtr,taka')
+      const currentBatch = batchData?.[0] || {}
+      const remainMtr  = currentBatch.mtr  ? Math.round(currentBatch.mtr  * ratio * 10) / 10 : null
+      const remainTaka = currentBatch.taka ? Math.round(currentBatch.taka * ratio) : null
       await dbUpdate('batches', { id: batch_id }, {
         is_faulty:false, kg:remainKg,
+        ...(remainMtr  !== null ? { mtr:  remainMtr  } : {}),
+        ...(remainTaka !== null ? { taka: remainTaka } : {}),
         status: nextProcess ? 'in-process' : 'done',
         current_process: nextProcess||null,
         sent_at: new Date().toISOString(),
