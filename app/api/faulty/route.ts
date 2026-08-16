@@ -3,68 +3,64 @@ import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
 
 export async function GET() {
   try {
-    const { data: records, error } = await dbSelect(
-      'faulty_records',
+    const { data: records, error } = await dbSelect('faulty_records',
       { order: 'created_at.desc', limit: '2000' },
-      'id,batch_id,order_id,order_number,party,color,faulty_type,faulty_kg,process_code,status,if_ok,notes,reported_by,resolved_at,created_at,updated_at'
+      'id,batch_id,order_id,order_number,party,color,faulty_type,faulty_kg,process_code,status,if_ok,notes,reported_by,resolved_at,reprocess_type,reprocess_kg,reprocess_mtr,reprocess_taka,next_process,created_at,updated_at'
     )
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-    const batchIds = [...new Set((records || []).map((r: any) => r.batch_id).filter(Boolean))]
-    const orderIds = [...new Set((records || []).map((r: any) => r.order_id).filter(Boolean))]
-
-    let batchMap: Record<string, any> = {}
-    let orderMap: Record<string, any> = {}
+    const batchIds = [...new Set((records||[]).map((r:any)=>r.batch_id).filter(Boolean))]
+    const orderIds = [...new Set((records||[]).map((r:any)=>r.order_id).filter(Boolean))]
+    let batchMap: Record<string,any> = {}
+    let orderMap: Record<string,any> = {}
 
     if (batchIds.length) {
       const { data: batches } = await dbSelect('batches',
         { id: `in.(${batchIds.join(',')})`, limit: '2000' },
         'id,batch_id,kg,mtr,taka,sent_at,created_at,process_route,machines(id,name)'
       )
-      for (const b of batches || []) batchMap[b.id] = b
+      for (const b of batches||[]) batchMap[b.id] = b
     }
-
     if (orderIds.length) {
       const { data: orders } = await dbSelect('orders',
         { id: `in.(${orderIds.join(',')})`, limit: '2000' },
         'id,order_number,party,sub_party,article,blend,width,gsm,color,lab_no,lot_no,challan_no,qty_kg,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)'
       )
-      for (const o of orders || []) orderMap[o.id] = o
+      for (const o of orders||[]) orderMap[o.id] = o
     }
 
-    const enriched = (records || []).map((r: any) => {
+    const enriched = (records||[]).map((r:any) => {
       const batch = batchMap[r.batch_id] || {}
       const order = orderMap[r.order_id] || {}
       return {
         ...r,
-        batch_id_str:    batch.batch_id   || r.batch_id,
-        batch_uuid:      r.batch_id,
-        process_route:   batch.process_route || [],
-        kg:              batch.kg          || r.faulty_kg,
-        qty_mtr:         batch.mtr         || order.qty_mtr || '-',
-        no_of_taka:      batch.taka        || order.no_of_taka || '-',
-        machine:         batch.machines?.name || '-',
-        sent_at:         batch.sent_at     || batch.created_at,
-        order_number:    order.order_number || r.order_number,
-        party:           order.party       || r.party,
-        sub_party:       order.sub_party   || '-',
-        article:         order.article     || '-',
-        blend:           order.blend       || '-',
-        width:           order.width       || '-',
-        gsm:             order.gsm         || '-',
-        color:           order.color || r.color || '-',
-        lab_no:          order.lab_no      || '-',
-        lot_no:          order.lot_no      || '-',
-        challan_no:      order.challan_no  || '-',
-        type_of_finish:  order.type_of_finish  || '-',
+        batch_id_str: batch.batch_id || r.batch_id,
+        batch_uuid:   r.batch_id,
+        process_route: batch.process_route || [],
+        kg:           batch.kg || r.faulty_kg,
+        qty_mtr:      batch.mtr || order.qty_mtr || '-',
+        no_of_taka:   batch.taka || order.no_of_taka || '-',
+        machine:      batch.machines?.name || '-',
+        sent_at:      batch.sent_at || batch.created_at,
+        order_number: order.order_number || r.order_number,
+        party:        order.party || r.party,
+        sub_party:    order.sub_party || '-',
+        article:      order.article || '-',
+        blend:        order.blend || '-',
+        width:        order.width || '-',
+        gsm:          order.gsm || '-',
+        color:        order.color || r.color || '-',
+        lab_no:       order.lab_no || '-',
+        lot_no:       order.lot_no || '-',
+        challan_no:   order.challan_no || '-',
+        type_of_finish:  order.type_of_finish || '-',
         type_of_packing: order.type_of_packing || '-',
-        remarks:         order.remarks     || '-',
-        supervisor:      order.supervisors?.name || '-',
+        remarks:      order.remarks || '-',
+        supervisor:   order.supervisors?.name || '-',
       }
     })
-
     return NextResponse.json({ ok: true, data: enriched })
-  } catch (err: any) {
+  } catch (err:any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
   }
 }
@@ -73,98 +69,97 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action, id, ...payload } = body
 
-  // ── Mark OK: batch goes to next process ───────────────────────────────────
+  // ── Mark OK ───────────────────────────────────────────────────────────────
   if (action === 'mark_ok') {
     const { batch_id, process_code, process_route } = payload
-    if (!id || !batch_id) return NextResponse.json({ ok: false, error: 'id and batch_id required' }, { status: 400 })
-
-    // Find next process after where faulty was marked
     const route: string[] = process_route || []
-    const faultyIdx = route.findIndex((c: string) =>
-      c.toUpperCase() === (process_code || '').toUpperCase() || c === process_code
-    )
-    const nextProcess = faultyIdx >= 0 && faultyIdx < route.length - 1
-      ? route[faultyIdx + 1]
-      : null
+    const idx = route.findIndex((c:string) => c.toUpperCase() === (process_code||'').toUpperCase() || c === process_code)
+    const nextProcess = idx >= 0 && idx < route.length - 1 ? route[idx+1] : null
 
-    // 1. Update faulty record — mark resolved
     await dbUpdate('faulty_records', { id }, {
-      status:      'resolved',
-      if_ok:       true,
-      resolved_at: new Date().toISOString(),
-      notes:       payload.notes || 'Marked OK — sent to next process',
+      status: 'resolved', if_ok: true, resolved_at: new Date().toISOString(),
+      notes: payload.notes || 'Marked OK — sent to next process',
     })
-
-    // 2. Update batch — send to next process
     await dbUpdate('batches', { id: batch_id }, {
-      is_faulty:       false,
-      status:          nextProcess ? 'in-process' : 'done',
+      is_faulty: false,
+      status: nextProcess ? 'in-process' : 'done',
       current_process: nextProcess || null,
-      sent_at:         new Date().toISOString(),
+      sent_at: new Date().toISOString(),
     })
-
-    await auditLog({ action: 'faulty_ok', entity_type: 'faulty_record', entity_id: id,
-      new_value: nextProcess ? `sent to ${nextProcess}` : 'completed' })
+    await auditLog({ action:'faulty_ok', entity_type:'faulty_record', entity_id:id, new_value: nextProcess || 'completed' })
     return NextResponse.json({ ok: true, next_process: nextProcess })
   }
 
-  // ── Reprocess: batch goes to Repairing Orders ─────────────────────────────
+  // ── Reprocess (Full or Partial) ───────────────────────────────────────────
   if (action === 'reprocess') {
-    const { batch_id, order_id, reprocess_reason, process_route } = payload
-    if (!id || !batch_id) return NextResponse.json({ ok: false, error: 'id and batch_id required' }, { status: 400 })
-    if (!reprocess_reason?.trim()) return NextResponse.json({ ok: false, error: 'Reprocess reason required' }, { status: 400 })
+    const { batch_id, order_id, faulty_kg, process_code, process_route,
+            reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka,
+            reprocess_reason } = payload
+    if (!reprocess_reason?.trim()) return NextResponse.json({ ok: false, error: 'Reason required' }, { status: 400 })
 
-    // 1. Update faulty record — mark repairing
+    const isPartial  = reprocess_type === 'partial'
+    const repairKg   = isPartial ? (parseFloat(reprocess_kg)||0) : (parseFloat(faulty_kg)||0)
+    const remainKg   = isPartial ? Math.max(0, (parseFloat(faulty_kg)||0) - repairKg) : 0
+    const route: string[] = process_route || []
+    const idx = route.findIndex((c:string) => c.toUpperCase() === (process_code||'').toUpperCase() || c === process_code)
+    const nextProcess = isPartial && remainKg > 0 && idx >= 0 && idx < route.length-1 ? route[idx+1] : null
+
+    // Update faulty record
     await dbUpdate('faulty_records', { id }, {
       status: 'repairing',
-      notes:  reprocess_reason,
+      notes: reprocess_reason,
+      reprocess_type,
+      reprocess_kg:   isPartial ? repairKg : null,
+      reprocess_mtr:  isPartial ? (parseFloat(reprocess_mtr)||0) : null,
+      reprocess_taka: isPartial ? (parseFloat(reprocess_taka)||0) : null,
+      next_process:   nextProcess,
     })
 
-    // 2. Create repairing order entry
-    const { error: repErr } = await dbInsert('repairing_orders', {
-      faulty_id:     id,
-      order_id:      order_id || null,
-      batch_id:      batch_id,
-      repair_kg:     payload.faulty_kg || 0,
-      process_route: process_route || [],
-      status:        'pending',
-      notes:         reprocess_reason,
-    })
-    if (repErr) return NextResponse.json({ ok: false, error: repErr }, { status: 500 })
-
-    // 3. Update batch — send to repairing
-    await dbUpdate('batches', { id: batch_id }, {
-      is_faulty:       false,
-      status:          'repairing',
-      current_process: null,
+    // Create repairing order
+    await dbInsert('repairing_orders', {
+      batch_id, order_id: order_id||null,
+      repair_kg: repairKg,
+      repair_mtr:  isPartial ? (parseFloat(reprocess_mtr)||null) : null,
+      repair_taka: isPartial ? (parseFloat(reprocess_taka)||null) : null,
+      process_route: route, status:'pending',
+      notes: reprocess_reason, source_type:'faulty', reprocess_type,
     })
 
-    await auditLog({ action: 'faulty_reprocess', entity_type: 'faulty_record', entity_id: id,
-      new_value: reprocess_reason })
-    return NextResponse.json({ ok: true })
+    // Update batch
+    if (!isPartial || remainKg <= 0) {
+      await dbUpdate('batches', { id: batch_id }, {
+        is_faulty:false, status:'repairing', current_process:null,
+      })
+    } else {
+      await dbUpdate('batches', { id: batch_id }, {
+        is_faulty:false, kg:remainKg,
+        status: nextProcess ? 'in-process' : 'done',
+        current_process: nextProcess||null,
+        sent_at: new Date().toISOString(),
+      })
+    }
+
+    await auditLog({ action:'faulty_reprocess', entity_type:'faulty_record', entity_id:id, new_value:`${reprocess_type}:${repairKg}kg` })
+    return NextResponse.json({ ok:true, repair_kg:repairKg, remain_kg:remainKg, next_process:nextProcess })
   }
 
   // ── Standard update ───────────────────────────────────────────────────────
   if (action === 'update') {
-    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    const patch: Record<string, any> = {}
+    const patch:Record<string,any> = {}
     if (payload.status !== undefined) patch.status = payload.status
     if (payload.notes  !== undefined) patch.notes  = payload.notes
     if (payload.if_ok  !== undefined) patch.if_ok  = payload.if_ok
     if (payload.status === 'resolved') patch.resolved_at = new Date().toISOString()
     const { error } = await dbUpdate('faulty_records', { id }, patch)
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    await auditLog({ action: 'faulty_update', entity_type: 'faulty_record', entity_id: id, new_value: payload.status })
-    return NextResponse.json({ ok: true })
+    if (error) return NextResponse.json({ ok:false, error }, { status:500 })
+    return NextResponse.json({ ok:true })
   }
 
-  // ── Delete ────────────────────────────────────────────────────────────────
   if (action === 'delete') {
-    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    const { error } = await sb('/faulty_records', { method: 'DELETE', params: { id: `eq.${id}` } })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    const { error } = await sb('/faulty_records', { method:'DELETE', params:{ id:`eq.${id}` } })
+    if (error) return NextResponse.json({ ok:false, error }, { status:500 })
+    return NextResponse.json({ ok:true })
   }
 
-  return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })
+  return NextResponse.json({ ok:false, error:'Unknown action' }, { status:400 })
 }
