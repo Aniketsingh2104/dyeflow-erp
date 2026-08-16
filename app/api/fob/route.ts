@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
 
+// Generate new batch ID for repairing: B2 → B2-R → B2-RR → B2-RRR
+function getRepairingBatchId(currentBatchId: string): string {
+  if (!currentBatchId) return currentBatchId
+  const match = currentBatchId.match(/^(.+?)(-R+)$/)
+  if (match) return match[1] + match[2] + 'R'
+  return currentBatchId + '-R'
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
@@ -145,6 +153,16 @@ export async function POST(req: NextRequest) {
       next_process:   nextProcess,
     })
 
+    // Get current batch ID and generate new repairing batch ID
+    const { data: batchForId } = await dbSelect('batches', { id: `eq.${batch_id}` }, 'id,batch_id,mtr,taka')
+    const currentBatch = batchForId?.[0] || {}
+    const newBatchId = getRepairingBatchId(currentBatch.batch_id || '')
+
+    // Update batch_id to repairing ID (e.g. DYE26-0003-B2 → DYE26-0003-B2-R)
+    if (newBatchId) {
+      await dbUpdate('batches', { id: batch_id }, { batch_id: newBatchId })
+    }
+
     await dbInsert('repairing_orders', {
       batch_id, order_id: order_id||null,
       repair_kg: repairKg,
@@ -159,8 +177,15 @@ export async function POST(req: NextRequest) {
         status:'repairing', current_process:null,
       })
     } else {
+      // Proportional mtr/taka for remaining batch
+      const totalKg = parseFloat(fob_kg) || 0
+      const ratio   = totalKg > 0 ? remainKg / totalKg : 0
+      const remainMtr  = currentBatch.mtr  ? Math.round(currentBatch.mtr  * ratio * 10) / 10 : null
+      const remainTaka = currentBatch.taka ? Math.round(currentBatch.taka * ratio) : null
       await dbUpdate('batches', { id:batch_id }, {
         kg:remainKg,
+        ...(remainMtr  !== null ? { mtr:  remainMtr  } : {}),
+        ...(remainTaka !== null ? { taka: remainTaka } : {}),
         status: nextProcess ? 'in-process' : 'done',
         current_process: nextProcess||null,
         sent_at: new Date().toISOString(),
