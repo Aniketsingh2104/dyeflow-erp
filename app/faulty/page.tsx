@@ -105,9 +105,9 @@ export default function FaultyPage() {
     } finally { setSaving(false) }
   }
 
-  // ── Reprocess ────────────────────────────────────────────────────────────
-  const handleReprocess = async () => {
-    if (!reprocessModal || !reprocessReason.trim()) return
+  // ── Reprocess (Full or Partial) ──────────────────────────────────────────
+  const handleReprocess = async (data: any) => {
+    if (!reprocessModal) return
     setSaving(true)
     try {
       const res = await fetch('/api/faulty', {
@@ -118,14 +118,21 @@ export default function FaultyPage() {
           batch_id:         reprocessModal.batch_uuid,
           order_id:         reprocessModal.order_id,
           faulty_kg:        reprocessModal.faulty_kg,
+          process_code:     reprocessModal.process_code,
           process_route:    reprocessModal.process_route || [],
-          reprocess_reason: reprocessReason,
+          reprocess_type:   data.reprocess_type,
+          reprocess_kg:     data.reprocess_kg,
+          reprocess_mtr:    data.reprocess_mtr,
+          reprocess_taka:   data.reprocess_taka,
+          reprocess_reason: data.reprocess_reason,
         })
       }).then(r => r.json())
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast('🔄 Batch sent to Repairing Orders')
+      const msg = data.reprocess_type === 'partial' && res.remain_kg > 0
+        ? `🔄 ${res.repair_kg}Kg to Repairing · ${res.remain_kg}Kg → ${res.next_process}`
+        : '🔄 Full batch sent to Repairing Orders'
+      showToast(msg)
       setReprocessModal(null)
-      setReprocessReason('')
       load()
     } finally { setSaving(false) }
   }
@@ -493,44 +500,16 @@ export default function FaultyPage() {
         </div>
       )}
 
-      {/* Reprocess Modal */}
+      {/* Reprocess Modal — Full or Partial */}
       {reprocessModal && (
-        <div className="modal-overlay" onClick={() => setReprocessModal(null)}>
-          <div className="modal" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Send to Repairing Orders</span>
-              <button className="small" onClick={() => setReprocessModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'#FFFBEB', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'#D97706', marginBottom:4 }}>
-                🔄 Batch will be sent for reprocessing
-              </div>
-              <div style={{ fontSize:12, color:'#374151' }}>
-                <strong>{reprocessModal.batch_id_str}</strong> — {reprocessModal.color} · {reprocessModal.faulty_kg} Kg
-              </div>
-              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
-                Faulty at: <strong>{reprocessModal.process_code}</strong> · Type: {reprocessModal.faulty_type}
-              </div>
-            </div>
-            <div className="form-group" style={{ marginBottom:14 }}>
-              <label>Reprocess Reason <span style={{ color:'var(--danger)' }}>*</span></label>
-              <textarea value={reprocessReason} rows={3} autoFocus
-                placeholder="e.g. Shade variation — needs re-dyeing, Crease mark — needs heat-set again…"
-                onChange={e => setReprocessReason(e.target.value)}
-                style={{ width:'100%', fontSize:13 }} />
-            </div>
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={() => setReprocessModal(null)}>Cancel</button>
-              <button onClick={handleReprocess}
-                disabled={!reprocessReason.trim() || saving}
-                style={{ padding:'8px 20px', fontSize:13, fontWeight:700, border:'none',
-                  borderRadius:6, cursor: reprocessReason.trim() ? 'pointer' : 'not-allowed',
-                  background: reprocessReason.trim() ? '#D97706' : '#CBD5E0', color:'white' }}>
-                {saving ? 'Processing…' : '🔄 Send to Repairing'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ReprocessModal
+          record={reprocessModal}
+          onClose={() => setReprocessModal(null)}
+          onConfirm={handleReprocess}
+          saving={saving}
+          sourceLabel="Faulty"
+          kgField="faulty_kg"
+        />
       )}
     </div>
   )

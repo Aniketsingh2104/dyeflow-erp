@@ -1,3 +1,4 @@
+import ReprocessModal from '@/components/ReprocessModal'
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
@@ -46,9 +47,10 @@ export default function FobPage() {
   const [toast,       setToast]       = useState('')
   const [editModal,   setEditModal]   = useState<any>(null)
   const [editData,    setEditData]    = useState<any>({})
-  const [saving,      setSaving]      = useState(false)
-  const [hiddenCols,  setHiddenCols]  = useState<Set<string>>(new Set())
-  const [showColMenu, setShowColMenu] = useState(false)
+  const [saving,         setSaving]        = useState(false)
+  const [hiddenCols,     setHiddenCols]    = useState<Set<string>>(new Set())
+  const [showColMenu,    setShowColMenu]   = useState(false)
+  const [reprocessModal, setReprocessModal] = useState<any>(null)
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
@@ -72,6 +74,62 @@ export default function FobPage() {
     }
     return true
   })
+
+  const handleMarkSent = async (id: string) => {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/fob', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_sent', id })
+      }).then(r => r.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('📤 FOB marked as sent')
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const handleFobApproved = async (r: any) => {
+    if (!confirm('FOB Approved? Batch will go to next process.')) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/fob', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fob_approved', id: r.id,
+          batch_id: r.batch_uuid, process_code: r.process_code,
+          process_route: r.process_route || []
+        })
+      }).then(x => x.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast(res.next_process ? `✓ FOB Approved → ${res.next_process}` : '✓ FOB Approved — complete')
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const handleFobReprocess = async (data: any) => {
+    if (!reprocessModal) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/fob', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reprocess', id: reprocessModal.id,
+          batch_id: reprocessModal.batch_uuid, order_id: reprocessModal.order_id,
+          fob_kg: reprocessModal.fob_kg, process_code: reprocessModal.process_code,
+          process_route: reprocessModal.process_route || [],
+          reprocess_type: data.reprocess_type, reprocess_kg: data.reprocess_kg,
+          reprocess_mtr: data.reprocess_mtr, reprocess_taka: data.reprocess_taka,
+          reprocess_reason: data.reprocess_reason,
+        })
+      }).then(x => x.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      const msg = data.reprocess_type === 'partial' && res.remain_kg > 0
+        ? `🔄 ${res.repair_kg}Kg to Repairing · ${res.remain_kg}Kg → ${res.next_process}`
+        : '🔄 Full batch sent to Repairing Orders'
+      showToast(msg)
+      setReprocessModal(null); load()
+    } finally { setSaving(false) }
+  }
 
   const handleUpdate = async () => {
     if (!editModal) return
@@ -307,7 +365,47 @@ export default function FobPage() {
                         )
                         case 'actions': return (
                           <td key={col.key} style={{...s, overflow:'visible'}}>
-                            <div style={{ display:'flex', gap:4 }}>
+                            <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                              {!r.sent_at && r.status === 'open' && (
+                                <button onClick={() => handleMarkSent(r.id)} disabled={saving}
+                                  style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                    border:'none', borderRadius:4, cursor:'pointer',
+                                    background:'#2563EB', color:'white' }}>
+                                  📤 Mark Sent
+                                </button>
+                              )}
+                              {r.sent_at && (
+                                <span style={{ fontSize:10, color:'#2563EB', fontWeight:600,
+                                  padding:'3px 6px', background:'#DBEAFE', borderRadius:4 }}>
+                                  📤 {new Date(r.sent_at).toLocaleDateString('en-GB')}
+                                </span>
+                              )}
+                              {(r.status === 'open' || r.status === 'sent') && (<>
+                                <button onClick={() => handleFobApproved(r)} disabled={saving}
+                                  style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                    border:'none', borderRadius:4, cursor:'pointer',
+                                    background:'#16A34A', color:'white' }}>
+                                  ✓ Approved
+                                </button>
+                                <button onClick={() => setReprocessModal(r)} disabled={saving}
+                                  style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                    border:'none', borderRadius:4, cursor:'pointer',
+                                    background:'#D97706', color:'white' }}>
+                                  🔄 Reprocess
+                                </button>
+                              </>)}
+                              {r.status === 'approved' && (
+                                <span style={{ fontSize:10, color:'#16A34A', fontWeight:700,
+                                  padding:'3px 6px', background:'#DCFCE7', borderRadius:4 }}>
+                                  ✓ Approved
+                                </span>
+                              )}
+                              {r.status === 'repairing' && (
+                                <span style={{ fontSize:10, color:'#D97706', fontWeight:600,
+                                  padding:'3px 6px', background:'#FEF3C7', borderRadius:4 }}>
+                                  🔄 Repairing
+                                </span>
+                              )}
                               <button className="xs"
                                 onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'' }) }}>
                                 Edit
@@ -363,6 +461,16 @@ export default function FobPage() {
             </div>
           </div>
         </div>
+      )}
+      {reprocessModal && (
+        <ReprocessModal
+          record={reprocessModal}
+          onClose={() => setReprocessModal(null)}
+          onConfirm={handleFobReprocess}
+          saving={saving}
+          sourceLabel="FOB"
+          kgField="fob_kg"
+        />
       )}
     </div>
   )
