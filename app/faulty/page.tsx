@@ -52,9 +52,12 @@ export default function FaultyPage() {
   const [toast,        setToast]        = useState('')
   const [editModal,    setEditModal]    = useState<any>(null)
   const [editData,     setEditData]     = useState<any>({})
-  const [saving,       setSaving]       = useState(false)
-  const [hiddenCols,   setHiddenCols]   = useState<Set<string>>(new Set())
-  const [showColMenu,  setShowColMenu]  = useState(false)
+  const [saving,          setSaving]       = useState(false)
+  const [hiddenCols,      setHiddenCols]   = useState<Set<string>>(new Set())
+  const [showColMenu,     setShowColMenu]  = useState(false)
+  const [okModal,         setOkModal]      = useState<any>(null)
+  const [reprocessModal,  setReprocessModal]= useState<any>(null)
+  const [reprocessReason, setReprocessReason] = useState('')
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
@@ -78,6 +81,54 @@ export default function FaultyPage() {
     }
     return true
   })
+
+  // ── Mark OK ─────────────────────────────────────────────────────────────
+  const handleMarkOk = async () => {
+    if (!okModal) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/faulty', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action:         'mark_ok',
+          id:             okModal.id,
+          batch_id:       okModal.batch_uuid,
+          process_code:   okModal.process_code,
+          process_route:  okModal.process_route || [],
+        })
+      }).then(r => r.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      const next = res.next_process
+      showToast(next ? `✓ Batch marked OK → sent to ${next}` : '✓ Batch marked OK — completed')
+      setOkModal(null)
+      load()
+    } finally { setSaving(false) }
+  }
+
+  // ── Reprocess ────────────────────────────────────────────────────────────
+  const handleReprocess = async () => {
+    if (!reprocessModal || !reprocessReason.trim()) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/faulty', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action:           'reprocess',
+          id:               reprocessModal.id,
+          batch_id:         reprocessModal.batch_uuid,
+          order_id:         reprocessModal.order_id,
+          faulty_kg:        reprocessModal.faulty_kg,
+          process_route:    reprocessModal.process_route || [],
+          reprocess_reason: reprocessReason,
+        })
+      }).then(r => r.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('🔄 Batch sent to Repairing Orders')
+      setReprocessModal(null)
+      setReprocessReason('')
+      load()
+    } finally { setSaving(false) }
+  }
 
   const handleUpdate = async () => {
     if (!editModal) return
@@ -315,7 +366,29 @@ export default function FaultyPage() {
                           )
                           case 'actions': return (
                             <td key={col.key} style={{...s, overflow:'visible'}}>
-                              <div style={{ display:'flex', gap:4 }}>
+                              <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                                {r.status === 'open' && (<>
+                                  <button
+                                    onClick={() => setOkModal(r)}
+                                    style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                      border:'none', borderRadius:4, cursor:'pointer',
+                                      background:'#16A34A', color:'white' }}>
+                                    ✓ OK
+                                  </button>
+                                  <button
+                                    onClick={() => { setReprocessModal(r); setReprocessReason('') }}
+                                    style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                      border:'none', borderRadius:4, cursor:'pointer',
+                                      background:'#D97706', color:'white' }}>
+                                    🔄 Reprocess
+                                  </button>
+                                </>)}
+                                {r.status === 'repairing' && (
+                                  <span style={{ fontSize:11, fontWeight:600, color:'#D97706' }}>🔄 In Repair</span>
+                                )}
+                                {r.status === 'resolved' && (
+                                  <span style={{ fontSize:11, fontWeight:600, color:'#16A34A' }}>✓ Resolved</span>
+                                )}
                                 <button className="xs"
                                   onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', if_ok:r.if_ok }) }}>
                                   Edit
@@ -378,6 +451,83 @@ export default function FaultyPage() {
                 {saving ? 'Saving…' : '✓ Save'}
               </button>
               <button onClick={() => setEditModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Mark OK Modal */}
+      {okModal && (
+        <div className="modal-overlay" onClick={() => setOkModal(null)}>
+          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Mark Batch as OK</span>
+              <button className="small" onClick={() => setOkModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'#F0FDF4', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#16A34A', marginBottom:4 }}>
+                ✓ Batch passes inspection
+              </div>
+              <div style={{ fontSize:12, color:'#374151' }}>
+                <strong>{okModal.batch_id_str}</strong> was faulty at <strong>{okModal.process_code}</strong>
+              </div>
+              <div style={{ fontSize:12, color:'#6B7280', marginTop:6 }}>
+                {(() => {
+                  const route = okModal.process_route || []
+                  const idx = route.findIndex((c: string) => c.toUpperCase() === okModal.process_code?.toUpperCase() || c === okModal.process_code)
+                  const next = idx >= 0 && idx < route.length - 1 ? route[idx + 1] : null
+                  return next
+                    ? `→ Batch will be sent to ${next} process`
+                    : '→ Batch has no next process — will be marked complete'
+                })()}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button onClick={() => setOkModal(null)}>Cancel</button>
+              <button onClick={handleMarkOk} disabled={saving}
+                style={{ padding:'8px 20px', fontSize:13, fontWeight:700, border:'none',
+                  borderRadius:6, cursor:'pointer', background:'#16A34A', color:'white' }}>
+                {saving ? 'Processing…' : '✓ Confirm OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reprocess Modal */}
+      {reprocessModal && (
+        <div className="modal-overlay" onClick={() => setReprocessModal(null)}>
+          <div className="modal" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Send to Repairing Orders</span>
+              <button className="small" onClick={() => setReprocessModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'#FFFBEB', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#D97706', marginBottom:4 }}>
+                🔄 Batch will be sent for reprocessing
+              </div>
+              <div style={{ fontSize:12, color:'#374151' }}>
+                <strong>{reprocessModal.batch_id_str}</strong> — {reprocessModal.color} · {reprocessModal.faulty_kg} Kg
+              </div>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
+                Faulty at: <strong>{reprocessModal.process_code}</strong> · Type: {reprocessModal.faulty_type}
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom:14 }}>
+              <label>Reprocess Reason <span style={{ color:'var(--danger)' }}>*</span></label>
+              <textarea value={reprocessReason} rows={3} autoFocus
+                placeholder="e.g. Shade variation — needs re-dyeing, Crease mark — needs heat-set again…"
+                onChange={e => setReprocessReason(e.target.value)}
+                style={{ width:'100%', fontSize:13 }} />
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button onClick={() => setReprocessModal(null)}>Cancel</button>
+              <button onClick={handleReprocess}
+                disabled={!reprocessReason.trim() || saving}
+                style={{ padding:'8px 20px', fontSize:13, fontWeight:700, border:'none',
+                  borderRadius:6, cursor: reprocessReason.trim() ? 'pointer' : 'not-allowed',
+                  background: reprocessReason.trim() ? '#D97706' : '#CBD5E0', color:'white' }}>
+                {saving ? 'Processing…' : '🔄 Send to Repairing'}
+              </button>
             </div>
           </div>
         </div>
