@@ -7,8 +7,7 @@ export async function GET() {
     const { data: records, error } = await dbSelect(
       'faulty_records',
       { order: 'created_at.desc', limit: '2000' },
-      `id,batch_id,order_id,order_number,party,color,faulty_type,faulty_kg,
-       process_code,status,if_ok,notes,reported_by,resolved_at,created_at,updated_at`
+      'id,batch_id,order_id,order_number,party,color,faulty_type,faulty_kg,process_code,status,if_ok,notes,reported_by,resolved_at,created_at,updated_at'
     )
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
