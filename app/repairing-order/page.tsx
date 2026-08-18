@@ -71,6 +71,32 @@ export default function RepairingOrderPage() {
     return true
   })
 
+  const handleDelete = async (r: any) => {
+    const msg = r.reprocess_type === 'partial'
+      ? `Roll back ${r.repair_kg}Kg to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} → ${revertId(r.batch_id_str)}`
+      : `Roll back batch ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} → ${revertId(r.batch_id_str)}`
+    if (!confirm(msg)) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/repairing-orders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', id: r.id })
+      }).then(x => x.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      const dest = res.source_type === 'fob' ? 'FOB' : 'Faulty'
+      showToast(`↩ Batch ${res.reverted_batch_id} returned to ${dest} page`)
+      load()
+    } finally { setSaving(false) }
+  }
+
+  // Helper to show what batch ID will revert to
+  const revertId = (batchId: string) => {
+    if (!batchId) return batchId
+    if (batchId.match(/-R{2,}$/)) return batchId.slice(0, -1)
+    if (batchId.endsWith('-R')) return batchId.slice(0, -2)
+    return batchId
+  }
+
   const handleUpdate = async () => {
     if (!editModal) return
     setSaving(true)
@@ -285,10 +311,21 @@ export default function RepairingOrderPage() {
                         )
                         case 'actions': return (
                           <td key={col.key} style={{...s, overflow:'visible'}}>
-                            <button className="xs"
-                              onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', repair_kg:r.repair_kg }) }}>
-                              Edit
-                            </button>
+                            <div style={{ display:'flex', gap:4 }}>
+                              <button className="xs"
+                                onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', repair_kg:r.repair_kg }) }}>
+                                Edit
+                              </button>
+                              <button className="xs"
+                                onClick={() => handleDelete(r)}
+                                disabled={saving}
+                                style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
+                                  border:'1px solid #DC2626', borderRadius:4,
+                                  cursor:'pointer', background:'transparent', color:'#DC2626' }}
+                                title={`Roll back to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page`}>
+                                ↩ Delete
+                              </button>
+                            </div>
                           </td>
                         )
                         default: return <td key={col.key} style={s}>{r[col.key] ?? '-'}</td>

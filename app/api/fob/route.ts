@@ -164,8 +164,10 @@ export async function POST(req: NextRequest) {
     }
 
     await dbInsert('repairing_orders', {
-      batch_id, order_id: order_id||null,
-      repair_kg: repairKg,
+      batch_id,
+      fob_id:      id,            // link to fob_record for rollback
+      order_id:    order_id||null,
+      repair_kg:   repairKg,
       repair_mtr:  isPartial ? (parseFloat(reprocess_mtr)||null) : null,
       repair_taka: isPartial ? (parseFloat(reprocess_taka)||null) : null,
       process_route: route, status:'pending',

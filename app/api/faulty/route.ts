@@ -133,10 +133,12 @@ export async function POST(req: NextRequest) {
       await dbUpdate('batches', { id: batch_id }, { batch_id: newBatchId })
     }
 
-    // Create repairing order with new batch ID
+    // Create repairing order with new batch ID + faulty_id link for rollback
     await dbInsert('repairing_orders', {
-      batch_id, order_id: order_id||null,
-      repair_kg: repairKg,
+      batch_id,
+      faulty_id:   id,            // link to faulty_record for rollback
+      order_id:    order_id||null,
+      repair_kg:   repairKg,
       repair_mtr:  isPartial ? (parseFloat(reprocess_mtr)||null) : null,
       repair_taka: isPartial ? (parseFloat(reprocess_taka)||null) : null,
       process_route: route, status:'pending',
