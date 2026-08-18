@@ -218,6 +218,27 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     }
 
     try {
+      // Repair batch: use /api/repair-assign to update batch + repairing order
+      if (order.isRepair) {
+        const res = await fetch('/api/repair-assign', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:        'assign',
+            batch_id:      order.batch_id || order.id,
+            repair_id:     order.repair_id,
+            supervisor_id: order.supervisor_id || null,
+            machine_id:    primaryMachineId,
+            process_route: codes,
+          }),
+        })
+        const data = await res.json()
+        if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return }
+        setEditMode(false)
+        onUpdate()
+        return
+      }
+
+      // Normal order: use /api/orders
       const res = await fetch('/api/orders', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
