@@ -14,14 +14,14 @@ export async function GET() {
     if (orderIds.length) {
       const { data: orders } = await dbSelect("orders",
         { id: `in.(${orderIds.join(",")})`, limit: "1000" },
-        "id,order_number,party,article,color,gsm,blend,sub_party"
+        "id,order_number,party,sub_party,article,color,gsm,blend,width,lab_no,lot_no,challan_no,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)"
       )
       for (const o of orders || []) orderMap[o.id] = o
     }
 
     const { data: repairs } = await dbSelect("repairing_orders",
       { status: "eq.pending", limit: "1000" },
-      "id,batch_id,repair_kg,source_type,reprocess_type,notes"
+      "id,batch_id,repair_kg,repair_mtr,repair_taka,source_type,reprocess_type,notes"
     )
     const repairMap: Record<string, any> = {}
     for (const r of repairs || []) repairMap[r.batch_id] = r
@@ -31,20 +31,31 @@ export async function GET() {
       const repair = repairMap[b.id]      || {}
       return {
         ...b,
-        order_number:    order.order_number  || "-",
-        party:           order.party         || "-",
-        sub_party:       order.sub_party     || "-",
-        article:         order.article       || "-",
-        color:           order.color         || "-",
-        gsm:             order.gsm           || "-",
-        blend:           order.blend         || "-",
-        machine_name:    b.machines?.name    || "-",
-        supervisor_name: b.supervisors?.name || "-",
-        repair_id:       repair.id           || null,
-        repair_kg:       repair.repair_kg    || b.kg,
-        source_type:     repair.source_type  || "-",
-        reprocess_type:  repair.reprocess_type || "-",
-        repair_notes:    repair.notes        || "-",
+        order_number:     order.order_number     || "-",
+        party:            order.party            || "-",
+        sub_party:        order.sub_party        || "-",
+        article:          order.article          || "-",
+        color:            order.color            || "-",
+        gsm:              order.gsm              || "-",
+        blend:            order.blend            || "-",
+        width:            order.width            || "-",
+        lab_no:           order.lab_no           || "-",
+        lot_no:           order.lot_no           || "-",
+        challan_no:       order.challan_no       || "-",
+        qty_mtr:          b.mtr || order.qty_mtr || "-",
+        no_of_taka:       b.taka || order.no_of_taka || "-",
+        type_of_finish:   order.type_of_finish   || "-",
+        type_of_packing:  order.type_of_packing  || "-",
+        remarks:          order.remarks          || "-",
+        machine_name:     b.machines?.name       || "-",
+        supervisor_name:  b.supervisors?.name || order.supervisors?.name || "-",
+        repair_id:        repair.id              || null,
+        repair_kg:        repair.repair_kg       || b.kg,
+        repair_mtr:       repair.repair_mtr      || "-",
+        repair_taka:      repair.repair_taka     || "-",
+        source_type:      repair.source_type     || "-",
+        reprocess_type:   repair.reprocess_type  || "-",
+        repair_notes:     repair.notes           || "-",
       }
     })
     return NextResponse.json({ ok: true, data: enriched })
