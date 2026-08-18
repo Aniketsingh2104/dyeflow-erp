@@ -14,7 +14,7 @@ export async function GET() {
     if (orderIds.length) {
       const { data: orders } = await dbSelect("orders",
         { id: `in.(${orderIds.join(",")})`, limit: "1000" },
-        "id,order_number,party,sub_party,article,color,gsm,blend,width,lab_no,lot_no,challan_no,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)"
+        "id,order_number,party,sub_party,sales_person,article,color,gsm,blend,width,lab_no,lot_no,challan_no,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)"
       )
       for (const o of orders || []) orderMap[o.id] = o
     }
@@ -86,3 +86,4 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 })
 }
+
