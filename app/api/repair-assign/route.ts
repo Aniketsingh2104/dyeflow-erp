@@ -1,14 +1,31 @@
-﻿import { NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { dbSelect, dbUpdate } from "@/lib/supabase"
 
 export async function GET() {
   try {
-    const { data: batches, error } = await dbSelect("batches",
-      { status: "eq.repairing", limit: "1000" },
+    // Get ALL repairing orders (pending or In Repair)
+    const { data: repairs, error: repErr } = await dbSelect("repairing_orders",
+      { limit: "1000" },
+      "id,batch_id,repair_kg,repair_mtr,repair_taka,source_type,reprocess_type,notes,status"
+    )
+    if (repErr) return NextResponse.json({ ok: false, error: repErr }, { status: 500 })
+
+    // Get all batch IDs from repairing orders
+    const batchIds = [...new Set((repairs || []).map((r: any) => r.batch_id).filter(Boolean))]
+    if (!batchIds.length) return NextResponse.json({ ok: true, data: [] })
+
+    // Fetch those batches (status = repairing OR pending = assigned but not yet in process)
+    const { data: batches, error: bErr } = await dbSelect("batches",
+      { id: `in.(${batchIds.join(",")})`, limit: "1000" },
       "id,batch_id,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
     )
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
 
+    // Build repair map
+    const repairMap: Record<string, any> = {}
+    for (const r of repairs || []) repairMap[r.batch_id] = r
+
+    // Get order details
     const orderIds = [...new Set((batches || []).map((b: any) => b.order_id).filter(Boolean))]
     let orderMap: Record<string, any> = {}
     if (orderIds.length) {
@@ -19,45 +36,41 @@ export async function GET() {
       for (const o of orders || []) orderMap[o.id] = o
     }
 
-    const { data: repairs } = await dbSelect("repairing_orders",
-      { status: "eq.pending", limit: "1000" },
-      "id,batch_id,repair_kg,repair_mtr,repair_taka,source_type,reprocess_type,notes"
-    )
-    const repairMap: Record<string, any> = {}
-    for (const r of repairs || []) repairMap[r.batch_id] = r
-
     const enriched = (batches || []).map((b: any) => {
       const order  = orderMap[b.order_id] || {}
       const repair = repairMap[b.id]      || {}
       return {
         ...b,
-        order_number:     order.order_number     || "-",
-        party:            order.party            || "-",
-        sub_party:        order.sub_party        || "-",
-        article:          order.article          || "-",
-        color:            order.color            || "-",
-        gsm:              order.gsm              || "-",
-        blend:            order.blend            || "-",
-        width:            order.width            || "-",
-        lab_no:           order.lab_no           || "-",
-        lot_no:           order.lot_no           || "-",
-        challan_no:       order.challan_no       || "-",
-        qty_mtr:          b.mtr || order.qty_mtr || "-",
-        no_of_taka:       b.taka || order.no_of_taka || "-",
-        type_of_finish:   order.type_of_finish   || "-",
-        type_of_packing:  order.type_of_packing  || "-",
-        remarks:          order.remarks          || "-",
-        machine_name:     b.machines?.name       || "-",
-        supervisor_name:  b.supervisors?.name || order.supervisors?.name || "-",
-        repair_id:        repair.id              || null,
-        repair_kg:        repair.repair_kg       || b.kg,
-        repair_mtr:       repair.repair_mtr      || "-",
-        repair_taka:      repair.repair_taka     || "-",
-        source_type:      repair.source_type     || "-",
-        reprocess_type:   repair.reprocess_type  || "-",
-        repair_notes:     repair.notes           || "-",
+        order_number:    order.order_number     || "-",
+        party:           order.party            || "-",
+        sub_party:       order.sub_party        || "-",
+        sales_person:    order.sales_person     || "-",
+        article:         order.article          || "-",
+        color:           order.color            || "-",
+        gsm:             order.gsm              || "-",
+        blend:           order.blend            || "-",
+        width:           order.width            || "-",
+        lab_no:          order.lab_no           || "-",
+        lot_no:          order.lot_no           || "-",
+        challan_no:      order.challan_no       || "-",
+        qty_mtr:         b.mtr || order.qty_mtr || "-",
+        no_of_taka:      b.taka || order.no_of_taka || "-",
+        type_of_finish:  order.type_of_finish   || "-",
+        type_of_packing: order.type_of_packing  || "-",
+        remarks:         order.remarks          || "-",
+        machine_name:    b.machines?.name       || "-",
+        supervisor_name: b.supervisors?.name || order.supervisors?.name || "-",
+        repair_id:       repair.id              || null,
+        repair_kg:       repair.repair_kg       || b.kg,
+        repair_mtr:      repair.repair_mtr      || "-",
+        repair_taka:     repair.repair_taka     || "-",
+        source_type:     repair.source_type     || "-",
+        reprocess_type:  repair.reprocess_type  || "-",
+        repair_notes:    repair.notes           || "-",
+        ro_status:       repair.status          || "pending", // repairing order status
       }
     })
+
     return NextResponse.json({ ok: true, data: enriched })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
@@ -86,4 +99,3 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 })
 }
-

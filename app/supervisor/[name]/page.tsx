@@ -119,13 +119,10 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
       const repairApiRes = await fetch('/api/repair-assign', { cache: 'no-store' })
         .then(r => r.json()).catch(() => ({ data: [] }))
 
-      // All pending repair batches (not filtered by supervisor — supervisor picks any)
-      const pendingRepairs: any[] = (repairApiRes.data || []).filter((b: any) =>
-        b.status === 'repairing'
-      )
-
-      setFaultyBatches(pendingRepairs)
-      setStats({ inbox, faulty: pendingRepairs.length })
+      // Show ALL repair batches — both unassigned (repairing) and assigned (pending/In Repair)
+      const allRepairs: any[] = repairApiRes.data || []
+      setFaultyBatches(allRepairs)
+      setStats({ inbox, faulty: allRepairs.length })
     } catch (err) {
       console.error('loadData error:', err)
     }
@@ -523,10 +520,23 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
                       </td>
                       <td style={{ ...cellStyle, fontSize:11 }}>{r.repair_notes||'-'}</td>
                       <td style={cellStyle}>
-                        <RouteAssignment
-                          order={{ ...r, id:r.id, batch_id:r.id, repair_id:r.repair_id, isRepair:true }}
-                          onUpdate={loadData}
-                        />
+                        {r.ro_status === 'In Repair' ? (
+                          <div>
+                            <span style={{ display:'block', fontSize:11, fontWeight:700,
+                              padding:'3px 8px', borderRadius:4, background:'#DCFCE7',
+                              color:'#166534', marginBottom:4 }}>
+                              ✓ Assigned
+                            </span>
+                            <span style={{ fontSize:10, color:'#6B7280' }}>
+                              {r.machine_name !== '-' ? r.machine_name : ''}
+                            </span>
+                          </div>
+                        ) : (
+                          <RouteAssignment
+                            order={{ ...r, id:r.id, batch_id:r.id, repair_id:r.repair_id, isRepair:true }}
+                            onUpdate={loadData}
+                          />
+                        )}
                       </td>
                     </tr>
                   ))}
