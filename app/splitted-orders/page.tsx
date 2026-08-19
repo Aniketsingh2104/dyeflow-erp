@@ -78,7 +78,10 @@ export default function SplittedOrdersPage() {
       const oMap: Record<string, any> = {}
       for (const o of orders) oMap[o.id] = o
 
-      setRows(batches.map(b => {
+      // Exclude 'repairing' batches — they only appear after Split/Full Split is done
+      const splitBatches = batches.filter((b: any) => b.status !== 'repairing')
+
+      setRows(splitBatches.map(b => {
         const o = oMap[b.order_id] || {}
         return {
           ...b,
