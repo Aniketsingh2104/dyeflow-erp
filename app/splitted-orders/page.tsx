@@ -9,6 +9,7 @@ const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> =
   done:         { bg: 'var(--success-light)',  color: 'var(--success)',  label: 'Done'       },
   faulty:       { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'Faulty'     },
   hold:         { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'On Hold'    },
+  repairing:    { bg: '#FEF3C7',              color: '#D97706',          label: '🔄 Repairing'},
 }
 
 function Badge({ status }: { status: string }) {
