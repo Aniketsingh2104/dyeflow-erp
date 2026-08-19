@@ -333,7 +333,8 @@ export default function DateCalculatorPage() {
           color:       o.color || '',
           orderNumber: o.order_number || '',
           route:       b.process_route || o.process_route || [],
-          machine:     o.machines?.name || '',
+          // Prefer batch machine (set by supervisor for repair) over order machine
+          machine:     b.machines?.name || o.machines?.name || '',
           anchors,
           dates,
           dcGeneratedOnce: dp.dc_generated_once || false,
@@ -342,7 +343,14 @@ export default function DateCalculatorPage() {
         })
       }
 
-      setRows(batchRows.filter(r => r.route.length > 0))
+      // Exclude batches that are in repairing_orders with status='pending' (not yet split)
+      // Also exclude batches with status='repairing'
+      const filteredRows = batchRows.filter(r =>
+        r.route.length > 0 &&
+        !repairPendingUUIDs.has(r.batchUUID) &&
+        (bRes.data || []).find((b: any) => b.id === r.batchUUID)?.status !== 'repairing'
+      )
+      setRows(filteredRows)
       setLoadStatus('ready')
     } catch (err) {
       console.error('Date calc loadData error:', err)

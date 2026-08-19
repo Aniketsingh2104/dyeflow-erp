@@ -44,11 +44,19 @@ export default function MachinesPage() {
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [machRes, batchRes, orderRes] = await Promise.all([
+      const [machRes, batchRes, orderRes, repairRes2] = await Promise.all([
         getMachines(),
         getBatches(),
         getOrders({ limit: 1000 }),
+        fetch('/api/repairing-orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
+      // Exclude batches in repairing_orders with status='pending' (not yet split/full-split)
+      const repairPendingSet = new Set(
+        ((repairRes2.data || []) as any[])
+          .filter((r: any) => r.status === 'pending')
+          .map((r: any) => r.batch_id)
+          .filter(Boolean)
+      )
 
       const machList: any[] = machRes.data  || []
       const batchList: any[] = batchRes.data || []
@@ -97,7 +105,11 @@ export default function MachinesPage() {
       const data: Record<string, any> = {}
       for (const mach of machList) {
         const mb = enriched
-          .filter(b => b.machine_id === mach.id)
+          .filter(b =>
+            b.machine_id === mach.id &&
+            b.status !== 'repairing' &&           // exclude before supervisor assigns
+            !repairPendingSet.has(b.id)            // exclude not-yet-split repair batches
+          )
           .sort((a, b) => getShadeOrder(a.color) - getShadeOrder(b.color))
 
         // Group by shade
