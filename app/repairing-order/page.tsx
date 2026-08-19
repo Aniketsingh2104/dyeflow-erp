@@ -47,15 +47,12 @@ export default function RepairingOrderPage() {
   const [hiddenCols,    setHiddenCols]    = useState<Set<string>>(new Set())
   const [showColMenu,   setShowColMenu]   = useState(false)
 
-  // Modals
   const [editModal,     setEditModal]     = useState<any>(null)
   const [editData,      setEditData]      = useState<any>({})
   const [splitModal,    setSplitModal]    = useState<any>(null)
   const [splitParts,    setSplitParts]    = useState<any[]>([])
   const [assignModal,   setAssignModal]   = useState<any>(null)
   const [chosenSup,     setChosenSup]     = useState('')
-
-  // Master data
   const [supervisors,   setSupervisors]   = useState<any[]>([])
   const [machines,      setMachines]      = useState<any[]>([])
 
@@ -87,7 +84,6 @@ export default function RepairingOrderPage() {
     return true
   })
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   const revertId = (batchId: string) => {
     if (!batchId) return batchId
     if (batchId.match(/-R{2,}$/)) return batchId.slice(0, -1)
@@ -95,12 +91,10 @@ export default function RepairingOrderPage() {
     return batchId
   }
 
-  const getSplitId = (baseBatchId: string, idx: number) =>
-    `${baseBatchId}-S${idx}`
+  const getSplitId = (baseBatchId: string, idx: number) => `${baseBatchId}-S${idx}`
 
-  // ── Delete / Rollback ─────────────────────────────────────────────────────
   const handleDelete = async (r: any) => {
-    const msg = `Roll back batch ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} → ${revertId(r.batch_id_str)}`
+    const msg = `Roll back batch ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} -> ${revertId(r.batch_id_str)}`
     if (!confirm(msg)) return
     setSaving(true)
     try {
@@ -109,12 +103,11 @@ export default function RepairingOrderPage() {
         body: JSON.stringify({ action: 'delete', id: r.id })
       }).then(x => x.json())
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast(`↩ Batch ${res.reverted_batch_id} returned to ${res.source_type === 'fob' ? 'FOB' : 'Faulty'} page`)
+      showToast('Batch ' + res.reverted_batch_id + ' returned to ' + (res.source_type === 'fob' ? 'FOB' : 'Faulty') + ' page')
       load()
     } finally { setSaving(false) }
   }
 
-  // ── Edit ──────────────────────────────────────────────────────────────────
   const handleUpdate = async () => {
     if (!editModal) return
     setSaving(true)
@@ -124,35 +117,29 @@ export default function RepairingOrderPage() {
         body: JSON.stringify({ action:'update', id:editModal.id, ...editData })
       }).then(r=>r.json())
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast('✓ Updated'); setEditModal(null); load()
+      showToast('Updated'); setEditModal(null); load()
     } finally { setSaving(false) }
   }
 
-  // ── Full Split ────────────────────────────────────────────────────────────
   const doFullSplit = async (r: any) => {
-    // r.batch_id = UUID of the batch in batches table
-    // r.id = UUID of the repairing order
     if (!r.batch_id) { alert('Error: Batch not linked. Refresh and try again.'); return }
     if (!confirm('Full Split: ' + r.batch_id_str + ' (' + r.repair_kg + ' Kg) will appear on Splitted Orders as a single batch.')) return
     setSaving(true)
     try {
-      // Update batch status from repairing → pending so it shows on Splitted Orders
       const res = await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id:r.batch_id, status:'pending' })
       }).then(x=>x.json())
       if (!res.ok) { alert('Error updating batch: ' + res.error); return }
-      // Update repairing order status to In Repair
       await fetch('/api/repairing-orders', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id:r.id, status:'In Repair' })
       })
-      showToast('✓ ' + r.batch_id_str + ' now on Splitted Orders page')
+      showToast(r.batch_id_str + ' now on Splitted Orders page')
       load()
     } finally { setSaving(false) }
   }
 
-  // ── Split ─────────────────────────────────────────────────────────────────
   const openSplitModal = (r: any) => {
     const kg   = parseFloat(r.repair_kg)  || 0
     const mtr  = parseFloat(r.repair_mtr) || 0
@@ -170,54 +157,48 @@ export default function RepairingOrderPage() {
     if (totalKg <= 0) { alert('Enter batch quantities.'); return }
     setSaving(true)
     try {
-      const baseId    = splitModal.batch_id_str  // e.g. DYE26-0001-B1-R
-      const batchUUID = splitModal.batch_id      // UUID of the batch (from repairing_orders.batch_id)
+      const baseId    = splitModal.batch_id_str
+      const batchUUID = splitModal.batch_id
       if (!batchUUID) { alert('Error: Batch not linked. Refresh and try again.'); setSaving(false); return }
-
-      // First part: update original batch — set to pending so it shows on Splitted Orders
       await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           action:'update', id: batchUUID,
-          kg:         parseFloat(splitParts[0].kg)||0,
-          mtr:        parseFloat(splitParts[0].mtr)||0,
-          taka:       parseInt(splitParts[0].taka)||0,
+          kg: parseFloat(splitParts[0].kg)||0,
+          mtr: parseFloat(splitParts[0].mtr)||0,
+          taka: parseInt(splitParts[0].taka)||0,
           machine_id: splitParts[0].machine_id || splitModal.machine_id || null,
-          status:     'pending',
+          status: 'pending',
         })
       })
-
-      // Additional parts: create new batches with -S1, -S2... suffix
       for (let i = 1; i < splitParts.length; i++) {
         const p = splitParts[i]
         await fetch('/api/batches', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({
-            action:        'create',
-            batch_id:      getSplitId(baseId, i),   // DYE26-0001-B1-R-S1
-            order_id:      splitModal.order_id,
-            kg:            parseFloat(p.kg)||0,
-            mtr:           parseFloat(p.mtr)||0,
-            taka:          parseInt(p.taka)||0,
-            machine_id:    p.machine_id || splitModal.machine_id || null,
+            action: 'create',
+            batch_id: getSplitId(baseId, i),
+            order_id: splitModal.order_id,
+            kg: parseFloat(p.kg)||0,
+            mtr: parseFloat(p.mtr)||0,
+            taka: parseInt(p.taka)||0,
+            machine_id: p.machine_id || splitModal.machine_id || null,
             process_route: splitModal.process_route || [],
-            status:        'pending',
+            status: 'pending',
           })
         })
       }
-
       if (splitModal.id) {
         await fetch('/api/repairing-orders', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ action:'update', id:splitModal.id, status:'In Repair' })
         })
       }
-      showToast('✓ Split into ' + splitParts.length + ' batches — now on Splitted Orders page')
+      showToast('Split into ' + splitParts.length + ' batches - now on Splitted Orders page')
       setSplitModal(null); setSplitParts([]); load()
     } finally { setSaving(false) }
   }
 
-  // ── Reassign ──────────────────────────────────────────────────────────────
   const doReassign = async () => {
     if (!assignModal || !chosenSup) return
     const sup = supervisors.find((s:any) => s.name === chosenSup)
@@ -228,7 +209,7 @@ export default function RepairingOrderPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id: assignModal.batch_id, supervisor_id: sup.id })
       })
-      showToast(`✓ Reassigned to ${chosenSup}`)
+      showToast('Reassigned to ' + chosenSup)
       setAssignModal(null); setChosenSup(''); load()
     } finally { setSaving(false) }
   }
@@ -245,7 +226,7 @@ export default function RepairingOrderPage() {
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>
-      Loading repairing orders…
+      Loading repairing orders...
     </div>
   )
 
@@ -253,7 +234,6 @@ export default function RepairingOrderPage() {
     <div className="content" style={{ display:'flex', flexDirection:'column',
       height:'calc(100vh - 42px)', padding:'12px 16px 0', gap:0 }}>
 
-      {/* Stats */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12, flexShrink:0 }}>
         {[
           { label:'Total',     value:stats.total,     color:'var(--text-primary)' },
@@ -270,10 +250,9 @@ export default function RepairingOrderPage() {
         ))}
       </div>
 
-      {/* Toolbar */}
       <div style={{ display:'flex', gap:8, marginBottom:10, flexShrink:0, alignItems:'center', flexWrap:'wrap' }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search batch, order, party…"
+          placeholder="Search batch, order, party..."
           style={{ width:240, padding:'6px 10px', fontSize:12,
             border:'1px solid var(--border-medium)', borderRadius:5,
             background:'var(--bg-primary)', color:'var(--text-primary)' }} />
@@ -290,7 +269,7 @@ export default function RepairingOrderPage() {
           <button onClick={() => setShowColMenu(v => !v)}
             style={{ padding:'6px 12px', fontSize:12, border:'1px solid var(--border-medium)',
               borderRadius:6, background:'var(--bg-primary)', cursor:'pointer' }}>
-            ⊞ Columns ({visibleCols.length}/{COLUMNS.length})
+            Columns ({visibleCols.length}/{COLUMNS.length})
           </button>
           {showColMenu && (
             <div style={{ position:'absolute', right:0, top:'110%', zIndex:100,
@@ -313,7 +292,7 @@ export default function RepairingOrderPage() {
             </div>
           )}
         </div>
-        <button className="small" onClick={load}>⟳</button>
+        <button className="small" onClick={load}>Refresh</button>
       </div>
 
       {toast && (
@@ -322,7 +301,6 @@ export default function RepairingOrderPage() {
           marginBottom:8, fontSize:13, fontWeight:600 }}>{toast}</div>
       )}
 
-      {/* Table */}
       <div style={{ flex:1, minHeight:0, background:'var(--bg-primary)',
         border:'1px solid var(--border-light)', borderRadius:8, overflow:'hidden',
         display:'flex', flexDirection:'column' }}>
@@ -399,7 +377,7 @@ export default function RepairingOrderPage() {
                         )
                         case 'process_route': return (
                           <td key={col.key} style={{...s, fontSize:11, whiteSpace:'normal'}}>
-                            {Array.isArray(r.process_route) ? r.process_route.join(' → ') : (r.process_route || '-')}
+                            {Array.isArray(r.process_route) ? r.process_route.join(' -> ') : (r.process_route || '-')}
                           </td>
                         )
                         case 'source_type': return (
@@ -424,8 +402,7 @@ export default function RepairingOrderPage() {
                         )
                         case 'status': return (
                           <td key={col.key} style={s}>
-                            <span style={{ padding:'3px 8px', borderRadius:4, fontSize:11,
-                              fontWeight:600,
+                            <span style={{ padding:'3px 8px', borderRadius:4, fontSize:11, fontWeight:600,
                               background: r.status==='pending'?'var(--warning-light)':r.status==='completed'?'var(--success-light)':r.status==='rejected'?'var(--danger-light)':'var(--accent-light)',
                               color: r.status==='pending'?'var(--warning)':r.status==='completed'?'var(--success)':r.status==='rejected'?'var(--danger)':'var(--accent)' }}>
                               {r.status}
@@ -434,48 +411,42 @@ export default function RepairingOrderPage() {
                         )
                         case 'actions': return (
                           <td key={col.key} style={{...s, overflow:'visible'}}>
-                            <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                              {/* Edit */}
+                            <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center' }}>
                               <button className="xs"
                                 onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', repair_kg:r.repair_kg }) }}>
                                 Edit
                               </button>
-                              {/* Split */}
-                              <button className="xs"
-                                onClick={() => openSplitModal(r)}
-                                disabled={saving}
-                                style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
-                                  border:'1px solid var(--accent)', borderRadius:4,
-                                  cursor:'pointer', background:'transparent', color:'var(--accent)' }}>
-                                ✂ Split
-                              </button>
-                              {/* Full Split */}
-                              <button className="xs"
-                                onClick={() => doFullSplit(r)}
-                                disabled={saving}
-                                style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
-                                  border:'none', borderRadius:4, cursor:'pointer',
-                                  background:'#7C3AED', color:'white' }}>
-                                ⚡ Full
-                              </button>
-                              {/* Reassign */}
-                              <button className="xs"
-                                onClick={() => { setAssignModal(r); setChosenSup(r.supervisor||'') }}
+                              {r.status === 'pending' ? (<>
+                                <button onClick={() => openSplitModal(r)} disabled={saving}
+                                  style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
+                                    border:'1px solid var(--accent)', borderRadius:4,
+                                    cursor:'pointer', background:'transparent', color:'var(--accent)' }}>
+                                  Split
+                                </button>
+                                <button onClick={() => doFullSplit(r)} disabled={saving}
+                                  style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
+                                    border:'none', borderRadius:4, cursor:'pointer',
+                                    background:'#7C3AED', color:'white' }}>
+                                  Full Split
+                                </button>
+                              </>) : (
+                                <span style={{ fontSize:11, fontWeight:700, padding:'3px 8px',
+                                  borderRadius:4, background:'#DCFCE7', color:'#166534' }}>
+                                  Split Done
+                                </span>
+                              )}
+                              <button onClick={() => { setAssignModal(r); setChosenSup(r.supervisor||'') }}
                                 disabled={saving}
                                 style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
                                   border:'1px solid #D97706', borderRadius:4,
                                   cursor:'pointer', background:'#FFFBEB', color:'#92400E' }}>
-                                👤 Reassign
+                                Reassign
                               </button>
-                              {/* Delete / Rollback */}
-                              <button className="xs"
-                                onClick={() => handleDelete(r)}
-                                disabled={saving}
+                              <button onClick={() => handleDelete(r)} disabled={saving}
                                 style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
                                   border:'1px solid #DC2626', borderRadius:4,
-                                  cursor:'pointer', background:'transparent', color:'#DC2626' }}
-                                title={`Roll back to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page`}>
-                                ↩ Delete
+                                  cursor:'pointer', background:'transparent', color:'#DC2626' }}>
+                                Delete
                               </button>
                             </div>
                           </td>
@@ -491,16 +462,14 @@ export default function RepairingOrderPage() {
         )}
       </div>
 
-      {/* ── Edit Modal ── */}
       {editModal && (
         <div className="modal-overlay" onClick={() => setEditModal(null)}>
           <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">Update Repairing Order</span>
-              <button className="small" onClick={() => setEditModal(null)}>✕</button>
+              <button className="small" onClick={() => setEditModal(null)}>X</button>
             </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
-              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
               <strong style={{ color:'var(--accent)' }}>{editModal.batch_id_str || editModal.batch_id}</strong>
               <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
                 {editModal.party} · {editModal.color} · {editModal.repair_kg} Kg
@@ -528,7 +497,7 @@ export default function RepairingOrderPage() {
             </div>
             <div style={{ display:'flex', gap:8 }}>
               <button className="primary" onClick={handleUpdate} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Save'}
+                {saving ? 'Saving...' : 'Save'}
               </button>
               <button onClick={() => setEditModal(null)}>Cancel</button>
             </div>
@@ -536,13 +505,12 @@ export default function RepairingOrderPage() {
         </div>
       )}
 
-      {/* ── Split Modal ── */}
       {splitModal && (
         <div className="modal-overlay" onClick={() => setSplitModal(null)}>
           <div className="modal" style={{ maxWidth:620 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">✂ Split — {splitModal.batch_id_str}</span>
-              <button className="small" onClick={() => setSplitModal(null)}>✕</button>
+              <span className="modal-title">Split — {splitModal.batch_id_str}</span>
+              <button className="small" onClick={() => setSplitModal(null)}>X</button>
             </div>
             <div style={{ background:'#FFF5F5', borderRadius:8, padding:'10px 14px',
               marginBottom:14, border:'1px solid #FCA5A5', fontSize:13 }}>
@@ -592,7 +560,7 @@ export default function RepairingOrderPage() {
                     <td style={{ padding:'6px 8px' }}>
                       {splitParts.length > 2 && (
                         <button className="xs danger"
-                          onClick={() => setSplitParts(p => p.filter((_,j) => j !== i))}>✕</button>
+                          onClick={() => setSplitParts(p => p.filter((_,j) => j !== i))}>X</button>
                       )}
                     </td>
                   </tr>
@@ -602,7 +570,7 @@ export default function RepairingOrderPage() {
             <div style={{ display:'flex', gap:8, marginBottom:14 }}>
               <button className="small"
                 onClick={() => setSplitParts(p => [...p, { kg:0, mtr:0, taka:0, machine_id:'' }])}>
-                ➕ Add Batch
+                Add Batch
               </button>
               <button className="small"
                 onClick={() => {
@@ -610,12 +578,12 @@ export default function RepairingOrderPage() {
                   const per   = +(total / splitParts.length).toFixed(1)
                   setSplitParts(p => p.map(b => ({ ...b, kg: per })))
                 }}>
-                ⚖ Auto-Balance
+                Auto-Balance
               </button>
             </div>
             <div style={{ display:'flex', gap:8 }}>
               <button className="primary" onClick={saveSplits} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Save Splits'}
+                {saving ? 'Saving...' : 'Save Splits'}
               </button>
               <button onClick={() => setSplitModal(null)}>Cancel</button>
             </div>
@@ -623,16 +591,14 @@ export default function RepairingOrderPage() {
         </div>
       )}
 
-      {/* ── Reassign Modal ── */}
       {assignModal && (
         <div className="modal-overlay" onClick={() => setAssignModal(null)}>
           <div className="modal" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">👤 Reassign — {assignModal.batch_id_str}</span>
-              <button className="small" onClick={() => setAssignModal(null)}>✕</button>
+              <span className="modal-title">Reassign — {assignModal.batch_id_str}</span>
+              <button className="small" onClick={() => setAssignModal(null)}>X</button>
             </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
-              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
               <strong>{assignModal.batch_id_str}</strong>
               <span style={{ marginLeft:8, color:'var(--text-secondary)' }}>
                 {assignModal.party} · {assignModal.color} · {assignModal.repair_kg} Kg
@@ -652,7 +618,7 @@ export default function RepairingOrderPage() {
             </div>
             <div style={{ display:'flex', gap:8 }}>
               <button className="primary" onClick={doReassign} disabled={saving || !chosenSup}>
-                {saving ? 'Saving…' : '✓ Reassign'}
+                {saving ? 'Saving...' : 'Reassign'}
               </button>
               <button onClick={() => setAssignModal(null)}>Cancel</button>
             </div>
