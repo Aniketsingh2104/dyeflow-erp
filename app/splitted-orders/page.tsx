@@ -78,8 +78,19 @@ export default function SplittedOrdersPage() {
       const oMap: Record<string, any> = {}
       for (const o of orders) oMap[o.id] = o
 
-      // Exclude 'repairing' batches — they only appear after Split/Full Split is done
-      const splitBatches = batches.filter((b: any) => b.status !== 'repairing')
+      // Exclude repair batches that haven't been split yet:
+      // - status = 'repairing' (not yet assigned by supervisor)
+      // - batch_id ends with -R or -RR etc (repair batch, not yet split/full-split)
+      //   UNLESS it also has -S suffix (split batch - should show)
+      // - status = 'pending' AND batch_id matches repair pattern (assigned but not split)
+      const isRepairUnsplit = (b: any) => {
+        const id: string = b.batch_id || ''
+        // Has -R suffix (repair batch) but NOT -S suffix (not yet split)
+        const isRepairBatch = /-R+$/.test(id) || (/-R+-/.test(id) && !/-Sd+$/.test(id))
+        // Only exclude if still pending/repairing (not yet through full split)
+        return isRepairBatch && (b.status === 'repairing' || b.status === 'pending')
+      }
+      const splitBatches = batches.filter((b: any) => !isRepairUnsplit(b))
 
       setRows(splitBatches.map(b => {
         const o = oMap[b.order_id] || {}

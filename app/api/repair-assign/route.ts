@@ -88,7 +88,8 @@ export async function POST(req: NextRequest) {
       supervisor_id:   supervisor_id || null,
       machine_id,
       process_route,
-      status:          "pending",
+      // Keep status as 'repairing' — only changes to 'pending' when Split/Full Split clicked
+      status:          "repairing",
       current_process: null,
     })
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
