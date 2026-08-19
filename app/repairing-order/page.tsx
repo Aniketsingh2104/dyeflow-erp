@@ -130,19 +130,21 @@ export default function RepairingOrderPage() {
 
   // ── Full Split ────────────────────────────────────────────────────────────
   const doFullSplit = async (r: any) => {
-    if (!confirm(`Full Split: ${r.batch_id_str} stays as single batch ready for process?`)) return
+    if (!confirm('Full Split: ' + r.batch_id_str + ' will appear on Splitted Orders as a single batch.')) return
     setSaving(true)
     try {
-      // Just confirm the batch is set to pending with its route
       const res = await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          action: 'update', id: r.batch_id,
-          status: 'pending',
-        })
+        body: JSON.stringify({ action:'update', id:r.batch_id, status:'pending' })
       }).then(x=>x.json())
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast(`✓ ${r.batch_id_str} ready as single batch`)
+      if (r.id) {
+        await fetch('/api/repairing-orders', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ action:'update', id:r.id, status:'In Repair' })
+        })
+      }
+      showToast('✓ ' + r.batch_id_str + ' now on Splitted Orders page')
       load()
     } finally { setSaving(false) }
   }
@@ -168,15 +170,16 @@ export default function RepairingOrderPage() {
       const baseId    = splitModal.batch_id_str  // e.g. DYE26-0001-B1-R
       const batchUUID = splitModal.batch_id      // UUID of the batch
 
-      // First part: update original batch kg
+      // First part: update original batch — set to pending so it shows on Splitted Orders
       await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           action:'update', id: batchUUID,
-          kg: parseFloat(splitParts[0].kg)||0,
-          mtr: parseFloat(splitParts[0].mtr)||0,
-          taka: parseInt(splitParts[0].taka)||0,
+          kg:         parseFloat(splitParts[0].kg)||0,
+          mtr:        parseFloat(splitParts[0].mtr)||0,
+          taka:       parseInt(splitParts[0].taka)||0,
           machine_id: splitParts[0].machine_id || splitModal.machine_id || null,
+          status:     'pending',
         })
       })
 
@@ -194,12 +197,18 @@ export default function RepairingOrderPage() {
             taka:          parseInt(p.taka)||0,
             machine_id:    p.machine_id || splitModal.machine_id || null,
             process_route: splitModal.process_route || [],
-            status:        'repairing',
+            status:        'pending',
           })
         })
       }
 
-      showToast(`✓ Split into ${splitParts.length} batches: ${baseId} + ${splitParts.slice(1).map((_,i)=>getSplitId(baseId,i+1)).join(', ')}`)
+      if (splitModal.id) {
+        await fetch('/api/repairing-orders', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ action:'update', id:splitModal.id, status:'In Repair' })
+        })
+      }
+      showToast('✓ Split into ' + splitParts.length + ' batches — now on Splitted Orders page')
       setSplitModal(null); setSplitParts([]); load()
     } finally { setSaving(false) }
   }
