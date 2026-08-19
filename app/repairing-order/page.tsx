@@ -130,20 +130,23 @@ export default function RepairingOrderPage() {
 
   // ── Full Split ────────────────────────────────────────────────────────────
   const doFullSplit = async (r: any) => {
-    if (!confirm('Full Split: ' + r.batch_id_str + ' will appear on Splitted Orders as a single batch.')) return
+    // r.batch_id = UUID of the batch in batches table
+    // r.id = UUID of the repairing order
+    if (!r.batch_id) { alert('Error: Batch not linked. Refresh and try again.'); return }
+    if (!confirm('Full Split: ' + r.batch_id_str + ' (' + r.repair_kg + ' Kg) will appear on Splitted Orders as a single batch.')) return
     setSaving(true)
     try {
+      // Update batch status from repairing → pending so it shows on Splitted Orders
       const res = await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id:r.batch_id, status:'pending' })
       }).then(x=>x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
-      if (r.id) {
-        await fetch('/api/repairing-orders', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ action:'update', id:r.id, status:'In Repair' })
-        })
-      }
+      if (!res.ok) { alert('Error updating batch: ' + res.error); return }
+      // Update repairing order status to In Repair
+      await fetch('/api/repairing-orders', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'update', id:r.id, status:'In Repair' })
+      })
       showToast('✓ ' + r.batch_id_str + ' now on Splitted Orders page')
       load()
     } finally { setSaving(false) }
@@ -168,7 +171,8 @@ export default function RepairingOrderPage() {
     setSaving(true)
     try {
       const baseId    = splitModal.batch_id_str  // e.g. DYE26-0001-B1-R
-      const batchUUID = splitModal.batch_id      // UUID of the batch
+      const batchUUID = splitModal.batch_id      // UUID of the batch (from repairing_orders.batch_id)
+      if (!batchUUID) { alert('Error: Batch not linked. Refresh and try again.'); setSaving(false); return }
 
       // First part: update original batch — set to pending so it shows on Splitted Orders
       await fetch('/api/batches', {
