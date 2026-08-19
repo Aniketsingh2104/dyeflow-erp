@@ -343,12 +343,22 @@ export default function DateCalculatorPage() {
         })
       }
 
-      // Exclude batches that are in repairing_orders with status='pending' (not yet split)
-      // Also exclude batches with status='repairing'
+      // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
+      const repairRes = await fetch('/api/repairing-orders', { cache: 'no-store' })
+        .then(r => r.json()).catch(() => ({ data: [] }))
+      const repairPendingUUIDs = new Set(
+        ((repairRes.data || []) as any[])
+          .filter((r: any) => r.status === 'pending')
+          .map((r: any) => r.batch_id)
+          .filter(Boolean)
+      )
+      // Exclude: repairing status + pending repair batches (not yet split)
+      const batchStatusMap: Record<string, string> = {}
+      for (const b of batches) batchStatusMap[b.id] = b.status
       const filteredRows = batchRows.filter(r =>
         r.route.length > 0 &&
-        !repairPendingUUIDs.has(r.batchUUID) &&
-        (bRes.data || []).find((b: any) => b.id === r.batchUUID)?.status !== 'repairing'
+        batchStatusMap[r.batchUUID] !== 'repairing' &&
+        !repairPendingUUIDs.has(r.batchUUID)
       )
       setRows(filteredRows)
       setLoadStatus('ready')
