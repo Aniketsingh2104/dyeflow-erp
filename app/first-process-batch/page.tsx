@@ -65,14 +65,22 @@ export default function FirstProcessBatchPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [bRes, oRes, dpRes] = await Promise.all([
+      const [bRes, oRes, dpRes, repairRes] = await Promise.all([
         fetch('/api/batches?limit=5000', { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/orders?limit=2000',  { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
+        fetch('/api/repairing-orders',    { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
       ])
       const allBatches: any[] = bRes.data  || []
       const allOrders:  any[] = oRes.data  || []
       const datePlans:  any[] = dpRes.data || []
+      // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
+      const repairPendingUUIDs = new Set(
+        ((repairRes.data || []) as any[])
+          .filter((r: any) => r.status === 'pending')
+          .map((r: any) => r.batch_id)
+          .filter(Boolean)
+      )
 
       const oMap: Record<string,any> = {}
       for (const o of allOrders) oMap[o.id] = o
@@ -80,7 +88,10 @@ export default function FirstProcessBatchPage() {
       for (const dp of datePlans) dpMap[dp.batch_id] = dp
 
       const rows = allBatches
-        .filter(b => b.status === 'pending' || !b.current_process)
+        .filter(b =>
+          b.status === 'pending' &&           // must be pending
+          !repairPendingUUIDs.has(b.id)       // exclude unsplit repair batches
+        )
         .map(b => {
           const order = oMap[b.order_id] || {}
           const route: string[] = b.process_route || order.process_route || []
