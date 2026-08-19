@@ -147,8 +147,10 @@ export async function POST(req: NextRequest) {
 
     // Update batch
     if (!isPartial || remainKg <= 0) {
+      // Full reprocess — entire batch goes to repair, kg stays same
       await dbUpdate('batches', { id: batch_id }, {
         is_faulty:false, status:'repairing', current_process:null,
+        kg: repairKg,  // set to exact repair kg
       })
     } else {
       // For partial: calculate remaining mtr and taka proportionally

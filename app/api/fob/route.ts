@@ -177,6 +177,7 @@ export async function POST(req: NextRequest) {
     if (!isPartial || remainKg <= 0) {
       await dbUpdate('batches', { id:batch_id }, {
         status:'repairing', current_process:null,
+        kg: repairKg,  // set to exact repair kg
       })
     } else {
       // Proportional mtr/taka for remaining batch

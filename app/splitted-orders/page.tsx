@@ -100,9 +100,10 @@ export default function SplittedOrdersPage() {
           type_of_finish:  o.type_of_finish   || '-',
           type_of_packing: o.type_of_packing  || '-',
           order_qty_kg:    o.qty_kg           || '-',
-          supervisor:      o.supervisors?.name || '-',
+          supervisor:      o.supervisors?.name || b.supervisors?.name || '-',
           process_route:   (b.process_route?.length ? b.process_route : o.process_route) || [],
-          machine_name:    b.machines?.name   || '-',
+          // Machine: prefer batch machine (set by supervisor for repair) over order machine
+          machine_name:    b.machines?.name || o.machines?.name || '-',
         }
       }))
     } catch (e: any) {
