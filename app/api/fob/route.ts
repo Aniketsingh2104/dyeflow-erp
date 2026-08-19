@@ -96,17 +96,20 @@ export async function POST(req: NextRequest) {
     })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
 
-    // Update batch_processes: mark this process as 'fob' so FMS page keeps showing batch
-    // with FOB badge; batch stays visible on this process page
+    // Upsert batch_processes: mark this process as 'fob' with done_at timestamp
+    // Use upsert because repair batches may not have batch_processes rows yet
     const now = new Date().toISOString()
     await sb('/batch_processes', {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'fob', done_at: now }),
-      params: {
-        batch_id:     `eq.${payload.batch_id}`,
-        process_code: `eq.${payload.process_code}`,
+      method: 'POST',
+      body: JSON.stringify({
+        batch_id:     payload.batch_id,
+        process_code: payload.process_code,
+        status:       'fob',
+        done_at:      now,
+      }),
+      headers: {
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
       },
-      headers: { 'Prefer': 'return=minimal' },
     })
 
     // Also save last_process on batch so FMS can show FOB badge even after current_process changes
