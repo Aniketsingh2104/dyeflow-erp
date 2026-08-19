@@ -154,18 +154,27 @@ export default function FmsProcessPage() {
         Dispatch:'d_dispatch'
       }
 
-      // Show batches that are currently AT this process (active)
-      // OR have been processed here (batch_processes shows done for this code)
+      // Show batches:
+      // 1. Active: currently at this process (current_process === thisProcess)
+      // 2. Done here: batch_processes has done/faulty/fob entry for this process code
+      // 3. Faulty/FOB here: last_process === thisProcess (batch left via faulty or FOB)
       const filtered = batches.filter(b => {
-        // Active: currently at this process
-        const isActive = b.current_process?.toUpperCase() === processCode ||
-                         b.current_process === processCode
-        // Done/faulty here: batch_processes has done or faulty entry for this process code
+        const bpCode = (c: string) =>
+          c?.toUpperCase() === processCode || c === processCode
+
+        // Active at this process
+        const isActive = bpCode(b.current_process)
+
+        // Done/faulty/fob here — batch_processes entry for this code
         const isDoneHere = (b.batch_processes || []).some((bp: any) =>
-          (bp.process_code?.toUpperCase() === processCode || bp.process_code === processCode) &&
-          (bp.status === 'done' || bp.status === 'faulty')
+          bpCode(bp.process_code) &&
+          (bp.status === 'done' || bp.status === 'faulty' || bp.status === 'fob')
         )
-        return isActive || isDoneHere
+
+        // Faulty or FOB from this process (last_process tracks where it was marked)
+        const isLastHere = bpCode(b.last_process)
+
+        return isActive || isDoneHere || isLastHere
       })
 
       // Get planned dates from batch_processes
@@ -190,13 +199,14 @@ export default function FmsProcessPage() {
           p.process_code?.toUpperCase() === processCode ||
           p.process_code === processCode
         )
-        const bpStatus = bp?.status || 'pending'  // 'pending' | 'done' | 'faulty'
+        const bpStatus = bp?.status || 'pending'  // 'pending' | 'done' | 'faulty' | 'fob'
         const actual   = bp?.done_at ? bp.done_at.split('T')[0] : ''
         const actualDateTime = bp?.done_at ? bp.done_at : ''  // full timestamp for display
         const delay    = delayMeta(planned, actual, now)
         // Check if FOB exists for this batch at this process
+        // Either via fob_records OR via batch_processes.status='fob'
         const fobKey  = `${b.id}__${processCode}`
-        const hasFob  = !!fobMap[fobKey]
+        const hasFob  = !!fobMap[fobKey] || bpStatus === 'fob'
         // Timestamp = sent_at on batch (when it arrived at this process)
         const sentAt  = b.sent_at || b.updated_at || b.created_at || ''
 
@@ -540,9 +550,10 @@ export default function FmsProcessPage() {
               <tbody>
                 {displayRows.map((row, idx) => (
                   <tr key={row.id || idx} style={{
-                    background: row.isFaulty    ? '#FEE2E2'
-                              : row.isCompleted ? 'var(--success-light)'
-                              : idx % 2 === 0  ? 'var(--bg-primary)' : 'var(--bg-secondary)',
+                    background: row.bpStatus === 'fob'    ? '#F3E8FF'
+                              : row.isFaulty                    ? '#FEE2E2'
+                              : row.isCompleted                 ? 'var(--success-light)'
+                              : idx % 2 === 0                  ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                     borderBottom: row.isFaulty ? '1px solid #FCA5A5' : '1px solid var(--border-light)',
                     opacity: 1 }}>
                     {visible.map(col => {

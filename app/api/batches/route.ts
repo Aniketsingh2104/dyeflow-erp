@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     if (status)     query['status']     = `eq.${status}`
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,' +
+      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
@@ -125,11 +125,12 @@ export async function POST(req: NextRequest) {
       const { batch_id, order_id, faulty_type, faulty_kg, process_code, order_number, party, color } = payload
       const now = new Date().toISOString()
 
-      // 1. Update batch: faulty status + clear current_process so it leaves FMS page
+      // 1. Update batch: faulty status + save last_process so FMS page keeps showing it
       await dbUpdate('batches', { id: batch_id }, {
         is_faulty:       true,
         status:          'faulty',
         current_process: null,
+        last_process:    process_code,  // remember where it was faulty'd for FMS display
       })
 
       // 2. Set done_at on batch_processes using RPC (reliable composite key update)
