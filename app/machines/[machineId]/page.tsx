@@ -302,13 +302,21 @@ export default function MachinePage() {
   const loadData = async () => {
     try {
       // Fetch machine, batches, and orders from Supabase APIs
-      const [machRes, batchRes, orderRes, procRes, holRes] = await Promise.all([
+      const [machRes, batchRes, orderRes, procRes, holRes, repairRes] = await Promise.all([
         fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
         fetch(`/api/holidays?machine_id=${machineId}`, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch('/api/repairing-orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
+      // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
+      const repairPendingUUIDs = new Set(
+        ((repairRes.data || []) as any[])
+          .filter((r: any) => r.status === 'pending')
+          .map((r: any) => r.batch_id)
+          .filter(Boolean)
+      )
 
       const machinesList: any[] = machRes.data  || []
       const allBatches:   any[] = batchRes.data  || []
@@ -348,6 +356,9 @@ export default function MachinePage() {
 
       for (const b of allBatches) {
         if (b.machine_id !== foundMachine.id) continue
+        // Skip repairing batches not yet split/full-split
+        if (b.status === 'repairing') continue
+        if (repairPendingUUIDs.has(b.id)) continue
 
         const o = oMap[b.order_id] || {}
         const processRoute: string[] = (b.process_route?.length ? b.process_route : null)
