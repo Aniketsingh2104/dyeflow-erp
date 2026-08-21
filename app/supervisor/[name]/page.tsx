@@ -137,7 +137,11 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
       setMachinesList(machListRes.data || [])
 
       // Show ALL repair batches — both unassigned (repairing) and assigned (pending/In Repair)
-      const allRepairs: any[] = repairApiRes.data || []
+      const allRepairs: any[] = (repairApiRes.data || []).filter((r) => {
+        const isMyOrder = mappedOrders.some((o) => o.id === r.order_id)
+        const isMyBatch = r.supervisor_id === resolvedId
+        return isMyOrder || isMyBatch
+      })
       setFaultyBatches(allRepairs)
       setStats({ inbox, faulty: allRepairs.length })
     } catch (err) {
