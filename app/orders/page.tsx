@@ -410,6 +410,52 @@ export default function OrdersPage() {
 
   // ── Save splits ────────────────────────────────────────────────────────────
 
+  // ── Bulk Full Split — full split all selected orders at once ──────────────
+  const doBulkFullSplit = async () => {
+    const toProcess = filtered.filter(o => selectedIds.has(o.id) && (o.process_route || []).length > 0)
+    const skipped   = filtered.filter(o => selectedIds.has(o.id) && !(o.process_route || []).length)
+    if (toProcess.length === 0) {
+      alert('No selected orders have a route assigned. Assign routes first.')
+      return
+    }
+    const msg = 'Full Split ' + toProcess.length + ' order(s) as single batches?' +
+      (skipped.length > 0 ? '
+(' + skipped.length + ' skipped — no route assigned)' : '')
+    if (!confirm(msg)) return
+    setSaving(true)
+    let done = 0, failed = 0
+    try {
+      for (const order of toProcess) {
+        const allocated = allocations[order.id] || 0
+        const remaining = (parseFloat(order.qty_kg) || 0) - allocated
+        if (remaining < 0.5) { done++; continue }
+        try {
+          const res = await fetch('/api/batches', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'full_split',
+              order_id:      order.id,
+              order_number:  order.order_number,
+              qty_kg:        remaining,
+              qty_mtr:       order.qty_mtr    || 0,
+              no_of_taka:    order.no_of_taka || 0,
+              machine_id:    order.machine_id || null,
+              process_route: order.process_route || [],
+            }),
+          }).then(r => r.json())
+          if (res.ok) done++; else failed++
+        } catch { failed++ }
+      }
+      showToast(
+        done + ' order(s) Full Split successfully' +
+        (failed  > 0 ? ', ' + failed  + ' failed'  : '') +
+        (skipped.length > 0 ? ', ' + skipped.length + ' skipped (no route)' : '')
+      )
+      deselectAll()
+      loadAll()
+    } finally { setSaving(false) }
+  }
+
   // ── Full Split — one click creates single batch with full order qty ────────
   const doFullSplit = async (order: any) => {
     if (!order.process_route?.length) { alert('Route not assigned yet.'); return }
@@ -571,6 +617,13 @@ export default function OrdersPage() {
           <button className="small success"
             onClick={() => { setBulkAction('unhold'); applyBulk() }}>
             ✅ Release Hold
+          </button>
+          <button
+            className="small"
+            style={{ background:'#7C3AED', color:'#fff', border:'none', cursor:'pointer', fontWeight:700 }}
+            onClick={doBulkFullSplit}
+            disabled={saving}>
+            ⚡ Full Split All ({selectedIds.size})
           </button>
           <div style={{ width: 1, height: 20, background: 'var(--border-light)' }} />
           <button className="small danger" onClick={() => { setBulkAction('delete'); setShowBulkModal(true) }}>
