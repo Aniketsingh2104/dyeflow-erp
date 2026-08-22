@@ -721,7 +721,7 @@ export default function OrdersPage() {
                       cursor:  priorityMode ? 'grab' : 'default',
                       transition: 'background 0.1s',
                     }}>
-                    <td style={tdCk} onClick={e => { e.stopPropagation(); toggleSelect(order.id) }}>
+                    <td style={tdCk} onClick={e => { if (e.target === e.currentTarget) toggleSelect(order.id) }}>
                       <input type="checkbox" checked={selected} onChange={() => toggleSelect(order.id)}
                         style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--accent)' }} />
                     </td>
