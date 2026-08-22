@@ -1,0 +1,152 @@
+[
+  {
+    "category": "glossary",
+    "source": "glossary#process_codes",
+    "content": "DyeFlow process code glossary. Each batch moves through a sequence of process stages identified by short codes: D = Dyeing (the core coloring process), O = Opener (opens/relaxes rolled fabric before processing), F = Finish (finishing treatment after dyeing, e.g. softening, coating), QA = Quality Check (inspection for defects, shade matching, GSM/width checks), C = CBR (a post-dye finishing/calendering-type process), S = SCQ (a quality/control checkpoint distinct from QA), H = Heat-Set (heat setting to stabilize fabric dimensions and finish), Packing (final packing of goods into rolls/bales for dispatch), Dispatch (goods leave the factory to the party/customer). A batch's full journey is defined by its process_route, an ordered array of these codes, e.g. ['O','D','H','QA','Packing','Dispatch']. Not every order uses every code — the route is assigned per order/article by the supervisor."
+  },
+  {
+    "category": "glossary",
+    "source": "glossary#core_terms",
+    "content": "Core DyeFlow terms. Order: a customer order for a quantity of fabric (qty_kg / qty_mtr) with a party, article, color, and shade_group. Batch: a physical production unit created by splitting an order's quantity across machines/days; each batch has its own batch_id (e.g. DYE26-0001-B1), kg, and moves through process_processes independently. Split / Full Split: the act of dividing an order's total quantity into one or more batches — a 'Full Split' typically means the entire order quantity has been allocated to batches, a partial split leaves quantity still awaiting batch assignment. FMS: 'Factory Management System' pages — the live, per-process operational screens (one per process code) where supervisors/operators mark a batch as sent, received, done, or faulty/FOB for that specific stage; FMS pages are the primary trigger for batch status and current_process changes. Plan Number: a slot assigned to a batch for a given process on the Machine Sheet, used to sequence and cap daily throughput per machine."
+  },
+  {
+    "category": "glossary",
+    "source": "glossary#naming_and_ids",
+    "content": "DyeFlow naming conventions. Orders use order_number (e.g. a party/article-coded string). Batches use a human-readable batch_id string of the form ORDERNUMBER-B<n>, e.g. 'DYE26-0001-B1' for the first batch of order DYE26-0001, 'DYE26-0001-B2' for the second, etc. When a faulty or FOB batch is sent for repair, the resulting repair batch is suffixed with '-R', e.g. 'DYE26-0001-B1-R', and gets its own status of 'repairing' distinct from the original batch. batches.batch_id (text) is the human-facing code; batches.id (uuid) is the internal primary key used for all foreign key joins (batch_processes.batch_id, faulty_records.batch_id, fob_records.batch_id, repairing_orders.batch_id, batch_date_plans.batch_id all reference batches.id, the uuid — not the text code)."
+  },
+  {
+    "category": "glossary",
+    "source": "glossary#status_values",
+    "content": "Observed status values by table in the live DyeFlow database (not necessarily exhaustive — treat as examples of the pattern, verify against current data for a complete list). orders.status: values like 'splitting' (order is being divided into batches) and 'hold' (order paused, see hold_reason/hold_approval). batches.status: 'pending' (not yet started), 'in-process' (currently at some process stage), 'done' (finished all processes). batch_processes.status: 'pending' (stage not yet reached/completed), 'done' (stage completed), 'fob' (stage flagged as FOB — free of blame / customer-approval-pending goods). faulty_records.status: 'repairing', 'resolved'. fob_records.status: 'open', 'repairing'. repairing_orders.status: 'pending', 'In Repair'. When answering questions about 'what stage is order X at', prefer batches.current_process and batch_processes rows over inferring from orders.status alone, since status granularity lives mostly at the batch/process level."
+  },
+  {
+    "category": "flow",
+    "source": "flow#new_order",
+    "content": "New Order → Dispatch flow (happy path, no faults). 1) A new order is created in the `orders` table with party, article, color, shade_group, qty_kg/qty_mtr, and delivery_date. 2) A supervisor assigns a process_route (ordered array of process codes) and a machine (machine_id) — this may also be split across multiple machines/process_machines per stage. 3) The order is Split or Full Split into one or more `batches`, each getting a batch_id like 'DYE26-0001-B1', a kg quantity, and its own copy of the process route. 4) For each batch, a `batch_processes` row is created per process code in its route (status starts 'pending'). 5) Each batch moves through its route one stage at a time via the FMS pages: at each stage it is marked sent_at → received_at → done_at, and batches.current_process advances to the next code in process_route. 6) If a stage is instead marked Faulty or FOB, the batch diverts into the Faulty flow or FOB flow (see those chunks) instead of continuing normally. 7) Once every process in the route (through Packing and Dispatch) is done, batches.is_done is set true and batches.status becomes 'done'."
+  },
+  {
+    "category": "flow",
+    "source": "flow#faulty",
+    "content": "Faulty flow. Trigger: on an FMS page for a given process, an operator/supervisor marks a batch (or part of its quantity) as 'Mark Faulty' instead of done. This creates a row in `faulty_records` linked to the batch_id, order_id, and the process_code where the fault was found, with faulty_kg, faulty_type, and status defaulting to something like 'repairing'. The batch then appears on the dedicated Faulty page for review. From there it goes to Reprocess: staff decide the reprocess_type and next_process (the faulty_records table carries reprocess_type, reprocess_kg/mtr/taka, and next_process columns for this). The faulty quantity is then pushed into `repairing_orders` (faulty_id foreign key, source_type indicating it came from faulty) with its own repair_kg/mtr/taka and process_route for the repair journey. On the Repairing Orders page it is Split (or Full Split) again, producing a fresh batch (named with the '-R' suffix, status 'repairing') that re-enters the normal batch/process pipeline — appearing on Splitted Orders, Machine Sheet, Date Calculator, and First Process exactly like a brand-new batch, but tagged as a repair."
+  },
+  {
+    "category": "flow",
+    "source": "flow#fob",
+    "content": "FOB flow. Trigger: on an FMS page, a batch/quantity is marked 'Mark FOB' (FOB = a hold state for customer/quality approval, distinct from a hard fault) instead of done. This creates a row in `fob_records` linked to batch_id/order_id/process_code, with fob_kg, fob_type, status typically 'open'. The batch appears on the dedicated FOB page. Outcome is one of two paths: (a) FOB Approved — the goods are cleared and continue on to the batch's next_process in its normal route, resuming the standard FMS flow; or (b) Reprocess — same as the faulty path, the fob_records row gets reprocess_type/reprocess_kg/mtr/taka and next_process populated, and the quantity is pushed into `repairing_orders` (fob_id foreign key, source_type indicating it came from FOB) to go through Repairing Orders → Split → back into the pipeline as a '-R' batch, same as the faulty flow's endpoint."
+  },
+  {
+    "category": "flow",
+    "source": "flow#repair",
+    "content": "Repair flow detail (shared endpoint of both Faulty and FOB flows). A `repairing_orders` row is created referencing either faulty_id or fob_id (source_type distinguishes which), plus order_id, batch_id (the original batch), repair_kg/mtr/taka, a process_route for what remains to be done, and a machine_id. Status starts 'pending' then moves to 'In Repair' (observed values) as work begins. On the Repairing Orders page, this repair quantity is Split or Full Split just like a fresh order, generating a new batch record whose batch_id carries the '-R' suffix (e.g. 'DYE26-0001-B1-R') and whose status is 'repairing'. This repair batch then flows through Splitted Orders, gets a slot on the Machine Sheet, dates computed by the Date Calculator, and enters First Process — from that point on it behaves like any other batch moving through batch_processes/FMS, and can itself be marked faulty or FOB again if needed."
+  },
+  {
+    "category": "rules",
+    "source": "rules#shade_sequence",
+    "content": "Shade sequence rule: process light shades before dark shades — White → Light → Medium → Dark. This ordering matters for machine scheduling because dyeing a light shade in a machine right after a dark shade risks contamination/carryover color affecting the light batch. When assigning batches to a machine's daily/sequential slots (Machine Sheet), the AI assistant and supervisors should sequence same-machine batches by shade_group in this order (White, then Light, then Medium, then Dark) rather than by arrival time alone, and should flag/warn if a dark-shade batch is scheduled immediately before a light-shade batch on the same machine."
+  },
+  {
+    "category": "rules",
+    "source": "rules#machine_capacity",
+    "content": "Machine Sheet capacity rule: each machine can be assigned a maximum of 3 batches per day slot. Plan numbers are assigned per batch per process, and the Machine Sheet is where these plan numbers live. When suggesting a schedule, assigning a batch to a machine, or answering 'can I fit another batch on machine X on date Y', the assistant must check how many plan numbers/batches are already assigned to that machine for that day and refuse/flag if it would exceed 3."
+  },
+  {
+    "category": "rules",
+    "source": "rules#repair_batch_identity",
+    "content": "Repair batch identity rule: a repair batch is never a mutation of the original batch row — it is always a new batches record with a distinct id (uuid) and a batch_id text code equal to the original batch_id plus a '-R' suffix (e.g. original 'DYE26-0001-B1' → repair 'DYE26-0001-B1-R'). Its status is 'repairing' and it is linked back to its origin via the repairing_orders row's batch_id/faulty_id/fob_id chain, not by reusing the original batch's id. When querying or reasoning about a repair, always join through repairing_orders to connect the '-R' batch back to the faulty_records or fob_records event that created it."
+  },
+  {
+    "category": "rules",
+    "source": "rules#fms_driven_state",
+    "content": "State-transition rule: batch and batch_processes status changes are driven by actions taken on FMS pages (one page per process code), not by direct edits elsewhere in the app. The canonical sequence per process is: batch_processes.status 'pending' → sent_at set → received_at set → done_at set → status 'done', at which point batches.current_process advances to the next code in process_route (or, if marked faulty/fob instead of done, the batch exits into the Faulty/FOB flow for that stage). Any AI Action that changes production state should write through the same tables/flow (batches, batch_processes, faulty_records, fob_records, repairing_orders) that FMS pages use, rather than inventing new status fields, so the UI and the RAG's live-data view stay consistent."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#opener",
+    "content": "Process O — Opener. Typically the first stage in a batch's route. The rolled/folded fabric is opened out and relaxed flat before it goes into dyeing, so the machine can process it evenly. A batch sitting at process code 'O' in current_process means it has been split and scheduled but dye-stage work hasn't started yet."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#dyeing",
+    "content": "Process D — Dyeing. The core coloring stage where fabric is dyed to the order's target color/shade_group. This is usually the most machine-time-intensive stage and the one most sensitive to the shade sequence rule (White → Light → Medium → Dark) because of cross-batch contamination risk in shared machines. Faulty flags at this stage (e.g. shade mismatch) are common triggers for the Faulty flow."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#finish",
+    "content": "Process F — Finish. A finishing treatment applied after dyeing — this can include softening, coating, or other chemical/mechanical finishing depending on the order's type_of_finish. Comes after dyeing/related wet-processing stages and before final quality/packing stages in most routes."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#qa",
+    "content": "Process QA — Quality Check. An inspection stage where the batch is checked against the order's spec: shade match, GSM, width, defects, etc. QA is a common point where Faulty is marked if the batch doesn't meet spec, or FOB is marked if it needs customer sign-off before proceeding. QA typically sits late in the route, close to Packing/Dispatch."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#cbr",
+    "content": "Process C — CBR. A post-dye finishing/calendering-type process code used in some order routes. Exact treatment depends on article/finish type configured on the order (type_of_finish); it sits between the wet/dye stages and the final QA/Packing stages in routes that include it."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#scq",
+    "content": "Process S — SCQ. A quality/control checkpoint distinct from the main QA stage, used in some process routes as an intermediate check (e.g. a supplementary or specific-quality check) between core processing stages and the final QA/Packing stages."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#heatset",
+    "content": "Process H — Heat-Set. A heat-setting stage that stabilizes the fabric's dimensions and locks in the finish, typically after dyeing/finishing chemical treatments and before final quality check and packing."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#packing",
+    "content": "Process Packing. Near-final stage: goods that have passed QA are packed into rolls/bales/cartons per the order's type_of_packing, in preparation for Dispatch. Once packing is marked done for a batch, it's ready to leave the factory."
+  },
+  {
+    "category": "process_guide",
+    "source": "process_guide#dispatch",
+    "content": "Process Dispatch. The final stage in a batch's route — goods physically leave the factory to the party/customer. Once Dispatch is marked done, batches.is_done becomes true and the batch is considered fully complete. This is also typically when the order's delivery_date is checked against actual completion for on-time/delay reporting."
+  },
+  {
+    "category": "machine_logic",
+    "source": "machine_logic#machine_sheet",
+    "content": "Machine Sheet logic. The Machine Sheet assigns a 'plan number' to each batch for each process it needs to go through on a given machine. Each machine+date slot can hold a maximum of 3 batches (see rules#machine_capacity). Plan numbers determine both the sequence batches run in on that machine and feed into the Date Calculator for planned-date computation. When batches share a machine, shade_group ordering (White → Light → Medium → Dark, see rules#shade_sequence) should be respected when assigning plan number order within a day."
+  },
+  {
+    "category": "machine_logic",
+    "source": "machine_logic#date_calculator",
+    "content": "Date Calculator logic. Computes planned dates per process for a batch based on: (1) the machine's numbering_base_date (machines.numbering_base_date — the reference date a machine's plan-number sequence counts from), and (2) the batch's assigned plan number(s) per process from the Machine Sheet. Results are stored per-batch in batches.date_calc_plan (jsonb) and batches.dc_generated_once/dc_regenerate flags track whether the plan has been generated and whether it needs regenerating (e.g. after a re-split or machine reassignment). A more detailed, per-process breakdown lives in the batch_date_plans table, which has one row per batch (batch_id/batch_id_str) with anchor_* columns (anchor_s, anchor_d, anchor_s2, anchor_add, anchor_lev, anchor_fix, anchor_wash, anchor_rc — anchor dates for specific sub-steps) and corresponding d_* computed date columns (d_c, d_s, d_h, d_d, d_s2, d_rx, d_o, d_g, d_f, d_co, d_tu, d_add, d_level, d_rc, d_fix, d_wash, d_dry, d_b, d_r, d_k, d_qa, d_packing, d_dispatch, d_finaldispatch) plus consolidated `dates` and `anchors` jsonb summaries and a `pushed` boolean (whether the plan has been pushed/applied)."
+  },
+  {
+    "category": "schema",
+    "source": "schema#orders",
+    "content": "Table `orders` — one row per customer order. Key columns: id (uuid PK), order_number, challan_no, party, article, color, shade_group, blend, qty_kg, qty_mtr, no_of_taka, status (e.g. 'splitting', 'hold'), supervisor_id, machine_id, process_route (array of process codes), process_machines (jsonb — per-stage machine assignment), planned_dates (jsonb), hold_reason/hold_approval, priority, dyeing_fob/rolling_fob (booleans flagging FOB-prone order types), gsm, width, lab_no, lot_no, sub_party, sales_person, type_of_finish, type_of_packing, delivery_date, supervisor_confirmed/supervisor_confirmed_at, remarks, created_by, created_at, updated_at."
+  },
+  {
+    "category": "schema",
+    "source": "schema#batches",
+    "content": "Table `batches` — one row per physical production batch split from an order. Key columns: id (uuid PK, used for all FK joins), batch_id (text human code like 'DYE26-0001-B1' or '...-B1-R' for repairs), order_id (FK to orders.id), machine_id, batch_number (integer sequence within the order), kg, mtr, taka, status ('pending'/'in-process'/'done'/'repairing' observed), current_process (the process code the batch is presently at), is_done, is_faulty (booleans), process_route (array, batch's own copy of the route), planned_date/actual_date, sent_at, supervisor_id, last_process, date_calc_plan (jsonb), dc_generated_once/dc_regenerate (booleans), fms_enter_at/fms_actual_dates (jsonb, per-stage timestamps recorded from FMS pages), notes, created_at, updated_at."
+  },
+  {
+    "category": "schema",
+    "source": "schema#batch_processes",
+    "content": "Table `batch_processes` — one row per (batch, process_code) pair, tracking that batch's progress through each individual stage of its route. Key columns: id (uuid PK), batch_id (FK to batches.id), process_code (e.g. 'D','O','QA'...), status ('pending'/'done'/'fob' observed), sent_at, received_at, done_at (timestamps marking FMS-page actions), operator_id, notes, created_at, updated_at. This is the most granular live source of 'where is this batch right now' — join on batch_id and look at status/timestamps per process_code, in process_route order, to reconstruct exact stage progress."
+  },
+  {
+    "category": "schema",
+    "source": "schema#faulty_fob_repairing",
+    "content": "Tables `faulty_records`, `fob_records`, `repairing_orders` — the exception-handling chain (see flow#faulty, flow#fob, flow#repair for the process narrative). faulty_records: id, batch_id, order_id, order_number, party, color, faulty_type, faulty_kg, process_code (stage where fault occurred), status ('repairing'/'resolved' observed), if_ok, reprocess_type, reprocess_kg/mtr/taka, next_process, reported_by, resolved_at, notes. fob_records: same shape but fob_kg/fob_type instead of faulty_type, status ('open'/'repairing' observed), approved_at (when FOB Approved happens), reprocess_type/reprocess_kg/mtr/taka, next_process. repairing_orders: id, faulty_id (nullable FK), fob_id (nullable FK — exactly one of these is set depending on origin), order_id, batch_id (original batch), repair_kg/mtr/taka, process_route, status ('pending'/'In Repair' observed), machine_id, source_type (distinguishes faulty- vs fob-originated repairs), notes."
+  },
+  {
+    "category": "schema",
+    "source": "schema#machines_supervisors_processlist",
+    "content": "Table `machines` — id, name, capacity, status, machine_type, is_active, numbering_base_date (the reference date used by the Date Calculator, see machine_logic#date_calculator). Table `supervisors` — id, name, articles (array — which articles this supervisor handles), is_active, email, phone. Note: there is no table literally named `processes` in the live schema — the master list of process codes lives in `process_list` (seeded via migration seed_process_list), with route templates in `process_route_templates` and `article_process_routes` (per-article default routes), and per-order routing detail in `process_routes`. When building queries, use these actual table names rather than assuming a `processes` table exists."
+  },
+  {
+    "category": "schema",
+    "source": "schema#batch_date_plans",
+    "content": "Table `batch_date_plans` — one row per batch (batch_id FK to batches.id, plus a denormalized batch_id_str), holding the detailed Date Calculator output. Contains anchor_* date columns (reference/actual anchor points for sub-steps: anchor_s, anchor_d, anchor_s2, anchor_add, anchor_lev, anchor_fix, anchor_wash, anchor_rc) and matching d_* computed planned-date columns (d_c, d_s, d_h, d_d, d_s2, d_rx, d_o, d_g, d_f, d_co, d_tu, d_add, d_level, d_rc, d_fix, d_wash, d_dry, d_b, d_r, d_k, d_qa, d_packing, d_dispatch, d_finaldispatch), plus consolidated `dates`/`anchors` jsonb, dc_generated_once/dc_regenerate/pushed booleans. This is the authoritative source for 'when is process X planned for batch Y' questions — prefer it over batches.date_calc_plan for anything more detailed than a top-line summary."
+  },
+  {
+    "category": "predictive",
+    "source": "predictive#learned_predictions",
+    "content": "DyeFlow has a live, statistics-based prediction system (lib/predictiveStats.ts) for two things: how long a process stage will actually take, and how likely a given article/machine combination is to produce a faulty batch. This is NOT a trained machine-learning model — there is no training pipeline and nothing to retrain. Every prediction is computed fresh from current Supabase history at query time: process durations are reconstructed from audit_log's process_done events (batch_processes.sent_at/received_at and batches.fms_enter_at are NOT populated by the live FMS pages, so they are not used), and faulty risk is computed from faulty_records against total batches per article/machine. When the specific segment (e.g. a particular article) has too few historical samples to trust on its own, the estimate is blended ('shrunk') toward the wider factory-average rate rather than trusting a thin sample, and if there's effectively no relevant history yet it falls back to the static default (process_list.default_days for duration, or the factory-wide faulty rate for risk). Every prediction reports its own sample_size and a confidence label — 'learned' (enough direct history), 'shrunk' (blended with a wider average due to a thin sample), or 'default' (no usable history yet, using the fallback). When explaining a prediction, always state the confidence level and sample size plainly rather than presenting a low-confidence estimate as if it were certain — e.g. a 'default' or 'shrunk' result from 1-2 samples should be described as an early/rough estimate, not a firm number. Predictions automatically get more accurate as more real batches complete and more faulty events are logged — there is no separate step to 'update the model'."
+  }
+]

@@ -1,0 +1,38 @@
+  // ── Save order ─────────────────────────────────────────────────────────────
+
+  const saveOrder = async () => {
+    if (formData.hold_approval === 'Hold' && !formData.hold_reason) {
+      alert('Please enter hold remark.'); return
+    }
+    setSaving(true)
+    try {
+      // Strip nested join objects that PostgREST would reject as unknown columns
+      const {
+        supervisors: _s, machines: _m,
+        supervisor:  _sv, machine: _mc,
+        ...cleanData
+      } = formData
+
+      const payload = {
+        ...cleanData,
+        qty_kg:     parseFloat(cleanData.qty_kg)   || 0,
+        qty_mtr:    parseFloat(cleanData.qty_mtr)  || 0,
+        no_of_taka: parseInt(cleanData.no_of_taka) || 0,
+        status: cleanData.hold_approval === 'Hold' ? 'hold'
+               : modal === 'new' ? 'new'
+               : cleanData.status,
+        process_route: cleanData.process_route || [],
+      }
+
+      if (modal === 'new') {
+        const { error } = await createOrder(payload)
+        if (error) { alert('Error: ' + error); return }
+        showToast('✓ Order created')
+      } else if (modal === 'edit' && selectedOrder) {
+        const { error } = await updateOrder(selectedOrder.id, payload)
+        if (error) { alert('Error: ' + error); return }
+        showToast('✓ Order updated')
+      }
+      setModal(null); setSelectedOrder(null); loadAll()
+    } finally { setSaving(false) }
+  }

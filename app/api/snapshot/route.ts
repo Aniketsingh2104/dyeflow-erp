@@ -16,10 +16,10 @@ export async function GET() {
         'id,batch_id,order_id,kg,status,current_process,process_route,fms_enter_at,fms_actual_dates,is_faulty,updated_at,machines(name)'),
       dbSelect('machines', { order: 'name.asc' }, 'id,name,capacity,status,machine_type'),
       dbSelect('supervisors', { order: 'name.asc' }, 'id,name'),
-      dbSelect('fob', { order: 'created_at.desc', limit: '500' }).catch(() => ({ data: [] })),
-      dbSelect('faulty', { order: 'created_at.desc', limit: '500' }).catch(() => ({ data: [] })),
+      dbSelect('fob_records', { order: 'created_at.desc', limit: '500' }),
+      dbSelect('faulty_records', { order: 'created_at.desc', limit: '500' }),
       dbSelect('process_list', { order: 'display_order.asc', limit: '100' },
-        'id,code,name,is_enabled,display_order,default_days').catch(() => ({ data: [] })),
+        'id,code,name,is_enabled,display_order,default_days'),
     ])
 
     const orders  = (oRes.data  || []) as any[]

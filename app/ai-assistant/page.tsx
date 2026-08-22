@@ -2,15 +2,15 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  buildDbContext,
-  buildAssignmentContext,
-  buildDelayContext,
-  buildCustomerContext,
-  buildActionsContext,
-  buildSchedulerContext,
-  buildCostContext,
+  fetchDbContext,
+  fetchAssignmentContext,
+  fetchDelayContext,
+  fetchFaultyRiskContext,
+  fetchCustomerContext,
+  fetchActionsContext,
+  fetchSchedulerContext,
+  fetchCostContext,
 } from '@/lib/dbContext'
-import { logAudit } from '@/lib/auditLog'
 
 // ── Voice Input Hook ────────────────────────────────────────────────────────────
 
@@ -118,6 +118,24 @@ async function callClaude(
   return (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '(no response)'
 }
 
+// ── RAG API call (self-hosted Ollama, local knowledge base + live Supabase data) ──
+// Only reachable when Ollama is running (locally, or via the ollama.ginzaapp.in
+// tunnel once that's set up) — see lib/rag/ollama.ts.
+
+async function callRag(
+  question: string,
+  history: { role: 'user' | 'assistant'; content: string }[]
+): Promise<string> {
+  const response = await fetch('/api/ai/rag', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, history }),
+  })
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || `RAG API error ${response.status}`)
+  return (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '(no response)'
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function ResultCard({ title, content, onCopy, onRegen, regenLoading, accent }: { title: string; content: string; onCopy: () => void; onRegen: () => void; regenLoading: boolean; accent?: string }) {
@@ -166,6 +184,7 @@ export default function AIAssistantPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
+  const [chatEngine, setChatEngine] = useState<'cloud' | 'rag'>('cloud')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Voice input
@@ -223,14 +242,16 @@ export default function AIAssistantPage() {
   const [ratePerDay, setRatePerDay] = useState('500')
 
   useEffect(() => {
-    const ctx = buildDbContext()
-    setDbSummary(ctx.summary)
-    setMessages([{
-      id: 'welcome',
-      role: 'assistant',
-      content: `Hello! I'm your DyeFlow AI Assistant.\n\nI have live access to your factory database — ${ctx.summary}.\n\nAsk me anything about orders, batches, machines, supervisors, or faulty records. I answer from real data.`,
-      timestamp: new Date()
-    }])
+    (async () => {
+      const ctx = await fetchDbContext()
+      setDbSummary(ctx.summary)
+      setMessages([{
+        id: 'welcome',
+        role: 'assistant',
+        content: `Hello! I'm your DyeFlow AI Assistant.\n\nI have live access to your factory database — ${ctx.summary}.\n\nAsk me anything about orders, batches, machines, supervisors, or faulty records. I answer from real data.`,
+        timestamp: new Date()
+      }])
+    })()
   }, [])
 
   useEffect(() => {
@@ -274,8 +295,13 @@ export default function AIAssistantPage() {
     setMessages(prev => [...prev, userMsg, loadingMsg])
     setChatLoading(true)
     try {
-      const ctx = buildDbContext()
-      const system = `You are the AI assistant for DyeFlow, a dyeing factory ERP in Surat, India. Answer accurately using ONLY the live data provided below.
+      const history = messages.filter(m => !m.loading && m.id !== 'welcome').map(m => ({ role: m.role, content: m.content }))
+      let reply: string
+      if (chatEngine === 'rag') {
+        reply = await callRag(question, history)
+      } else {
+        const ctx = await fetchDbContext()
+        const system = `You are the AI assistant for DyeFlow, a dyeing factory ERP in Surat, India. Answer accurately using ONLY the live data provided below.
 
 KEY CONCEPTS YOU MUST UNDERSTAND:
 - "Booked till" or "booked until" = the BOOKED_TILL field in the machine data — this is the LATEST date among ALL planned dates of all active orders on that machine. It means the machine will be occupied until that date and is only free AFTER that date.
@@ -296,8 +322,8 @@ ANSWER FORMAT:
 - Never say "data not available" if the information is in the context below
 
 ${ctx.full}`
-      const history = messages.filter(m => !m.loading && m.id !== 'welcome').map(m => ({ role: m.role, content: m.content }))
-      const reply = await callClaude([...history, { role: 'user', content: question }], system)
+        reply = await callClaude([...history, { role: 'user', content: question }], system)
+      }
       setMessages(prev => prev.map(m => m.loading ? { ...m, content: reply, loading: false } : m))
     } catch (err) {
       setMessages(prev => prev.map(m => m.loading ? { ...m, content: `Error: ${String(err)}`, loading: false } : m))
@@ -311,7 +337,7 @@ ${ctx.full}`
   const generateBriefing = async () => {
     setBriefingLoading(true); setBriefing('')
     try {
-      const ctx = buildDbContext()
+      const ctx = await fetchDbContext()
       const system = `You are a factory operations assistant. Generate a clear morning briefing for a dyeing factory manager. Format:
 📅 DATE: [date]
 📊 OVERVIEW: [2-3 sentence status]
@@ -332,7 +358,7 @@ Base strictly on data. Be direct.`
     if (!assignOrder.party || !assignOrder.article || !assignOrder.qtyKg) { alert('Fill in Party, Article, and Qty.'); return }
     setAssignLoading(true); setAssignResult('')
     try {
-      const ctx = buildAssignmentContext()
+      const ctx = await fetchAssignmentContext(assignOrder.article)
       const system = `You are a production planner for a dyeing factory. Recommend the best supervisor and machine for a new order. Format:
 RECOMMENDED SUPERVISOR: [name]
 Reason: [1-2 sentences]
@@ -352,14 +378,14 @@ Be specific. Base on current loads.`
   const analyzeFaulty = async () => {
     setFaultyLoading(true); setFaultyAnalysis('')
     try {
-      const ctx = buildDbContext()
-      const system = `You are a quality analyst for a dyeing factory. Analyze faulty records and find patterns. Format:
-🔴 KEY FINDINGS: [bullet points with numbers]
-📈 HIGHEST RISK AREAS: [where most faults occur]
-🔍 ROOT CAUSE HINTS: [based on patterns]
+      const [ctx, riskCtx] = await Promise.all([fetchDbContext(), fetchFaultyRiskContext()])
+      const system = `You are a quality analyst for a dyeing factory. Analyze faulty records and find patterns. You are given both raw faulty records AND pre-computed learned faulty-risk statistics per article (with real historical reasons and a confidence label per article — 'learned' means solid data, 'shrunk' means a thin sample blended with the factory average, 'default' means not enough data yet). Ground your findings in the learned statistics where available rather than re-deriving rates yourself from the raw records, and be honest about confidence — don't present a 'default' or 'shrunk' figure as if it were certain. Format:
+🔴 KEY FINDINGS: [bullet points with numbers, cite confidence level when relevant]
+📈 HIGHEST RISK AREAS: [articles with highest learned risk rate, name the actual top reasons]
+🔍 ROOT CAUSE HINTS: [based on the real reason text, not guesses]
 💡 RECOMMENDATIONS: [2-3 specific actions]
 Be specific with counts. Do not invent data.`
-      const reply = await callClaude([{ role: 'user', content: `Analyze faulty records:\n\n${ctx.full}` }], system)
+      const reply = await callClaude([{ role: 'user', content: `Analyze faulty records:\n\n${ctx.full}\n\n${riskCtx}` }], system)
       setFaultyAnalysis(reply)
     } catch (err) { setFaultyAnalysis(`Error: ${String(err)}`) }
     finally { setFaultyLoading(false) }
@@ -370,10 +396,10 @@ Be specific with counts. Do not invent data.`
   const predictDelays = async () => {
     setDelayLoading(true); setDelayResult('')
     try {
-      const ctx = buildDelayContext()
-      const system = `You are a production planning assistant for a dyeing factory. Analyze orders and predict which ones are at risk of missing their planned dispatch date. Format:
+      const ctx = await fetchDelayContext()
+      const system = `You are a production planning assistant for a dyeing factory. Analyze orders and predict which ones are at risk of missing their planned dispatch date. You are given three real signals: stuck-batch anomalies (batches already behind at their current process), a plain delivery-date-vs-today list, and — for not-yet-started orders — a pre-computed LEARNED-DURATION ETA (real estimated total processing days from historical/live data, already marked AT RISK or ON TRACK). Use the pre-computed ETA verdicts directly for those orders rather than re-guessing; for orders without an ETA line, reason from the stuck-batch and delivery-date signals instead. Format:
 🔴 HIGH RISK (very likely to miss dispatch date):
-[order number - party - reason - days left vs processes remaining]
+[order number - party - reason - real numbers from the data]
 
 🟡 MEDIUM RISK (possible delay):
 [same format]
@@ -386,7 +412,7 @@ Be specific with counts. Do not invent data.`
 
 💡 RECOMMENDATIONS: [2-3 specific actions]
 
-Be precise. Show actual numbers. Mark "AT RISK" if remaining processes > days left.`
+Be precise. Show actual numbers from the data — don't invent days-remaining figures.`
       const reply = await callClaude([{ role: 'user', content: `Analyze delays:\n\n${ctx}` }], system, 1200)
       setDelayResult(reply)
     } catch (err) { setDelayResult(`Error: ${String(err)}`) }
@@ -399,7 +425,7 @@ Be precise. Show actual numbers. Mark "AT RISK" if remaining processes > days le
     if (!actionInput.trim()) return
     setActionLoading(true); setActionPlan(''); setProposedActions([]); setActionResult('')
     try {
-      const ctx = buildActionsContext()
+      const ctx = await fetchActionsContext()
       const system = `You are an AI agent for a dyeing factory ERP. The user wants to make changes to orders. You must:
 1. Understand what changes are needed
 2. Respond with a JSON array of specific actions to execute
@@ -433,70 +459,98 @@ ${ctx}`
     }
   }
 
-  const executeActions = () => {
+  const executeActions = async () => {
     if (proposedActions.length === 0) return
     setActionExecuting(true)
     try {
-      const raw = localStorage.getItem('dyeflow_db')
-      if (!raw) throw new Error('No database found')
-      const db = JSON.parse(raw)
+      // Real order/supervisor lookups — replaces the old localStorage 'dyeflow_db' blob.
+      // All writes below go through /api/orders' existing action interface, which
+      // already does proper Supabase updates AND server-side audit logging —
+      // no need to call logAudit separately here.
+      const [ordersRes, supervisorsRes] = await Promise.all([
+        fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
+      ])
+      const orders: any[] = ordersRes.data || []
+      const supervisors: any[] = supervisorsRes.data || []
+      const orderByNumber: Record<string, any> = {}
+      for (const o of orders) orderByNumber[o.order_number] = o
+      const supervisorIdByName: Record<string, string> = {}
+      for (const s of supervisors) supervisorIdByName[s.name] = s.id
+
+      const postOrders = (body: Record<string, any>) =>
+        fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, _user: 'AI Actions Agent' }),
+        }).then(r => r.json())
+
       const results: string[] = []
 
       for (const action of proposedActions) {
         const orderNums = action.orderNumbers || (action.orderNumber ? [action.orderNumber] : [])
 
+        // Bulk assign: one bulk_update call covering every matched order, instead of looping.
+        if (action.type === 'bulk_assign') {
+          const ids: string[] = []
+          for (const num of orderNums) {
+            const o = orderByNumber[num]
+            if (o) ids.push(o.id)
+            else results.push(`❌ Order ${num} not found`)
+          }
+          const supId = supervisorIdByName[action.newValue]
+          if (!supId) {
+            results.push(`❌ Supervisor "${action.newValue}" not found`)
+          } else if (ids.length > 0) {
+            const res = await postOrders({ action: 'bulk_update', ids, patch: { supervisor_id: supId, status: 'assigned' } })
+            results.push(res.ok ? `✅ ${ids.length} order(s) → supervisor ${action.newValue}` : `❌ Bulk assign failed: ${res.error}`)
+          }
+          continue
+        }
+
         for (const orderNum of orderNums) {
-          const order = (db.orders || []).find((o: any) => o.orderNumber === orderNum)
+          const order = orderByNumber[orderNum]
           if (!order) { results.push(`❌ Order ${orderNum} not found`); continue }
 
-          switch (action.type) {
-            case 'status_change':
-              const oldStatus = order.status
-              order.status = action.newValue
-              logAudit({ action: 'status_change', entityType: 'order', entityId: orderNum, field: 'status', oldValue: oldStatus, newValue: action.newValue, note: 'AI Actions Agent' })
-              results.push(`✅ ${orderNum}: status ${oldStatus} → ${action.newValue}`)
-              break
-            case 'assign_supervisor':
-              const oldSup = order.supervisor || 'none'
-              order.supervisor = action.newValue
-              if (order.status === 'new') order.status = 'assigned'
-              logAudit({ action: 'assign', entityType: 'order', entityId: orderNum, field: 'supervisor', oldValue: oldSup, newValue: action.newValue, note: 'AI Actions Agent' })
-              results.push(`✅ ${orderNum}: supervisor → ${action.newValue}`)
-              break
-            case 'add_hold':
-              order.status = 'hold'
-              order.holdReason = action.newValue
-              order.holdApproval = 'Hold'
-              logAudit({ action: 'status_change', entityType: 'order', entityId: orderNum, field: 'status', oldValue: order.status, newValue: 'hold', note: `AI hold: ${action.newValue}` })
-              results.push(`✅ ${orderNum}: put on hold — ${action.newValue}`)
-              break
-            case 'update_remark':
-              const oldRemark = order.remarks || ''
-              order.remarks = action.newValue
-              logAudit({ action: 'edit', entityType: 'order', entityId: orderNum, field: 'remarks', oldValue: oldRemark, newValue: action.newValue, note: 'AI Actions Agent' })
-              results.push(`✅ ${orderNum}: remark updated`)
-              break
-            case 'bulk_assign':
-              const oldBulkSup = order.supervisor || 'none'
-              order.supervisor = action.newValue
-              if (order.status === 'new') order.status = 'assigned'
-              logAudit({ action: 'assign', entityType: 'order', entityId: orderNum, field: 'supervisor', oldValue: oldBulkSup, newValue: action.newValue, note: 'AI bulk assign' })
-              results.push(`✅ ${orderNum}: supervisor → ${action.newValue}`)
-              break
-            default:
-              results.push(`⚠️ Unknown action type: ${action.type}`)
+          try {
+            switch (action.type) {
+              case 'status_change': {
+                const res = await postOrders({ action: 'update_status', id: order.id, status: action.newValue })
+                results.push(res.ok ? `✅ ${orderNum}: status ${order.status} → ${action.newValue}` : `❌ ${orderNum}: ${res.error}`)
+                break
+              }
+              case 'assign_supervisor': {
+                const supId = supervisorIdByName[action.newValue]
+                if (!supId) { results.push(`❌ ${orderNum}: supervisor "${action.newValue}" not found`); break }
+                const res = await postOrders({ action: 'assign_supervisor', id: order.id, supervisor_id: supId })
+                results.push(res.ok ? `✅ ${orderNum}: supervisor → ${action.newValue}` : `❌ ${orderNum}: ${res.error}`)
+                break
+              }
+              case 'add_hold': {
+                const res = await postOrders({ action: 'update_status', id: order.id, status: 'hold', hold_reason: action.newValue })
+                results.push(res.ok ? `✅ ${orderNum}: put on hold — ${action.newValue}` : `❌ ${orderNum}: ${res.error}`)
+                break
+              }
+              case 'update_remark': {
+                const res = await postOrders({ action: 'update', id: order.id, remarks: action.newValue })
+                results.push(res.ok ? `✅ ${orderNum}: remark updated` : `❌ ${orderNum}: ${res.error}`)
+                break
+              }
+              default:
+                results.push(`⚠️ Unknown action type: ${action.type}`)
+            }
+          } catch (e) {
+            results.push(`❌ ${orderNum}: ${String(e)}`)
           }
         }
       }
 
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      window.dispatchEvent(new Event('dyeflow-db-updated'))
       setActionResult(results.join('\n'))
       setProposedActions([])
       setActionPlan('')
       setActionInput('')
       // Refresh db summary
-      const ctx = buildDbContext()
+      const ctx = await fetchDbContext()
       setDbSummary(ctx.summary)
     } catch (err) {
       setActionResult(`Execution failed: ${String(err)}`)
@@ -510,7 +564,7 @@ ${ctx}`
   const generateReport = async () => {
     setReportLoading(true); setReport('')
     try {
-      const ctx = buildDbContext()
+      const ctx = await fetchDbContext()
       const system = `You are a factory management reporter for a dyeing factory. Generate a comprehensive weekly production report. Format as a professional document:
 
 WEEKLY PRODUCTION REPORT
@@ -554,7 +608,7 @@ Use actual data. Be specific with numbers. Professional tone.`
     if (!customerQuery.trim()) { alert('Enter a party name or order number.'); return }
     setCustomerLoading(true); setCustomerResult('')
     try {
-      const ctx = buildCustomerContext(customerQuery)
+      const ctx = await fetchCustomerContext(customerQuery)
       const langInstructions: Record<string, string> = {
         english: 'Write in professional English.',
         hindi: 'Write in Hindi (Devanagari script).',
@@ -585,7 +639,7 @@ If no orders found, write a polite message saying so and asking for the correct 
   const generateSchedule = async () => {
     setSchedulerLoading(true); setSchedulerResult('')
     try {
-      const ctx = buildSchedulerContext()
+      const ctx = await fetchSchedulerContext()
 
       const priorityInstructions = {
         deadline: 'PRIORITY RULE: Sort strictly by dispatch deadline. Most urgent deadline = first. Ignore shade sequencing if it conflicts with deadlines.',
@@ -632,7 +686,7 @@ Be specific with batch IDs, dates, and Kg. No generic advice.`
   const generateCostEstimate = async () => {
     setCostLoading(true); setCostResult('')
     try {
-      const ctx = buildCostContext()
+      const ctx = await fetchCostContext(costOrder)
       const rate = parseFloat(ratePerDay) || 500
       const filterNote = costOrder.trim()
         ? `Only estimate for order: ${costOrder.trim()}`
@@ -690,7 +744,7 @@ Be specific with numbers. Show ₹ symbol. All costs in INR.`
             <div style={{ fontSize: 17, fontWeight: 600 }}>🤖 DyeFlow AI Assistant</div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>Live data · {dbSummary || 'Loading…'}</div>
           </div>
-          <button className="small" onClick={() => { const ctx = buildDbContext(); setDbSummary(ctx.summary) }}>↻ Refresh</button>
+          <button className="small" onClick={async () => { const ctx = await fetchDbContext(); setDbSummary(ctx.summary) }}>↻ Refresh</button>
         </div>
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', paddingBottom: 0 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', alignSelf: 'center', paddingRight: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>T1</span>
@@ -736,6 +790,23 @@ Be specific with numbers. Show ₹ symbol. All costs in INR.`
               <div ref={messagesEndRef} />
             </div>
             <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-light)', background: 'var(--bg-primary)', flexShrink: 0 }}>
+              {/* Chat engine toggle */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Engine:</span>
+                <button
+                  onClick={() => setChatEngine('cloud')}
+                  disabled={chatLoading}
+                  style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, cursor: chatLoading ? 'not-allowed' : 'pointer', border: `1px solid ${chatEngine === 'cloud' ? 'var(--accent)' : 'var(--border-light)'}`, background: chatEngine === 'cloud' ? 'var(--accent)' : 'var(--bg-primary)', color: chatEngine === 'cloud' ? '#fff' : 'var(--text-secondary)' }}
+                >☁ Cloud (Groq/Gemini)</button>
+                <button
+                  onClick={() => setChatEngine('rag')}
+                  disabled={chatLoading}
+                  style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, cursor: chatLoading ? 'not-allowed' : 'pointer', border: `1px solid ${chatEngine === 'rag' ? '#1D9E75' : 'var(--border-light)'}`, background: chatEngine === 'rag' ? '#1D9E75' : 'var(--bg-primary)', color: chatEngine === 'rag' ? '#fff' : 'var(--text-secondary)' }}
+                >🖥 Local RAG (Ollama)</button>
+                {chatEngine === 'rag' && (
+                  <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Needs Ollama running locally (or via the tunnel once set up) — falls back with an error if unreachable</span>
+                )}
+              </div>
               {/* Voice error message */}
               {voice.error && (
                 <div style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 6, padding: '4px 8px', background: 'var(--danger-light)', borderRadius: 4 }}>

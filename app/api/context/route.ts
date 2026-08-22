@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
           'id,batch_id,order_number,party,faulty_type,faulty_kg,process_code,created_at'),
         dbSelect('fob_records', { status: 'eq.open', order: 'created_at.desc', limit: '50' },
           'id,batch_id,order_number,party,fob_type,fob_kg,process_code,created_at'),
-        dbSelect('processes', { order: 'name.asc' },
+        dbSelect('process_list', { order: 'display_order.asc' },
           'id,code,name'),
       ])
 

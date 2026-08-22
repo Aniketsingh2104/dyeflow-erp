@@ -159,14 +159,20 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
     const machineSteps = (rt.steps || []).filter((s: any) => MACHINE_REQUIRED.includes(s.processCode))
     const inputs: {[key: string]: [string, string]} = {}
-    // Load existing process_machines if in edit mode
+    // Load existing process_machines if in edit mode — these are stored as machine IDs,
+    // so resolve each one to its machine name before putting it in the input field.
     const existingPM = order.process_machines || order.processMachines || {}
+    const resolveMachineName = (idOrName: string) => {
+      if (!idOrName) return ''
+      const rec = (database.machines || []).find((m: any) => m.id === idOrName)
+      return rec ? rec.name : idOrName
+    }
     for (const step of machineSteps) {
       const existing = existingPM[step.processCode] || []
       const smart    = getSmartMachine(step.processCode, qtyKg, articleIntel, database) || ''
       inputs[step.processCode] = [
-        existing[0] || smart,
-        existing[1] || '',
+        resolveMachineName(existing[0]) || smart,
+        resolveMachineName(existing[1]) || '',
       ]
     }
     setMachineInputs(inputs)
