@@ -185,6 +185,22 @@ export default function OrdersPage() {
 
   // ── Filtered orders ────────────────────────────────────────────────────────
 
+  // Resolves what a column actually displays for an order. machine/supervisor
+  // are stored as *_id foreign keys (not the name shown in the table), and
+  // process_route is an array of codes shown as names — filtering on the raw
+  // o[key] value silently breaks for these three (empty/UUID/code strings
+  // never match what's typed into the filter box).
+  const getColumnText = useCallback((o: any, key: string): string => {
+    if (key === 'machine') return machines.find(m => m.id === o.machine_id)?.name || ''
+    if (key === 'supervisor') return supervisors.find(s => s.id === o.supervisor_id)?.name || ''
+    if (key === 'process_route') {
+      return (o.process_route || [])
+        .map((code: string) => processList.find((p: any) => p.code === code)?.name || code)
+        .join(' ')
+    }
+    return String(o[key] ?? '')
+  }, [machines, supervisors, processList])
+
   const filtered = useMemo(() => {
     let list = [...orders]
     if (searchTerm.trim()) {
@@ -198,10 +214,10 @@ export default function OrdersPage() {
     Object.entries(colFilters).forEach(([key, val]) => {
       if (!val.trim()) return
       const q = val.toLowerCase()
-      list = list.filter(o => String(o[key] ?? '').toLowerCase().includes(q))
+      list = list.filter(o => getColumnText(o, key).toLowerCase().includes(q))
     })
     return list
-  }, [orders, searchTerm, statusFilter, articleFilter, colFilters])
+  }, [orders, searchTerm, statusFilter, articleFilter, colFilters, getColumnText])
 
   useEffect(() => setSelectedIds(new Set()), [filtered.length])
 
