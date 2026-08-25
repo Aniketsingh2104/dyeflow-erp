@@ -163,7 +163,9 @@ export default function FobPage() {
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
 
-  if (loading) return (
+  // Only blank the page on the true first load; all the action handlers
+  // (Mark Sent/Approved/Reprocess/Update/Delete) call load() again afterward.
+  if (loading && records.length === 0) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>Loading FOB records…</div>
   )

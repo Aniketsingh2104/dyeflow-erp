@@ -293,7 +293,9 @@ export default function SplittedOrdersPage() {
     }
   }
 
-  if (loading) return (
+  // Only blank the page on the true first load; handleDelete/handleDone
+  // both call load() again afterward.
+  if (loading && rows.length === 0) return (
     <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'60vh',color:'var(--text-tertiary)',fontSize:14}}>
       Loading batches…
     </div>

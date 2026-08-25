@@ -173,7 +173,10 @@ export default function FaultyPage() {
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
 
-  if (loading) return (
+  // Only blank the page on the true first load; handleMarkOk/handleReprocess/
+  // handleUpdate/handleDelete all call load() again afterward, which would
+  // otherwise replace this whole page with "Loading…" on every action.
+  if (loading && records.length === 0) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>
       Loading faulty records…

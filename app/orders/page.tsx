@@ -497,7 +497,13 @@ export default function OrdersPage() {
       const data = await res.json()
       if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return }
       showToast(`✓ ${order.order_number} fully splitted as 1 batch`)
-      loadAll()
+      // Update just this order's allocation + status in place instead of a full
+      // loadAll() (which re-fetches orders/supervisors/machines/customers/
+      // processList/allocations all at once). Matters most when clicking Full
+      // Split on several orders back to back — a full reload per click is what
+      // causes the visible "blink" each time.
+      setAllocations(prev => ({ ...prev, [order.id]: allocatedKg + remaining }))
+      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'splitting' } : o))
     } catch (err: any) { alert('Network error: ' + err.message) }
     finally { setSaving(false) }
   }

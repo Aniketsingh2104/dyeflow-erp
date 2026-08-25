@@ -442,7 +442,13 @@ export default function FmsProcessPage() {
       )
     : rows
 
-  if (loading) return (
+  // Only show the full-page loading placeholder on the true first load (no
+  // data yet). Every action handler (Done/Rollback/Faulty/FOB) calls loadRows()
+  // again afterward to get fresh authoritative data — without this guard,
+  // `loading` briefly flips true on EVERY action and this same block would
+  // blank the entire page (table, search, columns, everything) each time,
+  // even though the existing rows were still perfectly valid to keep showing.
+  if (loading && rows.length === 0) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
       Loading {processCode}-FMS…

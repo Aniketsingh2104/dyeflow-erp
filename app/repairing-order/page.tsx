@@ -223,7 +223,9 @@ export default function RepairingOrderPage() {
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
 
-  if (loading) return (
+  // Only blank the page on the true first load; handleDelete/handleUpdate/
+  // doFullSplit/saveSplits/doReassign all call load() again afterward.
+  if (loading && records.length === 0) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>
       Loading repairing orders...

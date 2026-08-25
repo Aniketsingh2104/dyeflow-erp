@@ -243,7 +243,9 @@ export default function FirstProcessBatchPage() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (loading) return (
+  // Only blank the page on the true first load; handleSendToProcess/
+  // handleDispatch/the ↻ button all call load() again afterward.
+  if (loading && batches.length === 0) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>
       Loading…

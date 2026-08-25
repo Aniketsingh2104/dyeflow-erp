@@ -491,7 +491,11 @@ export default function PendingApprovalsPage() {
         </div>
       )}
 
-      {loading ? (
+      {/* Only blank the whole tab on the true first load; approveSingle/
+          approveSelected/rejectNew/acceptEdit/rejectEdit all call load() again
+          afterward, which would otherwise wipe every card mid-action even
+          though per-card isSaving() already shows a proper inline state. */}
+      {loading && newItems.length === 0 && editItems.length === 0 ? (
         <div style={{textAlign:'center',padding:60,color:'var(--text-tertiary)'}}>Loading…</div>
       ) : tab==='new' ? renderNewTab() : renderEditsTab()}
 
