@@ -41,27 +41,6 @@ function fmtShort(d: any) {
   catch { return '-' }
 }
 
-// Parses "L001:15, L002:10" into [{lotNumber:'L001', taka:15}, {lotNumber:'L002', taka:10}].
-// Taka after the colon is optional (bare "L001" is valid, taka:null). Returns
-// null if the text doesn't parse into at least one valid lot.
-function parseLots(text: string): { lotNumber: string; taka: number | null }[] | null {
-  const parts = text.split(',').map(s => s.trim()).filter(Boolean)
-  if (parts.length === 0) return null
-  const lots: { lotNumber: string; taka: number | null }[] = []
-  for (const part of parts) {
-    const [lotNumberRaw, takaRaw] = part.split(':').map(s => s?.trim())
-    if (!lotNumberRaw) return null
-    let taka: number | null = null
-    if (takaRaw) {
-      const n = parseInt(takaRaw)
-      if (isNaN(n) || n < 0) return null
-      taka = n
-    }
-    lots.push({ lotNumber: lotNumberRaw, taka })
-  }
-  return lots
-}
-
 export default function GreigeRegisterPage() {
   const router  = useRouter()
   const [entries, setEntries] = useState<any[]>([])
@@ -70,8 +49,8 @@ export default function GreigeRegisterPage() {
   const [loading, setLoading] = useState(true)
   const [saving,    setSaving]    = useState(false)
   const [toast,     setToast]     = useState('')
-  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
-  const [lotInputValue,  setLotInputValue]  = useState('')
+  const [lotModalEntry, setLotModalEntry] = useState<any | null>(null)
+  const [lotRows, setLotRows] = useState<{ lotNumber: string; taka: string }[]>([])
   const [now, setNow] = useState(() => Date.now())
 
   // Ticks every minute so countdowns/overdue coloring stay live without
@@ -133,26 +112,36 @@ export default function GreigeRegisterPage() {
 
   const startEditingLots = (entry: any) => {
     const existing = lotsByEntry[entry.id] || []
-    setLotInputValue(existing.map((l: any) => l.taka != null ? `${l.lot_number}:${l.taka}` : l.lot_number).join(', '))
-    setEditingEntryId(entry.id)
+    setLotRows(existing.length > 0
+      ? existing.map((l: any) => ({ lotNumber: l.lot_number, taka: l.taka != null ? String(l.taka) : '' }))
+      : [{ lotNumber: '', taka: '' }])
+    setLotModalEntry(entry)
   }
 
-  const saveLots = async (entry: any) => {
-    const parsed = parseLots(lotInputValue)
-    if (!parsed) { alert('Invalid format. Use e.g.: L001:15, L002:10'); return }
-    const sumTaka = parsed.reduce((s, l) => s + (l.taka || 0), 0)
-    const totalTaka = parseInt(entry.no_of_taka) || 0
-    if (parsed.some(l => l.taka != null) && sumTaka !== totalTaka) {
-      const proceed = confirm(`Entered taka (${sumTaka}) doesn't match this entry's total taka (${totalTaka}). Save anyway?`)
+  const addLotRow = () => setLotRows(prev => [...prev, { lotNumber: '', taka: '' }])
+  const removeLotRow = (idx: number) => setLotRows(prev => prev.filter((_, i) => i !== idx))
+  const updateLotRow = (idx: number, field: 'lotNumber' | 'taka', value: string) =>
+    setLotRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
+
+  const lotRowsTotal = lotRows.reduce((s, r) => s + (parseInt(r.taka) || 0), 0)
+
+  const saveLots = async () => {
+    if (!lotModalEntry) return
+    const cleaned = lotRows
+      .map(r => ({ lotNumber: r.lotNumber.trim(), taka: r.taka.trim() ? parseInt(r.taka) : null }))
+      .filter(r => r.lotNumber)
+    if (cleaned.length === 0) { alert('Enter at least one Lot Number.'); return }
+    const totalTaka = parseInt(lotModalEntry.no_of_taka) || 0
+    if (cleaned.some(l => l.taka != null) && lotRowsTotal !== totalTaka) {
+      const proceed = confirm(`Entered taka (${lotRowsTotal}) doesn't match this entry's total taka (${totalTaka}). Save anyway?`)
       if (!proceed) return
     }
     setSaving(true)
     try {
-      const res = await greigePost({ action: 'create_lots_bulk', entryId: entry.id, lots: parsed })
+      const res = await greigePost({ action: 'create_lots_bulk', entryId: lotModalEntry.id, lots: cleaned })
       if (!res.ok) { alert('Error: ' + res.error); return }
       showToast('✓ Lot(s) saved')
-      setEditingEntryId(null)
-      setLotInputValue('')
+      setLotModalEntry(null)
       load()
     } finally { setSaving(false) }
   }
@@ -254,20 +243,8 @@ export default function GreigeRegisterPage() {
                     <td style={cell}>{e.no_of_taka}</td>
                     <td style={cell}>{e.kg || '-'}</td>
                     <td style={cell}>{e.qty || '-'}</td>
-                    <td style={{ ...cell, whiteSpace: 'normal', minWidth: 260 }}>
-                      {editingEntryId === e.id ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                          <input autoFocus value={lotInputValue} placeholder="L001:15, L002:10"
-                            onChange={ev => setLotInputValue(ev.target.value)}
-                            onKeyDown={ev => { if (ev.key === 'Enter') saveLots(e); if (ev.key === 'Escape') setEditingEntryId(null) }}
-                            style={{ fontSize: 11, padding: '4px 8px', width: 230,
-                              border: '1px solid var(--border-medium)', borderRadius: 4 }} />
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="xs" disabled={saving} onClick={() => saveLots(e)}>✓ Save</button>
-                            <button className="xs" onClick={() => setEditingEntryId(null)}>✕ Cancel</button>
-                          </div>
-                        </div>
-                      ) : (lotsByEntry[e.id]?.length > 0) ? (
+                    <td style={{ ...cell, whiteSpace: 'normal', minWidth: 180 }}>
+                      {(lotsByEntry[e.id]?.length > 0) ? (
                         <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', cursor: 'pointer' }}
                           onClick={() => startEditingLots(e)} title="Click to edit lots">
                           {(lotsByEntry[e.id] || []).map((l: any) => (
@@ -305,6 +282,63 @@ export default function GreigeRegisterPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Lot entry form — separate labeled boxes, no syntax to type/remember */}
+      {lotModalEntry && (
+        <div className="modal-overlay" onClick={() => setLotModalEntry(null)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={ev => ev.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Enter Lot Numbers — {lotModalEntry.challan_no}</span>
+              <button className="small" onClick={() => setLotModalEntry(null)}>✕</button>
+            </div>
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 14px',
+              marginBottom: 14, fontSize: 13 }}>
+              <strong>{lotModalEntry.party}</strong> · Total Taka for this entry: <strong>{lotModalEntry.no_of_taka}</strong>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 11, fontWeight: 700,
+              color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>
+              <div style={{ flex: 1 }}>Lot Number</div>
+              <div style={{ width: 90 }}>Taka</div>
+              <div style={{ width: 28 }} />
+            </div>
+
+            {lotRows.map((row, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                <input value={row.lotNumber} placeholder="e.g. L001" autoFocus={idx === 0}
+                  onChange={ev => updateLotRow(idx, 'lotNumber', ev.target.value)}
+                  style={{ flex: 1, padding: '7px 10px', fontSize: 13,
+                    border: '1px solid var(--border-medium)', borderRadius: 6 }} />
+                <input type="number" min="0" value={row.taka} placeholder="Taka"
+                  onChange={ev => updateLotRow(idx, 'taka', ev.target.value)}
+                  style={{ width: 90, padding: '7px 10px', fontSize: 13,
+                    border: '1px solid var(--border-medium)', borderRadius: 6 }} />
+                <button className="xs" onClick={() => removeLotRow(idx)}
+                  disabled={lotRows.length === 1}
+                  style={{ opacity: lotRows.length === 1 ? 0.3 : 1 }}>✕</button>
+              </div>
+            ))}
+
+            <button className="small" onClick={addLotRow} style={{ marginBottom: 14 }}>
+              + Add Another Lot
+            </button>
+
+            <div style={{
+              padding: '8px 12px', borderRadius: 6, marginBottom: 14, fontSize: 13, fontWeight: 600,
+              background: lotRowsTotal === (parseInt(lotModalEntry.no_of_taka) || 0) ? 'var(--success-light)' : 'var(--warning-light)',
+              color: lotRowsTotal === (parseInt(lotModalEntry.no_of_taka) || 0) ? 'var(--success)' : 'var(--warning)' }}>
+              Entered so far: {lotRowsTotal} / {lotModalEntry.no_of_taka} Taka
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setLotModalEntry(null)}>Cancel</button>
+              <button className="primary" onClick={saveLots} disabled={saving}>
+                {saving ? 'Saving…' : '✓ Save Lots'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
