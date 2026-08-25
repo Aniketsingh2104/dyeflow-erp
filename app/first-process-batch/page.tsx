@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { getCollabInfo } from '@/lib/collab'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 const COLUMNS = [
@@ -65,6 +66,7 @@ function getUrgency(rawDate: string | null): { status: 'overdue' | 'due_soon' | 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function FirstProcessBatchPage() {
   const [batches,    setBatches]    = useState<any[]>([])
+  const [allBatchesRaw, setAllBatchesRaw] = useState<any[]>([])
   const [loading,    setLoading]    = useState(true)
   const [saving,     setSaving]     = useState(false)
   const [colFilters, setColFilters] = useState<Record<string,string>>({})
@@ -90,6 +92,7 @@ export default function FirstProcessBatchPage() {
       ])
       const allBatches: any[] = bRes.data  || []
       const allOrders:  any[] = oRes.data  || []
+      setAllBatchesRaw(allBatches)  // full unfiltered list — needed for collab-partner cross-checks
       const datePlans:  any[] = dpRes.data || []
       // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
       const repairPendingUUIDs = new Set(
@@ -121,6 +124,8 @@ export default function FirstProcessBatchPage() {
             id:              b.id,
             batch_id:        b.batch_id || b.id,
             order_id:        b.order_id,
+            machine_id:      b.machine_id || null,
+            date_calc_plan:  b.date_calc_plan || null,
             order_number:    order.order_number   || '-',
             party:           order.party          || '-',
             sub_party:       order.sub_party      || '-',
@@ -468,7 +473,24 @@ export default function FirstProcessBatchPage() {
                     switch(col.key) {
 
                       case 'batch_id': return (
-                        <td key={col.key} style={{...tdStyle,fontWeight:700,color:'var(--accent)'}}>{b.batch_id}</td>
+                        <td key={col.key} style={{...tdStyle,fontWeight:700,color:'var(--accent)'}}>
+                          {b.batch_id}
+                          {(() => {
+                            const info = getCollabInfo(b, b.first_process, allBatchesRaw)
+                            if (!info.hasCollab) return null
+                            const names = info.partners.map(p => p.batchId).join(', ')
+                            return (
+                              <span
+                                title={`Collab with: ${names}`}
+                                style={{
+                                  marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8,
+                                  background: '#DBEAFE', color: '#1E40AF',
+                                }}>
+                                🔗 Collab
+                              </span>
+                            )
+                          })()}
+                        </td>
                       )
                       case 'order_number': return (
                         <td key={col.key} style={{...tdStyle,fontWeight:600,color:'var(--accent)'}}>{b.order_number}</td>

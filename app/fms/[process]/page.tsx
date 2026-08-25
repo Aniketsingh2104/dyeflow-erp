@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
+import { collabBlockMessage, getCollabInfo } from '@/lib/collab'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export default function FmsProcessPage() {
   const processCode = String(params?.process || '').toUpperCase()
 
   const [rows,     setRows]     = useState<any[]>([])
+  const [allBatches, setAllBatches] = useState<any[]>([])
   const [loading,  setLoading]  = useState(true)
   const [search,   setSearch]   = useState('')
   const [now,      setNow]      = useState(new Date())
@@ -129,6 +131,7 @@ export default function FmsProcessPage() {
 
       const batches: any[] = batchRes.data  || []
       const orders: any[]  = orderRes.data  || []
+      setAllBatches(batches)  // full unfiltered list — needed for collab-partner cross-checks below
       const orderMap: Record<string, any> = {}
       for (const o of orders) orderMap[o.id] = o
 
@@ -297,6 +300,8 @@ export default function FmsProcessPage() {
   // ── Actions ─────────────────────────────────────────────────────────────────
 
   const handleDone = async (row: any) => {
+    const block = collabBlockMessage(row, processCode, allBatches)
+    if (block) { alert(block); return }
     const route: string[] = (row.process_route || row.routeStr?.split('/') || [])
     const idx  = route.findIndex((c: string) => c.toUpperCase() === processCode)
     const next = idx >= 0 ? route[idx + 1] : undefined
@@ -312,6 +317,8 @@ export default function FmsProcessPage() {
 
   // ── Rollback — send batch back to previous process ──────────────────────
   const handleRollback = async (row: any) => {
+    const block = collabBlockMessage(row, processCode, allBatches)
+    if (block) { alert(block); return }
     const route: string[] = row.process_route || row.routeStr?.split('/') || []
     const currentIdx = route.findIndex((c: string) =>
       c.toUpperCase() === processCode || c === row.current_process
@@ -569,7 +576,27 @@ export default function FmsProcessPage() {
                       switch (col.id) {
                         case 'created_at':    return <td key={col.id} style={{ ...s, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(row.sentAt || row.created_at)}</td>
                         case 'orderNo':       return <td key={col.id} style={{ ...s, fontWeight: 700 }}>{row.orderNo}</td>
-                        case 'batch_id':      return <td key={col.id} style={{ ...s, fontWeight: 700, color: 'var(--accent)' }}>{row.batch_id}</td>
+                        case 'batch_id':      return (
+                          <td key={col.id} style={{ ...s, fontWeight: 700, color: 'var(--accent)' }}>
+                            {row.batch_id}
+                            {(() => {
+                              const info = getCollabInfo(row, processCode, allBatches)
+                              if (!info.hasCollab) return null
+                              const names = info.partners.map(p => p.batchId).join(', ')
+                              return (
+                                <span
+                                  title={`Collab with: ${names}${info.allArrived ? ' — all arrived' : ' — waiting on: ' + info.partners.filter(p => !p.arrived).map(p => p.batchId).join(', ')}`}
+                                  style={{
+                                    marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8,
+                                    background: info.allArrived ? '#DBEAFE' : '#FEF3C7',
+                                    color: info.allArrived ? '#1E40AF' : '#92400E',
+                                  }}>
+                                  🔗 {info.allArrived ? 'Collab' : 'Waiting'}
+                                </span>
+                              )
+                            })()}
+                          </td>
+                        )
                         case 'party':         return <td key={col.id} style={s}>{row.party}</td>
                         case 'article':       return <td key={col.id} style={{ ...s, fontWeight: 500 }}>{row.article}</td>
                         case 'color':         return <td key={col.id} style={s}>{row.color}</td>
@@ -638,7 +665,12 @@ export default function FmsProcessPage() {
 
                                 {/* FAULTY button */}
                                 <button
-                                  onClick={() => !anyDone && (setFaultyModal(row), setFaultyReason(''))}
+                                  onClick={() => {
+                                    if (anyDone) return
+                                    const block = collabBlockMessage(row, processCode, allBatches)
+                                    if (block) { alert(block); return }
+                                    setFaultyModal(row); setFaultyReason('')
+                                  }}
                                   disabled={anyDone || saving}
                                   style={{
                                     ...btnBase,
@@ -652,7 +684,12 @@ export default function FmsProcessPage() {
 
                                 {/* FOB button */}
                                 <button
-                                  onClick={() => !anyDone && (setFobModal(row), setFobType('dyeing'), setFobReason(''))}
+                                  onClick={() => {
+                                    if (anyDone) return
+                                    const block = collabBlockMessage(row, processCode, allBatches)
+                                    if (block) { alert(block); return }
+                                    setFobModal(row); setFobType('dyeing'); setFobReason('')
+                                  }}
                                   disabled={anyDone || saving}
                                   style={{
                                     ...btnBase,
