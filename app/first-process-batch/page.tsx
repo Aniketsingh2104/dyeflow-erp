@@ -45,6 +45,23 @@ const toDisplay = (ymd: string) => {
   return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : ymd
 }
 
+// How many days out still counts as "due soon" rather than "on track".
+const DUE_SOON_DAYS = 3
+
+/** Urgency of a batch's planned first-process date relative to today.
+ *  Works off the raw ISO date (planned_date_raw), not the localized display
+ *  string, so the day-difference math is unambiguous. */
+function getUrgency(rawDate: string | null): { status: 'overdue' | 'due_soon' | 'on_track' | 'no_date'; daysDiff: number | null; label: string } {
+  if (!rawDate) return { status: 'no_date', daysDiff: null, label: '⚠ No Date' }
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const target = new Date(rawDate.slice(0, 10) + 'T00:00:00')
+  const daysDiff = Math.round((target.getTime() - today.getTime()) / 86400000)
+  if (daysDiff < 0)  return { status: 'overdue',  daysDiff, label: `${Math.abs(daysDiff)}d overdue` }
+  if (daysDiff === 0) return { status: 'due_soon', daysDiff, label: 'Due today' }
+  if (daysDiff <= DUE_SOON_DAYS) return { status: 'due_soon', daysDiff, label: `Due in ${daysDiff}d` }
+  return { status: 'on_track', daysDiff, label: toDisplay(rawDate) }
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function FirstProcessBatchPage() {
   const [batches,    setBatches]    = useState<any[]>([])
@@ -98,7 +115,8 @@ export default function FirstProcessBatchPage() {
           const firstProc = route[0] || ''
           const dp = dpMap[b.id] || {}
           const col = PROC_COL_MAP[firstProc]
-          const plannedDate = col && dp[col] ? toDisplay(dp[col]) : '-'
+          const plannedDateRaw = col && dp[col] ? dp[col] : null
+          const plannedDate = plannedDateRaw ? toDisplay(plannedDateRaw) : '-'
           return {
             id:              b.id,
             batch_id:        b.batch_id || b.id,
@@ -124,6 +142,7 @@ export default function FirstProcessBatchPage() {
             route,
             first_process:   firstProc,
             planned_date:    plannedDate,
+            planned_date_raw: plannedDateRaw,
             // Delivery date = FinalDispatch date from batch_date_plans, fallback to Dispatch, then order delivery_date
           delivery_date:   (() => {
             if (dp.d_finaldispatch) return toDisplay(dp.d_finaldispatch)
@@ -176,7 +195,7 @@ export default function FirstProcessBatchPage() {
 
   // ── Filtered rows ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    return batches.filter(b => {
+    const rows = batches.filter(b => {
       for (const [key, val] of Object.entries(colFilters)) {
         if (!val.trim()) continue
         const cell = key === 'route'
@@ -186,7 +205,30 @@ export default function FirstProcessBatchPage() {
       }
       return true
     })
+
+    // Most overdue first, then soonest-due, then on-track chronologically,
+    // then rows with no planned date at all last (nothing to act on until a
+    // date is generated in Date Calculator anyway).
+    const rank: Record<string, number> = { overdue: 0, due_soon: 1, on_track: 2, no_date: 3 }
+    return rows.slice().sort((a, b) => {
+      const ua = getUrgency(a.planned_date_raw)
+      const ub = getUrgency(b.planned_date_raw)
+      if (rank[ua.status] !== rank[ub.status]) return rank[ua.status] - rank[ub.status]
+      if (ua.daysDiff == null || ub.daysDiff == null) return 0
+      return ua.daysDiff - ub.daysDiff
+    })
   }, [batches, colFilters])
+
+  // Counts for the header summary badge.
+  const urgencyCounts = useMemo(() => {
+    let overdue = 0, dueSoon = 0
+    for (const b of filtered) {
+      const u = getUrgency(b.planned_date_raw)
+      if (u.status === 'overdue') overdue++
+      else if (u.status === 'due_soon') dueSoon++
+    }
+    return { overdue, dueSoon }
+  }, [filtered])
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
 
@@ -261,8 +303,18 @@ export default function FirstProcessBatchPage() {
         marginBottom:10, flexShrink:0 }}>
         <div>
           <h2 style={{ margin:0, fontSize:16, fontWeight:700 }}>First Process Batch</h2>
-          <div style={{ fontSize:11, color:'var(--text-tertiary)', marginTop:2 }}>
-            {filtered.length} batch{filtered.length !== 1?'es':''} awaiting first process
+          <div style={{ fontSize:11, color:'var(--text-tertiary)', marginTop:2, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+            <span>{filtered.length} batch{filtered.length !== 1?'es':''} awaiting first process</span>
+            {urgencyCounts.overdue > 0 && (
+              <span style={{ color:'#fff', background:'var(--danger)', padding:'2px 8px', borderRadius:10, fontWeight:700 }}>
+                🔴 {urgencyCounts.overdue} missed
+              </span>
+            )}
+            {urgencyCounts.dueSoon > 0 && (
+              <span style={{ color:'#7C2D12', background:'#FEF3C7', padding:'2px 8px', borderRadius:10, fontWeight:700 }}>
+                🟡 {urgencyCounts.dueSoon} due soon
+              </span>
+            )}
           </div>
         </div>
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
@@ -397,9 +449,14 @@ export default function FirstProcessBatchPage() {
                       : 'No batches match your filters.'}
                   </td>
                 </tr>
-              ) : filtered.map((b, idx) => (
+              ) : filtered.map((b, idx) => {
+                const rowUrgency = getUrgency(b.planned_date_raw)
+                return (
                 <tr key={b.id}
-                  style={{ background: idx%2===0?'var(--bg-primary)':'var(--bg-secondary)',
+                  style={{
+                    background: rowUrgency.status === 'overdue'
+                      ? 'rgba(239, 68, 68, 0.07)'
+                      : idx%2===0?'var(--bg-primary)':'var(--bg-secondary)',
                     borderBottom:'1px solid var(--border-light)' }}>
                   {visibleCols.map(col => {
                     const w = colWidths[col.key]
@@ -457,13 +514,21 @@ export default function FirstProcessBatchPage() {
                           ) : '-'}
                         </td>
                       )
-                      case 'planned_date': return (
-                        <td key={col.key} style={{...tdStyle, fontWeight:700,
-                          color: b.planned_date && b.planned_date !== '-' ? 'var(--success)' : 'var(--danger)',
-                          background: (!b.planned_date || b.planned_date === '-') ? 'var(--danger-light)' : ''}}>
-                          {b.planned_date && b.planned_date !== '-' ? b.planned_date : '⚠ No Date'}
-                        </td>
-                      )
+                      case 'planned_date': {
+                        const styleByStatus: Record<string, React.CSSProperties> = {
+                          overdue:  { color:'#fff', background:'var(--danger)' },
+                          due_soon: { color:'#7C2D12', background:'#FEF3C7' },
+                          on_track: { color:'var(--success)', background:'' },
+                          no_date:  { color:'var(--danger)', background:'var(--danger-light)' },
+                        }
+                        return (
+                          <td key={col.key} style={{...tdStyle, fontWeight:700, ...styleByStatus[rowUrgency.status]}}>
+                            {rowUrgency.status === 'no_date' ? '⚠ No Date'
+                              : rowUrgency.status === 'on_track' ? b.planned_date
+                              : `${b.planned_date} · ${rowUrgency.label}`}
+                          </td>
+                        )
+                      }
                       case 'delivery_date': return (
                         <td key={col.key} style={{...tdStyle,color:'var(--warning)',fontWeight:600}}>
                           {b.delivery_date}
@@ -503,7 +568,7 @@ export default function FirstProcessBatchPage() {
                     }
                   })}
                 </tr>
-              ))}
+                )})}
             </tbody>
           </table>
         </div>
