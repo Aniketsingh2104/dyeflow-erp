@@ -76,6 +76,42 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, data })
   }
 
+  // Replace ALL lots for an entry with the given set in one go, and
+  // auto-stamp lot_done_at — used by the Register page's inline lot-entry
+  // field ("L001:15, L002:10"). Delete-then-insert so re-editing the field
+  // and saving again doesn't accumulate stale duplicate lot rows.
+  if (action === 'create_lots_bulk') {
+    const { entryId, lots } = payload
+    if (!entryId || !Array.isArray(lots) || lots.length === 0) {
+      return NextResponse.json({ ok: false, error: 'entryId and a non-empty lots array are required' }, { status: 400 })
+    }
+
+    const { error: delError } = await sb('/greige_lots', {
+      method: 'DELETE',
+      params: { entry_id: `eq.${entryId}` },
+      headers: { 'Prefer': 'return=minimal' },
+    })
+    if (delError) return NextResponse.json({ ok: false, error: delError }, { status: 500 })
+
+    const rows = lots.map((l: any) => ({
+      entry_id:   entryId,
+      lot_number: l.lotNumber,
+      taka:       l.taka != null ? parseInt(l.taka) : null,
+      status:     'active',
+    }))
+    const { data, error } = await sb('/greige_lots', {
+      method: 'POST', body: JSON.stringify(rows),
+      headers: { 'Prefer': 'return=representation' },
+    })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+
+    await dbUpdate('greige_entries', { id: entryId }, {
+      lot_done_at: new Date().toISOString()
+    })
+
+    return NextResponse.json({ ok: true, data })
+  }
+
   if (action === 'update_lot') {
     const patch: Record<string, any> = {}
     if (payload.status !== undefined) patch.status = payload.status

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 
 async function greigeApi(params?: Record<string, string>) {
@@ -35,27 +35,62 @@ function fmtShort(d: any) {
   catch { return '-' }
 }
 
+// Parses "L001:15, L002:10" into [{lotNumber:'L001', taka:15}, {lotNumber:'L002', taka:10}].
+// Taka after the colon is optional (bare "L001" is valid, taka:null). Returns
+// null if the text doesn't parse into at least one valid lot.
+function parseLots(text: string): { lotNumber: string; taka: number | null }[] | null {
+  const parts = text.split(',').map(s => s.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const lots: { lotNumber: string; taka: number | null }[] = []
+  for (const part of parts) {
+    const [lotNumberRaw, takaRaw] = part.split(':').map(s => s?.trim())
+    if (!lotNumberRaw) return null
+    let taka: number | null = null
+    if (takaRaw) {
+      const n = parseInt(takaRaw)
+      if (isNaN(n) || n < 0) return null
+      taka = n
+    }
+    lots.push({ lotNumber: lotNumberRaw, taka })
+  }
+  return lots
+}
+
 export default function GreigeRegisterPage() {
   const router  = useRouter()
   const [entries, setEntries] = useState<any[]>([])
+  const [lots,    setLots]    = useState<any[]>([])
   const [search,  setSearch]  = useState('')
   const [loading, setLoading] = useState(true)
-  const [markModal, setMarkModal] = useState<any>(null) // entry to update
-  const [markType,  setMarkType]  = useState<'lot'|'erp'|'sikka'>('lot')
   const [saving,    setSaving]    = useState(false)
   const [toast,     setToast]     = useState('')
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
+  const [lotInputValue,  setLotInputValue]  = useState('')
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await greigeApi()
-      if (res.ok) setEntries(res.data || [])
+      const [entriesRes, lotsRes] = await Promise.all([
+        greigeApi(),
+        greigeApi({ type: 'lots' }),
+      ])
+      if (entriesRes.ok) setEntries(entriesRes.data || [])
+      if (lotsRes.ok) setLots(lotsRes.data || [])
     } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const lotsByEntry = useMemo(() => {
+    const m: Record<string, any[]> = {}
+    for (const l of lots) {
+      if (!m[l.entry_id]) m[l.entry_id] = []
+      m[l.entry_id].push(l)
+    }
+    return m
+  }, [lots])
 
   const filtered = search.trim()
     ? entries.filter(e => [e.party, e.challan_no]
@@ -69,17 +104,41 @@ export default function GreigeRegisterPage() {
     erpPending: entries.filter(e => !e.erp_done_at).length,
   }
 
-  const markDone = async (entryId: string, type: 'lot'|'erp'|'sikka') => {
+  const markDone = async (entryId: string, type: 'erp'|'sikka') => {
     setSaving(true)
     const now = new Date().toISOString()
     try {
       const patch: Record<string, string> = {}
-      if (type === 'lot')   patch.lot_done_at   = now
       if (type === 'erp')   patch.erp_done_at   = now
       if (type === 'sikka') patch.sikka_done_at  = now
       await greigePost({ action: 'update_entry', id: entryId, ...patch })
       showToast(`✓ ${type.toUpperCase()} marked done`)
-      setMarkModal(null)
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const startEditingLots = (entry: any) => {
+    const existing = lotsByEntry[entry.id] || []
+    setLotInputValue(existing.map((l: any) => l.taka != null ? `${l.lot_number}:${l.taka}` : l.lot_number).join(', '))
+    setEditingEntryId(entry.id)
+  }
+
+  const saveLots = async (entry: any) => {
+    const parsed = parseLots(lotInputValue)
+    if (!parsed) { alert('Invalid format. Use e.g.: L001:15, L002:10'); return }
+    const sumTaka = parsed.reduce((s, l) => s + (l.taka || 0), 0)
+    const totalTaka = parseInt(entry.no_of_taka) || 0
+    if (parsed.some(l => l.taka != null) && sumTaka !== totalTaka) {
+      const proceed = confirm(`Entered taka (${sumTaka}) doesn't match this entry's total taka (${totalTaka}). Save anyway?`)
+      if (!proceed) return
+    }
+    setSaving(true)
+    try {
+      const res = await greigePost({ action: 'create_lots_bulk', entryId: entry.id, lots: parsed })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('✓ Lot(s) saved')
+      setEditingEntryId(null)
+      setLotInputValue('')
       load()
     } finally { setSaving(false) }
   }
@@ -187,7 +246,31 @@ export default function GreigeRegisterPage() {
                     ) : '—'}</td>
                     {/* Lot */}
                     <td style={{ ...cell, background: '#BBDEFB' }}>{fmtShort(lotPl.toISOString())}</td>
-                    <td style={{ ...cell, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20' }}>{fmtShort(e.lot_done_at)}</td>
+                    <td style={{ ...cell, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20', whiteSpace: 'normal', minWidth: 170 }}>
+                      {editingEntryId === e.id ? (
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <input autoFocus value={lotInputValue} placeholder="L001:15, L002:10"
+                            onChange={ev => setLotInputValue(ev.target.value)}
+                            onKeyDown={ev => { if (ev.key === 'Enter') saveLots(e); if (ev.key === 'Escape') setEditingEntryId(null) }}
+                            style={{ fontSize: 10, padding: '3px 6px', width: 130,
+                              border: '1px solid var(--border-medium)', borderRadius: 4 }} />
+                          <button className="xs" disabled={saving} onClick={() => saveLots(e)}>✓</button>
+                          <button className="xs" onClick={() => setEditingEntryId(null)}>✕</button>
+                        </div>
+                      ) : (lotsByEntry[e.id]?.length > 0) ? (
+                        <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', cursor: 'pointer' }}
+                          onClick={() => startEditingLots(e)} title="Click to edit lots">
+                          {(lotsByEntry[e.id] || []).map((l: any) => (
+                            <span key={l.id} style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px',
+                              borderRadius: 6, background: '#1B5E20', color: '#fff' }}>
+                              {l.lot_number}{l.taka != null ? ` (${l.taka}tk)` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <button className="xs" onClick={() => startEditingLots(e)}>+ Add Lot</button>
+                      )}
+                    </td>
                     <td style={{ ...cell, background: '#BBDEFB', textAlign: 'center' }}>{e.lot_done_at ? '✓' : '-'}</td>
                     <td style={{ ...cell, background: '#BBDEFB', color: !e.lot_done_at && Date.now() > lotPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(lotPl, e.lot_done_at)}</td>
                     {/* ERP */}
@@ -201,7 +284,6 @@ export default function GreigeRegisterPage() {
                     <td style={{ ...cell, background: '#FFE0B2', textAlign: 'center' }}>{e.sikka_done_at ? '✓' : '-'}</td>
                     <td style={{ ...cell, background: '#FFE0B2', color: !e.sikka_done_at && Date.now() > skkPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(skkPl, e.sikka_done_at)}</td>
                     <td style={{ ...cell, whiteSpace: 'nowrap' }}>
-                      {!e.lot_done_at && <button className="xs" style={{ marginRight: 2 }} onClick={() => markDone(e.id, 'lot')}>Lot✓</button>}
                       {!e.erp_done_at && <button className="xs" style={{ marginRight: 2 }} onClick={() => markDone(e.id, 'erp')}>ERP✓</button>}
                       {!e.sikka_done_at && <button className="xs" onClick={() => markDone(e.id, 'sikka')}>Sikka✓</button>}
                     </td>
