@@ -28,7 +28,7 @@ function timeDiff(entryTs: string, hoursLimit: number) {
   return { overdue: diff < 0, label: `${h}h ${m}m ${diff < 0 ? 'overdue' : 'left'}` }
 }
 
-const BLANK = { party: '', challan: '', taka: '', qty: '', article: '', blend: '', linkedOrderId: '' }
+const BLANK = { party: '', challan: '', taka: '', qty: '', kg: '', article: '', blend: '', linkedOrderId: '' }
 
 export default function GreigeEntryPage() {
   const router = useRouter()
@@ -36,6 +36,7 @@ export default function GreigeEntryPage() {
   const [orders,   setOrders]   = useState<any[]>([])
   const [parties,  setParties]  = useState<string[]>([])
   const [form,     setForm]     = useState({ ...BLANK })
+  const [showForm, setShowForm] = useState(false)
   const [saving,   setSaving]   = useState(false)
   const [toast,    setToast]    = useState('')
 
@@ -62,6 +63,11 @@ export default function GreigeEntryPage() {
   const handleSubmit = async () => {
     if (!form.party.trim() || !form.challan.trim() || !form.taka || parseInt(form.taka) <= 0) {
       alert('Party Name, Challan No. and No. of Taka are required.'); return
+    }
+    const hasKg  = form.kg  && parseFloat(form.kg)  > 0
+    const hasQty = form.qty && parseFloat(form.qty) > 0
+    if (!hasKg && !hasQty) {
+      alert('Enter either Qty (Kg) or Qty (Meter) — at least one is required.'); return
     }
     setSaving(true)
     try {
@@ -96,11 +102,16 @@ export default function GreigeEntryPage() {
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>New Greige Entry</div>
-        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-          Lot No. within <strong>6 hours</strong> · ERP & Sikka within <strong>24 hours</strong>
+      <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Greige Entry</div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            Lot No. within <strong>6 hours</strong> · ERP & Sikka within <strong>24 hours</strong>
+          </div>
         </div>
+        <button className="primary" onClick={() => setShowForm(v => !v)}>
+          {showForm ? '✕ Close' : '+ Add New Entry'}
+        </button>
       </div>
 
       {/* Stats */}
@@ -128,6 +139,7 @@ export default function GreigeEntryPage() {
       )}
 
       {/* Form */}
+      {showForm && (
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
         borderRadius: 10, padding: '16px 18px', marginBottom: 16 }}>
         <div className="form-grid" style={{ marginBottom: 14 }}>
@@ -150,8 +162,13 @@ export default function GreigeEntryPage() {
               onChange={e => setForm(p => ({ ...p, taka: e.target.value }))} />
           </div>
           <div className="form-group">
-            <label>Qty (optional)</label>
-            <input type="number" min="0" step="0.01" value={form.qty} placeholder="Metres"
+            <label>Qty (Kg) *</label>
+            <input type="number" min="0" step="0.01" value={form.kg} placeholder="e.g. 250"
+              onChange={e => setForm(p => ({ ...p, kg: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label>Qty (Meter) *</label>
+            <input type="number" min="0" step="0.01" value={form.qty} placeholder="e.g. 1200"
               onChange={e => setForm(p => ({ ...p, qty: e.target.value }))} />
           </div>
           <div className="form-group">
@@ -164,6 +181,9 @@ export default function GreigeEntryPage() {
             <input value={form.blend} placeholder="e.g. 100% Viscose"
               onChange={e => setForm(p => ({ ...p, blend: e.target.value }))} />
           </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -8, marginBottom: 14 }}>
+          * At least one of Qty (Kg) or Qty (Meter) is required.
         </div>
         <div className="form-group" style={{ marginBottom: 14 }}>
           <label>Link to Order (optional)</label>
@@ -185,6 +205,7 @@ export default function GreigeEntryPage() {
             onClick={() => router.push('/greige/register')}>View All →</button>
         </div>
       </div>
+      )}
 
       {/* Today's entries */}
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
@@ -201,7 +222,7 @@ export default function GreigeEntryPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Time','Party','Challan','Taka','Qty','Lot Status','ERP Status','Sikka'].map(h => (
+                {['Time','Party','Challan','Taka','Qty (Kg/M)','Lot Status','ERP Status','Sikka'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -221,7 +242,7 @@ export default function GreigeEntryPage() {
                     <td style={{ ...td, fontWeight: 600 }}>{e.party}</td>
                     <td style={td}>{e.challan_no}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{e.no_of_taka}</td>
-                    <td style={td}>{e.qty || '-'}</td>
+                    <td style={td}>{e.kg || e.qty ? [e.kg ? `${e.kg}kg` : null, e.qty ? `${e.qty}m` : null].filter(Boolean).join(' / ') : '-'}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
                       {e.lot_done_at ? (
                         <span style={{ color: 'var(--success)', fontWeight: 700 }}>✓ Done</span>

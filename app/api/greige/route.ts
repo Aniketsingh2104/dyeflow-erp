@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await dbSelect(
     'greige_entries',
     query,
-    'id,party,challan_no,no_of_taka,qty,article,blend,linked_order_id,lot_done_at,erp_done_at,sikka_done_at,created_at,updated_at,orders(order_number)'
+    'id,party,challan_no,no_of_taka,qty,kg,article,blend,linked_order_id,lot_done_at,erp_done_at,sikka_done_at,created_at,updated_at,orders(order_number)'
   )
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   const enriched = (data || []).map((e: any) => ({
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
       challan_no:      payload.challan,
       no_of_taka:      parseInt(payload.taka) || 0,
       qty:             payload.qty ? parseFloat(payload.qty) : null,
+      kg:              payload.kg ? parseFloat(payload.kg) : null,
       article:         payload.article || null,
       blend:           payload.blend   || null,
       linked_order_id: payload.linkedOrderId || null,
