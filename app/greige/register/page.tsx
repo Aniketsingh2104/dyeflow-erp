@@ -20,13 +20,19 @@ function plannedAt(ts: string, hours: number) {
   const d = new Date(ts); d.setHours(d.getHours() + hours); return d
 }
 
-function delay(planned: Date, actual?: string) {
-  const base = actual ? new Date(actual).getTime() : Date.now()
+function delay(planned: Date, actual: string | undefined, now: number) {
+  const base = actual ? new Date(actual).getTime() : now
   const diff = base - planned.getTime()
-  if (!actual && diff <= 0) return 'On time'
-  if (diff <= 0) return 'On time'
+  if (diff <= 0) {
+    if (actual) return 'On time' // completed before deadline — nothing left to count down
+    const remain = -diff
+    const h = Math.floor(remain / 3600000)
+    const m = Math.floor((remain % 3600000) / 60000)
+    return `${h}h ${m}m left`
+  }
   const h = Math.floor(diff / 3600000)
-  return `${h}h late`
+  const m = Math.floor((diff % 3600000) / 60000)
+  return `${h}h ${m}m late`
 }
 
 function fmtShort(d: any) {
@@ -66,6 +72,14 @@ export default function GreigeRegisterPage() {
   const [toast,     setToast]     = useState('')
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
   const [lotInputValue,  setLotInputValue]  = useState('')
+  const [now, setNow] = useState(() => Date.now())
+
+  // Ticks every minute so countdowns/overdue coloring stay live without
+  // needing a full data reload.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(t)
+  }, [])
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
@@ -206,7 +220,7 @@ export default function GreigeRegisterPage() {
                 <th rowSpan={2} style={hd}>PARTY</th>
                 <th rowSpan={2} style={hd}>TAKA</th>
                 <th rowSpan={2} style={hd}>QTY</th>
-                <th rowSpan={2} style={hd}>LINKED ORDER</th>
+                <th rowSpan={2} style={hd}>LOT NO.</th>
                 <th colSpan={4} style={{ ...hd, background: '#BBDEFB', color: '#0C447C', textAlign: 'center' }}>LOT NO. ALLOCATION</th>
                 <th colSpan={4} style={{ ...hd, background: '#C8E6C9', color: '#1B5E20', textAlign: 'center' }}>ERP ENTRY</th>
                 <th colSpan={4} style={{ ...hd, background: '#FFE0B2', color: '#E65100', textAlign: 'center' }}>SIKKA ON GREIGE</th>
@@ -238,15 +252,7 @@ export default function GreigeRegisterPage() {
                     <td style={{ ...cell, fontWeight: 600 }}>{e.party}</td>
                     <td style={cell}>{e.no_of_taka}</td>
                     <td style={cell}>{e.qty || '-'}</td>
-                    <td style={cell}>{e.linked_order_no ? (
-                      <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 6px',
-                        background: 'var(--accent-light)', color: 'var(--accent)', borderRadius: 4 }}>
-                        {e.linked_order_no}
-                      </span>
-                    ) : '—'}</td>
-                    {/* Lot */}
-                    <td style={{ ...cell, background: '#BBDEFB' }}>{fmtShort(lotPl.toISOString())}</td>
-                    <td style={{ ...cell, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20', whiteSpace: 'normal', minWidth: 170 }}>
+                    <td style={{ ...cell, whiteSpace: 'normal', minWidth: 170 }}>
                       {editingEntryId === e.id ? (
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                           <input autoFocus value={lotInputValue} placeholder="L001:15, L002:10"
@@ -271,18 +277,21 @@ export default function GreigeRegisterPage() {
                         <button className="xs" onClick={() => startEditingLots(e)}>+ Add Lot</button>
                       )}
                     </td>
+                    {/* Lot */}
+                    <td style={{ ...cell, background: '#BBDEFB' }}>{fmtShort(lotPl.toISOString())}</td>
+                    <td style={{ ...cell, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20' }}>{fmtShort(e.lot_done_at)}</td>
                     <td style={{ ...cell, background: '#BBDEFB', textAlign: 'center' }}>{e.lot_done_at ? '✓' : '-'}</td>
-                    <td style={{ ...cell, background: '#BBDEFB', color: !e.lot_done_at && Date.now() > lotPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(lotPl, e.lot_done_at)}</td>
+                    <td style={{ ...cell, background: '#BBDEFB', color: !e.lot_done_at && now > lotPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(lotPl, e.lot_done_at, now)}</td>
                     {/* ERP */}
                     <td style={{ ...cell, background: '#C8E6C9' }}>{fmtShort(erpPl.toISOString())}</td>
                     <td style={{ ...cell, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20' }}>{fmtShort(e.erp_done_at)}</td>
                     <td style={{ ...cell, background: '#C8E6C9', textAlign: 'center' }}>{e.erp_done_at ? '✓' : '-'}</td>
-                    <td style={{ ...cell, background: '#C8E6C9', color: !e.erp_done_at && Date.now() > erpPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(erpPl, e.erp_done_at)}</td>
+                    <td style={{ ...cell, background: '#C8E6C9', color: !e.erp_done_at && now > erpPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(erpPl, e.erp_done_at, now)}</td>
                     {/* Sikka */}
                     <td style={{ ...cell, background: '#FFE0B2' }}>{fmtShort(skkPl.toISOString())}</td>
                     <td style={{ ...cell, background: '#FFE0B2', fontWeight: 700, color: '#1B5E20' }}>{fmtShort(e.sikka_done_at)}</td>
                     <td style={{ ...cell, background: '#FFE0B2', textAlign: 'center' }}>{e.sikka_done_at ? '✓' : '-'}</td>
-                    <td style={{ ...cell, background: '#FFE0B2', color: !e.sikka_done_at && Date.now() > skkPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(skkPl, e.sikka_done_at)}</td>
+                    <td style={{ ...cell, background: '#FFE0B2', color: !e.sikka_done_at && now > skkPl.getTime() ? 'var(--danger)' : 'inherit' }}>{delay(skkPl, e.sikka_done_at, now)}</td>
                     <td style={{ ...cell, whiteSpace: 'nowrap' }}>
                       {!e.erp_done_at && <button className="xs" style={{ marginRight: 2 }} onClick={() => markDone(e.id, 'erp')}>ERP✓</button>}
                       {!e.sikka_done_at && <button className="xs" onClick={() => markDone(e.id, 'sikka')}>Sikka✓</button>}
