@@ -97,6 +97,8 @@ export async function POST(req: NextRequest) {
       entry_id:   entryId,
       lot_number: l.lotNumber,
       taka:       l.taka != null ? parseInt(l.taka) : null,
+      kg:         l.kg   != null ? parseFloat(l.kg)  : null,
+      qty:        l.qty  != null ? parseFloat(l.qty) : null,
       status:     'active',
     }))
     const { data, error } = await sb('/greige_lots', {

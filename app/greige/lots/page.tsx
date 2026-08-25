@@ -1,31 +1,28 @@
 'use client'
-// Greige Lots — view and manage lots per greige entry
-import { useEffect, useState, useCallback } from 'react'
+// Greige Lot Details — flat, read-only register of every individual lot
+// (not grouped by entry). Lot entry itself now happens on the Register
+// page's Lot No. form (with automatic Kg/Meter calculation from taka share);
+// this page is purely for viewing/searching every lot's full detail.
+
+import { useEffect, useState, useCallback, useMemo } from 'react'
 
 async function greigeApi(params?: Record<string, string>) {
   const qs = params ? '?' + new URLSearchParams(params).toString() : ''
   const res = await fetch(`/api/greige${qs}`, { cache: 'no-store' })
   return res.json()
 }
-async function greigePost(body: Record<string, any>) {
-  const res = await fetch('/api/greige', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  return res.json()
+
+function fmtDateTime(d: any) {
+  if (!d) return '-'
+  try { return new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+  catch { return '-' }
 }
 
 export default function GreigeLotsPage() {
   const [entries, setEntries] = useState<any[]>([])
   const [lots,    setLots]    = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [toast,   setToast]   = useState('')
-  const [addModal, setAddModal] = useState<any>(null) // entry
-  const [lotForm,  setLotForm]  = useState({ lotNumber: '', meters: '' })
-  const [saving,   setSaving]   = useState(false)
-  const [search,   setSearch]   = useState('')
-
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
+  const [search,  setSearch]  = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -41,45 +38,66 @@ export default function GreigeLotsPage() {
 
   useEffect(() => { load() }, [load])
 
-  const entryLots = (entryId: string) => lots.filter(l => l.entry_id === entryId)
+  const entryById = useMemo(() => {
+    const m: Record<string, any> = {}
+    for (const e of entries) m[e.id] = e
+    return m
+  }, [entries])
+
+  // One row per lot, joined back to its parent entry for party/challan/article.
+  const rows = useMemo(() => {
+    return lots.map((l: any) => {
+      const e = entryById[l.entry_id] || {}
+      return {
+        ...l,
+        party:        e.party        || '-',
+        challan_no:   e.challan_no   || '-',
+        article:      e.article      || '-',
+        blend:        e.blend        || '-',
+        entry_taka:   e.no_of_taka,
+        entry_kg:     e.kg,
+        entry_qty:    e.qty,
+        entry_created: e.created_at,
+      }
+    })
+  }, [lots, entryById])
 
   const filtered = search.trim()
-    ? entries.filter(e => [e.party, e.challan_no]
+    ? rows.filter(r => [r.lot_number, r.party, r.challan_no, r.article]
         .some(v => String(v ?? '').toLowerCase().includes(search.toLowerCase())))
-    : entries
+    : rows
 
-  const addLot = async () => {
-    if (!lotForm.lotNumber.trim()) { alert('Lot number is required'); return }
-    if (!addModal) return
-    setSaving(true)
-    try {
-      const res = await greigePost({
-        action: 'create_lot',
-        entryId: addModal.id,
-        lotNumber: lotForm.lotNumber.trim(),
-        meters: lotForm.meters,
-      })
-      if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast('✓ Lot added')
-      setAddModal(null)
-      setLotForm({ lotNumber: '', meters: '' })
-      load()
-    } finally { setSaving(false) }
+  // Sorted most recent first.
+  const sorted = [...filtered].sort((a, b) =>
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )
+
+  const totals = {
+    lots: sorted.length,
+    kg:   sorted.reduce((s, r) => s + (parseFloat(r.kg)  || 0), 0),
+    qty:  sorted.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0),
+    taka: sorted.reduce((s, r) => s + (parseInt(r.taka)  || 0), 0),
   }
 
-  if (loading) return (
+  // Only blank the page on the true first load.
+  if (loading && entries.length === 0) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</div>
   )
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700 }}>Greige Lots</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>Lot Details</div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            {totals.lots} lot{totals.lots !== 1 ? 's' : ''} · {totals.kg.toFixed(1)} Kg total · {totals.qty.toFixed(1)} Meter total · {totals.taka} Taka total
+          </div>
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search party / challan…"
-            style={{ width: 200, padding: '6px 10px', fontSize: 12,
+            placeholder="Search lot no. / party / challan / article…"
+            style={{ width: 260, padding: '6px 10px', fontSize: 12,
               border: '1px solid var(--border-medium)', borderRadius: 5,
               background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           {search && <button className="xs" onClick={() => setSearch('')}>✕</button>}
@@ -87,90 +105,55 @@ export default function GreigeLotsPage() {
         </div>
       </div>
 
-      {toast && (
-        <div style={{ background: 'var(--success-light)', color: 'var(--success)',
-          border: '1px solid var(--success)', borderRadius: 8, padding: '8px 14px',
-          marginBottom: 10, fontSize: 13, fontWeight: 600 }}>{toast}</div>
-      )}
-
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-tertiary)', fontSize: 14 }}>
-          No greige entries yet.
+      {sorted.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)', fontSize: 14 }}>
+          {rows.length === 0
+            ? 'No lots entered yet. Add lots from the Greige Register page.'
+            : 'No lots match your search.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {filtered.map(e => {
-            const eLots = entryLots(e.id)
-            return (
-              <div key={e.id} style={{ background: 'var(--bg-primary)',
-                border: '1px solid var(--border-light)', borderRadius: 10, padding: '14px 16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <div>
-                    <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{e.challan_no}</span>
-                    <span style={{ fontSize: 13, color: 'var(--text-secondary)', marginLeft: 8 }}>{e.party}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 8 }}>
-                      {e.no_of_taka} taka · {eLots.length} lot{eLots.length !== 1 ? 's' : ''}
+        <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+          borderRadius: 10, overflow: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', minWidth: 900, width: '100%', fontSize: 12 }}>
+            <thead style={{ background: 'var(--bg-secondary)' }}>
+              <tr>
+                {['Lot No.', 'Qty (Kg)', 'Qty (Meter)', 'Taka', 'Party', 'Challan No.', 'Article', 'Blend', 'Entry Date', 'Status'].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10,
+                    fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
+                    letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
+                    whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r, i) => (
+                <tr key={r.id} style={{
+                  background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
+                  borderBottom: '1px solid var(--border-light)' }}>
+                  <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{r.lot_number}</td>
+                  <td style={td}>{r.kg != null ? r.kg : '-'}</td>
+                  <td style={td}>{r.qty != null ? r.qty : '-'}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{r.taka != null ? r.taka : '-'}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{r.party}</td>
+                  <td style={td}>{r.challan_no}</td>
+                  <td style={td}>{r.article}</td>
+                  <td style={td}>{r.blend}</td>
+                  <td style={{ ...td, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(r.created_at)}</td>
+                  <td style={td}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                      background: r.status === 'done' ? 'var(--success-light)' : 'var(--accent-light)',
+                      color: r.status === 'done' ? 'var(--success)' : 'var(--accent)' }}>
+                      {r.status || 'active'}
                     </span>
-                  </div>
-                  <button className="xs primary" onClick={() => { setAddModal(e); setLotForm({ lotNumber: '', meters: '' }) }}>
-                    + Add Lot
-                  </button>
-                </div>
-                {eLots.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--danger)', fontWeight: 600 }}>
-                    ⚠ No lots added yet
-                    {!e.lot_done_at && ' — must be done within 6 hours of entry'}
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {eLots.map(lot => (
-                      <span key={lot.id} style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px',
-                        background: lot.status === 'done' ? 'var(--success-light)' : 'var(--accent-light)',
-                        color: lot.status === 'done' ? 'var(--success)' : 'var(--accent)',
-                        borderRadius: 6, border: `1px solid ${lot.status === 'done' ? 'var(--success)' : 'var(--accent)'}` }}>
-                        {lot.lot_number} {lot.meters ? `· ${lot.meters}m` : ''}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {addModal && (
-        <div className="modal-overlay" onClick={() => setAddModal(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Add Lot — {addModal.challan_no}</span>
-              <button className="small" onClick={() => setAddModal(null)}>✕</button>
-            </div>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8,
-              padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
-              {addModal.party} · {addModal.no_of_taka} taka
-            </div>
-            <div className="form-grid" style={{ marginBottom: 14 }}>
-              <div className="form-group">
-                <label>Lot Number *</label>
-                <input value={lotForm.lotNumber} placeholder="e.g. LOT-001" autoFocus
-                  onChange={e => setLotForm(p => ({ ...p, lotNumber: e.target.value }))} />
-              </div>
-              <div className="form-group">
-                <label>Metres</label>
-                <input type="number" min="0" step="0.1" value={lotForm.meters}
-                  onChange={e => setLotForm(p => ({ ...p, meters: e.target.value }))} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="primary" onClick={addLot} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Add Lot'}
-              </button>
-              <button onClick={() => setAddModal(null)}>Cancel</button>
-            </div>
-          </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
   )
 }
+
+const td: React.CSSProperties = { padding: '8px 12px', fontSize: 12, color: 'var(--text-primary)', whiteSpace: 'nowrap' }

@@ -41,6 +41,21 @@ function fmtShort(d: any) {
   catch { return '-' }
 }
 
+// A lot's share of the entry's total Kg/Meter, proportional to its share of
+// the entry's total taka: lot_kg = (lot_taka / entry_taka) * entry_kg (same
+// for meter). Uses the entry's fixed total taka as the denominator (not the
+// sum of taka entered so far) so each lot's share stays correct even when
+// lots are added incrementally rather than all at once.
+function computeLotQty(taka: string, entryTaka: number, entryKg: number | null, entryQty: number | null) {
+  const t = parseInt(taka)
+  if (!t || !entryTaka) return { kg: null as number | null, qty: null as number | null }
+  const ratio = t / entryTaka
+  return {
+    kg:  entryKg  != null ? Math.round(entryKg  * ratio * 100) / 100 : null,
+    qty: entryQty != null ? Math.round(entryQty * ratio * 100) / 100 : null,
+  }
+}
+
 export default function GreigeRegisterPage() {
   const router  = useRouter()
   const [entries, setEntries] = useState<any[]>([])
@@ -127,13 +142,19 @@ export default function GreigeRegisterPage() {
 
   const saveLots = async () => {
     if (!lotModalEntry) return
+    const entryTaka = parseInt(lotModalEntry.no_of_taka) || 0
+    const entryKg  = lotModalEntry.kg  != null ? parseFloat(lotModalEntry.kg)  : null
+    const entryQty = lotModalEntry.qty != null ? parseFloat(lotModalEntry.qty) : null
     const cleaned = lotRows
-      .map(r => ({ lotNumber: r.lotNumber.trim(), taka: r.taka.trim() ? parseInt(r.taka) : null }))
+      .map(r => {
+        const taka = r.taka.trim() ? parseInt(r.taka) : null
+        const computed = r.taka.trim() ? computeLotQty(r.taka, entryTaka, entryKg, entryQty) : { kg: null, qty: null }
+        return { lotNumber: r.lotNumber.trim(), taka, kg: computed.kg, qty: computed.qty }
+      })
       .filter(r => r.lotNumber)
     if (cleaned.length === 0) { alert('Enter at least one Lot Number.'); return }
-    const totalTaka = parseInt(lotModalEntry.no_of_taka) || 0
-    if (cleaned.some(l => l.taka != null) && lotRowsTotal !== totalTaka) {
-      const proceed = confirm(`Entered taka (${lotRowsTotal}) doesn't match this entry's total taka (${totalTaka}). Save anyway?`)
+    if (cleaned.some(l => l.taka != null) && lotRowsTotal !== entryTaka) {
+      const proceed = confirm(`Entered taka (${lotRowsTotal}) doesn't match this entry's total taka (${entryTaka}). Save anyway?`)
       if (!proceed) return
     }
     setSaving(true)
@@ -308,21 +329,35 @@ export default function GreigeRegisterPage() {
               <div style={{ width: 28 }} />
             </div>
 
-            {lotRows.map((row, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-                <input value={row.lotNumber} placeholder="e.g. L001" autoFocus={idx === 0}
-                  onChange={ev => updateLotRow(idx, 'lotNumber', ev.target.value)}
-                  style={{ flex: 1, padding: '7px 10px', fontSize: 13,
-                    border: '1px solid var(--border-medium)', borderRadius: 6 }} />
-                <input type="number" min="0" value={row.taka} placeholder="Taka"
-                  onChange={ev => updateLotRow(idx, 'taka', ev.target.value)}
-                  style={{ width: 90, padding: '7px 10px', fontSize: 13,
-                    border: '1px solid var(--border-medium)', borderRadius: 6 }} />
-                <button className="xs" onClick={() => removeLotRow(idx)}
-                  disabled={lotRows.length === 1}
-                  style={{ opacity: lotRows.length === 1 ? 0.3 : 1 }}>✕</button>
+            {lotRows.map((row, idx) => {
+              const computed = row.taka.trim()
+                ? computeLotQty(row.taka, parseInt(lotModalEntry.no_of_taka) || 0,
+                    lotModalEntry.kg != null ? parseFloat(lotModalEntry.kg) : null,
+                    lotModalEntry.qty != null ? parseFloat(lotModalEntry.qty) : null)
+                : { kg: null, qty: null }
+              return (
+              <div key={idx} style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input value={row.lotNumber} placeholder="e.g. L001" autoFocus={idx === 0}
+                    onChange={ev => updateLotRow(idx, 'lotNumber', ev.target.value)}
+                    style={{ flex: 1, padding: '7px 10px', fontSize: 13,
+                      border: '1px solid var(--border-medium)', borderRadius: 6 }} />
+                  <input type="number" min="0" value={row.taka} placeholder="Taka"
+                    onChange={ev => updateLotRow(idx, 'taka', ev.target.value)}
+                    style={{ width: 90, padding: '7px 10px', fontSize: 13,
+                      border: '1px solid var(--border-medium)', borderRadius: 6 }} />
+                  <button className="xs" onClick={() => removeLotRow(idx)}
+                    disabled={lotRows.length === 1}
+                    style={{ opacity: lotRows.length === 1 ? 0.3 : 1 }}>✕</button>
+                </div>
+                {(computed.kg != null || computed.qty != null) && (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, paddingLeft: 2 }}>
+                    → {computed.kg != null ? `${computed.kg} Kg` : ''}{computed.kg != null && computed.qty != null ? ' / ' : ''}{computed.qty != null ? `${computed.qty} Meter` : ''} (calculated automatically)
+                  </div>
+                )}
               </div>
-            ))}
+              )
+            })}
 
             <button className="small" onClick={addLotRow} style={{ marginBottom: 14 }}>
               + Add Another Lot
