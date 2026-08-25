@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
 import { collabBlockMessage, getCollabInfo } from '@/lib/collab'
+import { getUrgency, URGENCY_CELL_STYLE } from '@/lib/dateUrgency'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -449,6 +450,11 @@ export default function FmsProcessPage() {
       )
     : rows
 
+  // Counts of pending batches whose planned date for THIS process has passed
+  // or is coming up soon — shown as a header badge so it's noticed immediately.
+  const overdueCount = displayRows.filter(r => r.bpStatus === 'pending' && getUrgency(r.plannedDate).status === 'overdue').length
+  const dueSoonCount = displayRows.filter(r => r.bpStatus === 'pending' && getUrgency(r.plannedDate).status === 'due_soon').length
+
   // Only show the full-page loading placeholder on the true first load (no
   // data yet). Every action handler (Done/Rollback/Faulty/FOB) calls loadRows()
   // again afterward to get fresh authoritative data — without this guard,
@@ -476,6 +482,18 @@ export default function FmsProcessPage() {
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 10 }}>
             {displayRows.length} batch{displayRows.length !== 1 ? 'es' : ''}
           </span>
+          {overdueCount > 0 && (
+            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#fff',
+              background: 'var(--danger)', padding: '2px 8px', borderRadius: 10 }}>
+              🔴 {overdueCount} missed
+            </span>
+          )}
+          {dueSoonCount > 0 && (
+            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#7C2D12',
+              background: '#FEF3C7', padding: '2px 8px', borderRadius: 10 }}>
+              🟡 {dueSoonCount} due soon
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
@@ -561,11 +579,14 @@ export default function FmsProcessPage() {
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((row, idx) => (
+                {displayRows.map((row, idx) => {
+                  const overduePending = row.bpStatus === 'pending' && getUrgency(row.plannedDate).status === 'overdue'
+                  return (
                   <tr key={row.id || idx} style={{
                     background: row.bpStatus === 'fob'    ? '#F3E8FF'
                               : row.isFaulty                    ? '#FEE2E2'
                               : row.isCompleted                 ? 'var(--success-light)'
+                              : overduePending                  ? 'rgba(239, 68, 68, 0.07)'
                               : idx % 2 === 0                  ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                     borderBottom: row.isFaulty ? '1px solid #FCA5A5' : '1px solid var(--border-light)',
                     opacity: 1 }}>
@@ -618,7 +639,19 @@ export default function FmsProcessPage() {
                         case 'remarks':       return <td key={col.id} style={{ ...s, fontSize:11, whiteSpace:'normal' }}>{row.remarks}</td>
                         case 'delivery_date': return <td key={col.id} style={{ ...s, fontWeight:700, color:'var(--warning)' }}>{row.delivery_date !== '-' ? fmtDate(row.delivery_date) : '-'}</td>
                         case 'process_route': return <td key={col.id} style={{ ...s, fontWeight: 600, color: 'var(--accent)' }}>{row.routeStr}</td>
-                        case 'planned_date':  return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.plannedDate ? 'var(--success)' : 'var(--text-tertiary)' }}>{row.plannedDate ? fmtDate(row.plannedDate) : '-'}</td>
+                        case 'planned_date': {
+                          if (row.bpStatus !== 'pending') {
+                            return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.plannedDate ? 'var(--success)' : 'var(--text-tertiary)' }}>{row.plannedDate ? fmtDate(row.plannedDate) : '-'}</td>
+                          }
+                          const u = getUrgency(row.plannedDate)
+                          return (
+                            <td key={col.id} style={{ ...s, fontWeight: 700, ...URGENCY_CELL_STYLE[u.status] }}>
+                              {u.status === 'no_date' ? '⚠ No Date'
+                                : u.status === 'on_track' ? fmtDate(row.plannedDate)
+                                : `${fmtDate(row.plannedDate)} · ${u.label}`}
+                            </td>
+                          )
+                        }
                         case 'actual_date':   return (
                           <td key={col.id} style={{ ...s, fontWeight: 700,
                             color: row.actualDate
@@ -719,7 +752,7 @@ export default function FmsProcessPage() {
                       }
                     })}
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>
