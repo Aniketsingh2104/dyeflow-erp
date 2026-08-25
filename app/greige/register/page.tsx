@@ -219,7 +219,8 @@ export default function GreigeRegisterPage() {
                 <th rowSpan={2} style={hd}>CHALLAN</th>
                 <th rowSpan={2} style={hd}>PARTY</th>
                 <th rowSpan={2} style={hd}>TAKA</th>
-                <th rowSpan={2} style={hd}>QTY</th>
+                <th rowSpan={2} style={hd}>QTY (KG)</th>
+                <th rowSpan={2} style={hd}>QTY (METER)</th>
                 <th rowSpan={2} style={hd}>LOT NO.</th>
                 <th colSpan={4} style={{ ...hd, background: '#BBDEFB', color: '#0C447C', textAlign: 'center' }}>LOT NO. ALLOCATION</th>
                 <th colSpan={4} style={{ ...hd, background: '#C8E6C9', color: '#1B5E20', textAlign: 'center' }}>ERP ENTRY</th>
@@ -251,17 +252,20 @@ export default function GreigeRegisterPage() {
                     <td style={{ ...cell, fontWeight: 700 }}>{e.challan_no}</td>
                     <td style={{ ...cell, fontWeight: 600 }}>{e.party}</td>
                     <td style={cell}>{e.no_of_taka}</td>
+                    <td style={cell}>{e.kg || '-'}</td>
                     <td style={cell}>{e.qty || '-'}</td>
-                    <td style={{ ...cell, whiteSpace: 'normal', minWidth: 170 }}>
+                    <td style={{ ...cell, whiteSpace: 'normal', minWidth: 260 }}>
                       {editingEntryId === e.id ? (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                           <input autoFocus value={lotInputValue} placeholder="L001:15, L002:10"
                             onChange={ev => setLotInputValue(ev.target.value)}
                             onKeyDown={ev => { if (ev.key === 'Enter') saveLots(e); if (ev.key === 'Escape') setEditingEntryId(null) }}
-                            style={{ fontSize: 10, padding: '3px 6px', width: 130,
+                            style={{ fontSize: 11, padding: '4px 8px', width: 230,
                               border: '1px solid var(--border-medium)', borderRadius: 4 }} />
-                          <button className="xs" disabled={saving} onClick={() => saveLots(e)}>✓</button>
-                          <button className="xs" onClick={() => setEditingEntryId(null)}>✕</button>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="xs" disabled={saving} onClick={() => saveLots(e)}>✓ Save</button>
+                            <button className="xs" onClick={() => setEditingEntryId(null)}>✕ Cancel</button>
+                          </div>
                         </div>
                       ) : (lotsByEntry[e.id]?.length > 0) ? (
                         <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', cursor: 'pointer' }}
