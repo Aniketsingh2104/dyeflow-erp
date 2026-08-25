@@ -543,7 +543,11 @@ export default function OrdersPage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  if (loading) return (
+  // Only blank the page on the true first load; saveOrder/doAssign/
+  // doBulkFullSplit/saveSplits/applyBulk all call loadAll() again afterward
+  // (doFullSplit is the one exception — it updates state locally instead,
+  // see above — but every other action here still does a real reload).
+  if (loading && orders.length === 0) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
       Loading orders…
