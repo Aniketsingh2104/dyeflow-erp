@@ -33,7 +33,9 @@
  * machine assignments aren't blended in. Same caveat for process routes:
  * live orders.process_route is an array of codes (['O','D','H']), historical
  * process_route is a slash-joined string ("D/F") — different formats, not
- * blended.
+ * blended. Supervisor names, by contrast, DO match cleanly between live and
+ * historical data, so getRecommendedSupervisor() and the supervisor filter on
+ * getFaultyRisk/getFobRisk blend both sources like article/colour already do.
  */
 import { dbSelect } from '@/lib/supabase'
 
@@ -71,6 +73,16 @@ export interface RouteRecommendation {
   article: string
   colour: string | null
   recommendedRoute: string | null
+  sampleSize: number
+  confidence: 'learned' | 'shrunk' | 'default'
+  basis: string
+  alternatives: { value: string; count: number }[]
+}
+
+export interface SupervisorRecommendation {
+  article: string
+  colour: string | null
+  recommendedSupervisor: string | null
   sampleSize: number
   confidence: 'learned' | 'shrunk' | 'default'
   basis: string
@@ -268,6 +280,7 @@ interface RiskPool {
   liveFlaggedIds: Set<string>
   articleByOrderId: Record<string, string>
   colourByOrderId: Record<string, string>
+  supervisorByOrderId: Record<string, string>
   histAll: any[]
   histFlaggedNos: Set<string>
   histReasons: { article: string | null; colour: string | null; reason: string | null }[]
@@ -285,16 +298,18 @@ async function loadRiskPool(kind: 'faulty' | 'fob'): Promise<RiskPool> {
     await Promise.all([
       dbSelect(liveTable, { limit: '2000' }, 'batch_id'),
       dbSelect('batches', { limit: '2000' }, 'id,order_id'),
-      dbSelect('orders', { limit: '1000' }, 'id,article,color'),
-      dbSelect('historical_batches', { limit: '50000' }, 'batch_no,article,colour'),
+      dbSelect('orders', { limit: '1000' }, 'id,article,color,supervisors(name)'),
+      dbSelect('historical_batches', { limit: '50000' }, 'batch_no,article,colour,supervisor'),
       dbSelect(histTable, { limit: '5000' }, histCols),
     ])
 
   const articleByOrderId: Record<string, string> = {}
   const colourByOrderId: Record<string, string> = {}
+  const supervisorByOrderId: Record<string, string> = {}
   for (const o of (liveOrders || []) as any[]) {
     articleByOrderId[o.id] = o.article
     colourByOrderId[o.id] = o.color
+    if (o.supervisors?.name) supervisorByOrderId[o.id] = o.supervisors.name
   }
   const liveFlaggedIds = new Set((liveFlaggedRows || []).map((r: any) => r.batch_id).filter(Boolean))
   const liveAll = (liveBatches || []) as any[]
@@ -311,16 +326,17 @@ async function loadRiskPool(kind: 'faulty' | 'fob'): Promise<RiskPool> {
   const totalFlagged = liveFlaggedIds.size + histFlaggedNos.size
   const factoryAverageRate = totalBatches > 0 ? totalFlagged / totalBatches : 0
 
-  return { kind, liveAll, liveFlaggedIds, articleByOrderId, colourByOrderId, histAll, histFlaggedNos, histReasons, totalBatches, totalFlagged, factoryAverageRate }
+  return { kind, liveAll, liveFlaggedIds, articleByOrderId, colourByOrderId, supervisorByOrderId, histAll, histFlaggedNos, histReasons, totalBatches, totalFlagged, factoryAverageRate }
 }
 
-function computeRiskFromPool(pool: RiskPool, article?: string, colour?: string): RiskEstimate {
+function computeRiskFromPool(pool: RiskPool, article?: string, colour?: string, supervisor?: string): RiskEstimate {
   const label = pool.kind === 'faulty' ? 'faulty' : 'FOB'
   const everLabel = pool.kind === 'faulty' ? 'ever faulty' : 'ever sent to FOB'
 
   const liveSegment = pool.liveAll.filter((b) => {
     if (article && pool.articleByOrderId[b.order_id] !== article) return false
     if (colour && pool.colourByOrderId[b.order_id] !== colour) return false
+    if (supervisor && pool.supervisorByOrderId[b.order_id] !== supervisor) return false
     return true
   })
   const liveFlaggedInSegment = liveSegment.filter((b) => pool.liveFlaggedIds.has(b.id)).length
@@ -328,6 +344,7 @@ function computeRiskFromPool(pool: RiskPool, article?: string, colour?: string):
   const histSegment = pool.histAll.filter((b: any) => {
     if (article && b.article !== article) return false
     if (colour && b.colour !== colour) return false
+    if (supervisor && b.supervisor !== supervisor) return false
     return true
   })
   const histFlaggedInSegment = histSegment.filter((b: any) => pool.histFlaggedNos.has(b.batch_no)).length
@@ -336,6 +353,10 @@ function computeRiskFromPool(pool: RiskPool, article?: string, colour?: string):
   const segmentFlaggedCount = liveFlaggedInSegment + histFlaggedInSegment
   const rawRate = segmentSize > 0 ? segmentFlaggedCount / segmentSize : 0
 
+  // Reason breakdown stays at article(+colour) level even when a supervisor
+  // filter is applied — narrowing reasons by supervisor too would shrink the
+  // sample further and make the "top reasons" list unreliable at exactly the
+  // point it matters most (comparing supervisors for the same article).
   const reasonPool = pool.histReasons
     .filter((r) => (!article || r.article === article) && (!colour || r.colour === colour))
     .map((r) => r.reason)
@@ -371,30 +392,30 @@ function computeRiskFromPool(pool: RiskPool, article?: string, colour?: string):
   }
 }
 
-/** Faulty-risk rate for an article (optionally + colour), blending live faulty_records with imported historical_faulty. */
-export async function getFaultyRisk(article?: string, colour?: string): Promise<RiskEstimate> {
+/** Faulty-risk rate for an article (optionally + colour, + supervisor), blending live faulty_records with imported historical_faulty. */
+export async function getFaultyRisk(article?: string, colour?: string, supervisor?: string): Promise<RiskEstimate> {
   const pool = await loadRiskPool('faulty')
-  return computeRiskFromPool(pool, article, colour)
+  return computeRiskFromPool(pool, article, colour, supervisor)
 }
 
-/** Batched version — one pool fetch covering many (article, colour) segments at once. */
-export async function getFaultyRiskBatch(segments: { article?: string; colour?: string }[]): Promise<RiskEstimate[]> {
+/** Batched version — one pool fetch covering many (article, colour, supervisor) segments at once. */
+export async function getFaultyRiskBatch(segments: { article?: string; colour?: string; supervisor?: string }[]): Promise<RiskEstimate[]> {
   if (segments.length === 0) return []
   const pool = await loadRiskPool('faulty')
-  return segments.map((s) => computeRiskFromPool(pool, s.article, s.colour))
+  return segments.map((s) => computeRiskFromPool(pool, s.article, s.colour, s.supervisor))
 }
 
-/** FOB-risk rate for an article (optionally + colour), blending live fob_records with imported historical_fob. */
-export async function getFobRisk(article?: string, colour?: string): Promise<RiskEstimate> {
+/** FOB-risk rate for an article (optionally + colour, + supervisor), blending live fob_records with imported historical_fob. */
+export async function getFobRisk(article?: string, colour?: string, supervisor?: string): Promise<RiskEstimate> {
   const pool = await loadRiskPool('fob')
-  return computeRiskFromPool(pool, article, colour)
+  return computeRiskFromPool(pool, article, colour, supervisor)
 }
 
-/** Batched version — one pool fetch covering many (article, colour) segments at once. */
-export async function getFobRiskBatch(segments: { article?: string; colour?: string }[]): Promise<RiskEstimate[]> {
+/** Batched version — one pool fetch covering many (article, colour, supervisor) segments at once. */
+export async function getFobRiskBatch(segments: { article?: string; colour?: string; supervisor?: string }[]): Promise<RiskEstimate[]> {
   if (segments.length === 0) return []
   const pool = await loadRiskPool('fob')
-  return segments.map((s) => computeRiskFromPool(pool, s.article, s.colour))
+  return segments.map((s) => computeRiskFromPool(pool, s.article, s.colour, s.supervisor))
 }
 
 /** Recommended dyeing machine for a batch type (article, optionally + colour). Historical data only — see file header on the machine-naming mismatch. */
@@ -471,6 +492,54 @@ export async function getRecommendedRoute(article: string, colour?: string): Pro
   return {
     article, colour: colour || null, recommendedRoute: null, sampleSize: articleFilled.length, confidence: 'default',
     basis: `No historical route data found for article "${article}".`,
+    alternatives: [],
+  }
+}
+
+/** Recommended supervisor for a batch type (article, optionally + colour).
+ *  Unlike machine/route, supervisor names match cleanly between live orders
+ *  and historical_batches, so this blends both sources for real confidence
+ *  rather than relying on historical data alone. */
+export async function getRecommendedSupervisor(article: string, colour?: string): Promise<SupervisorRecommendation> {
+  const [{ data: liveOrders }, { data: histBatches }] = await Promise.all([
+    dbSelect('orders', { article: `eq.${article}` }, 'color,supervisors(name)'),
+    dbSelect('historical_batches', { article: `eq.${article}` }, 'colour,supervisor'),
+  ])
+
+  const liveRows = (liveOrders || []) as any[]
+  const histRows = (histBatches || []) as any[]
+
+  const liveAllColour = liveRows.map((o) => o.supervisors?.name).filter(Boolean)
+  const histAllColour = histRows.map((b) => b.supervisor).filter(Boolean)
+  const combinedAllColour = [...liveAllColour, ...histAllColour]
+
+  const liveWithColour = colour ? liveRows.filter((o) => o.color === colour).map((o) => o.supervisors?.name).filter(Boolean) : []
+  const histWithColour = colour ? histRows.filter((b) => b.colour === colour).map((b) => b.supervisor).filter(Boolean) : []
+  const combinedWithColour = [...liveWithColour, ...histWithColour]
+
+  const build = (arr: string[], conf: SupervisorRecommendation['confidence'], basis: string): SupervisorRecommendation => {
+    const top = topByFrequency(arr, 3)
+    return { article, colour: colour || null, recommendedSupervisor: top[0]?.value || null, sampleSize: arr.length, confidence: conf, basis, alternatives: top }
+  }
+
+  if (colour && combinedWithColour.length >= MIN_SAMPLES_FOR_CONFIDENT) {
+    return build(combinedWithColour, 'learned', `Learned from ${combinedWithColour.length} orders of ${article} in ${colour} (${liveWithColour.length} live, ${histWithColour.length} historical).`)
+  }
+  if (combinedAllColour.length >= MIN_SAMPLES_FOR_CONFIDENT) {
+    return build(
+      combinedAllColour,
+      colour ? 'shrunk' : 'learned',
+      colour
+        ? `Not enough ${colour}-specific history — using all ${article} orders (${combinedAllColour.length} samples) regardless of colour.`
+        : `Learned from ${combinedAllColour.length} orders of ${article} (${liveAllColour.length} live, ${histAllColour.length} historical).`
+    )
+  }
+  if (combinedAllColour.length >= MIN_SAMPLES_FOR_SHRUNK) {
+    return build(combinedAllColour, 'shrunk', `Only ${combinedAllColour.length} sample(s) for ${article} — treat this as a rough lead, not a confident recommendation.`)
+  }
+  return {
+    article, colour: colour || null, recommendedSupervisor: null, sampleSize: combinedAllColour.length, confidence: 'default',
+    basis: `No historical supervisor-assignment data found for article "${article}".`,
     alternatives: [],
   }
 }

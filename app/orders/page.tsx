@@ -1142,6 +1142,39 @@ function AssignModal({ order, supervisors, onAssign, onClose, saving }: {
   const [chosen, setChosen] = useState(
     supervisors.find(s => s.id === order.supervisor_id)?.name || ''
   )
+
+  // Recommended supervisor for this article — fetched once, since it doesn't
+  // depend on what's currently selected in the dropdown.
+  const [recSup, setRecSup] = useState<any>(null)
+  useEffect(() => {
+    if (!order.article) return
+    let cancelled = false
+    const colourQ = order.color ? `&colour=${encodeURIComponent(order.color)}` : ''
+    fetch(`/api/predict?type=supervisor&article=${encodeURIComponent(order.article)}${colourQ}`, { cache: 'no-store' })
+      .then(r => r.json()).then(d => { if (!cancelled) setRecSup(d) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [order.article, order.color])
+
+  // Faulty/FOB risk — re-fetched every time `chosen` changes, so switching
+  // the dropdown shows risk for that SPECIFIC supervisor, not just the
+  // recommended one. This is the actual decision-support moment: comparing
+  // options before committing, not just seeing one static suggestion.
+  const [risk, setRisk] = useState<{ faulty: any; fob: any } | null>(null)
+  const [riskLoading, setRiskLoading] = useState(false)
+  useEffect(() => {
+    if (!order.article) return
+    let cancelled = false
+    setRiskLoading(true)
+    const colourQ = order.color ? `&colour=${encodeURIComponent(order.color)}` : ''
+    const supQ = chosen ? `&supervisor=${encodeURIComponent(chosen)}` : ''
+    Promise.all([
+      fetch(`/api/predict?type=faulty_risk&article=${encodeURIComponent(order.article)}${colourQ}${supQ}`, { cache: 'no-store' }).then(r => r.json()),
+      fetch(`/api/predict?type=fob_risk&article=${encodeURIComponent(order.article)}${colourQ}${supQ}`, { cache: 'no-store' }).then(r => r.json()),
+    ]).then(([faulty, fob]) => { if (!cancelled) { setRisk({ faulty, fob }); setRiskLoading(false) } })
+      .catch(() => { if (!cancelled) setRiskLoading(false) })
+    return () => { cancelled = true }
+  }, [order.article, order.color, chosen])
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1153,6 +1186,37 @@ function AssignModal({ order, supervisors, onAssign, onClose, saving }: {
           padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
           <strong>{order.article}</strong> · {order.color} · {order.qty_kg} Kg
         </div>
+
+        {recSup?.recommendedSupervisor && (
+          <div style={{ background: 'var(--accent-light)', border: '1px solid var(--accent)',
+            borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 12 }}>
+            💡 Historically assigned to <strong>{recSup.recommendedSupervisor}</strong> in {recSup.sampleSize} similar order(s)
+            {recSup.confidence !== 'learned' && <span style={{ color: 'var(--text-tertiary)' }}> ({recSup.confidence === 'shrunk' ? 'thin sample' : 'no strong history yet'})</span>}
+            {recSup.alternatives?.length > 1 && (
+              <div style={{ color: 'var(--text-tertiary)', marginTop: 2 }}>
+                Also seen: {recSup.alternatives.slice(1).map((a: any) => `${a.value} (${a.count}x)`).join(', ')}
+              </div>
+            )}
+          </div>
+        )}
+
+        {risk && (risk.faulty?.sampleSize > 0 || risk.fob?.sampleSize > 0) && (
+          <div style={{ background: 'var(--warning-light)', border: '1px solid var(--warning)',
+            borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 12, opacity: riskLoading ? 0.6 : 1 }}>
+            <div>
+              ⚠️ Faulty risk{chosen ? ` under ${chosen}` : ''}: <strong>{(risk.faulty.riskRate * 100).toFixed(0)}%</strong> ({risk.faulty.sampleSize} samples, {risk.faulty.confidence})
+              {risk.faulty.topReasons?.length > 0 && (
+                <span style={{ color: 'var(--text-tertiary)' }}> — most common: {risk.faulty.topReasons[0].value} ({risk.faulty.topReasons[0].count}x)</span>
+              )}
+            </div>
+            {risk.fob?.sampleSize > 0 && (
+              <div style={{ marginTop: 2 }}>
+                FOB risk{chosen ? ` under ${chosen}` : ''}: <strong>{(risk.fob.riskRate * 100).toFixed(0)}%</strong> ({risk.fob.sampleSize} samples, {risk.fob.confidence})
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="form-group" style={{ marginBottom: 16 }}>
           <label>Select Supervisor</label>
           <select value={chosen} onChange={e => setChosen(e.target.value)}>
@@ -1215,6 +1279,25 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
 
   const hasDualMachines = allMachineOptions.length > 1
 
+  // Recommended machine (historical-only, see file header caveat) + article-
+  // level faulty/FOB risk — fetched once on mount, not re-fetched per machine
+  // selection (machine-name matching between live and historical data isn't
+  // reliable enough yet to make per-selection risk meaningful here).
+  const [recMachine, setRecMachine] = useState<any>(null)
+  const [risk, setRisk] = useState<{ faulty: any; fob: any } | null>(null)
+  useEffect(() => {
+    if (!order.article) return
+    let cancelled = false
+    const colourQ = order.color ? `&colour=${encodeURIComponent(order.color)}` : ''
+    fetch(`/api/predict?type=machine&article=${encodeURIComponent(order.article)}${colourQ}`, { cache: 'no-store' })
+      .then(r => r.json()).then(d => { if (!cancelled) setRecMachine(d) }).catch(() => {})
+    Promise.all([
+      fetch(`/api/predict?type=faulty_risk&article=${encodeURIComponent(order.article)}${colourQ}`, { cache: 'no-store' }).then(r => r.json()),
+      fetch(`/api/predict?type=fob_risk&article=${encodeURIComponent(order.article)}${colourQ}`, { cache: 'no-store' }).then(r => r.json()),
+    ]).then(([faulty, fob]) => { if (!cancelled) setRisk({ faulty, fob }) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [order.article, order.color])
+
   const add    = () => setSplitParts(p => [...p, { kg: 0, mtr: 0, taka: 0, machine_id: allMachineOptions[0]?.id || '' }])
   const remove = (i: number) => setSplitParts(p => p.filter((_, j) => j !== i))
   const upd    = (i: number, field: string, val: string) =>
@@ -1248,6 +1331,33 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
           borderRadius: 8, padding: '7px 14px', marginBottom: 10, fontSize: 13, fontWeight: 500 }}>
           This split: {totalKg.toFixed(1)} Kg · Remaining after save: {remaining.toFixed(1)} Kg {ok ? '✓' : '⚠ (partial split)'}
         </div>
+
+        {recMachine?.recommendedMachine && (
+          <div style={{ background: 'var(--accent-light)', border: '1px solid var(--accent)',
+            borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 12 }}>
+            💡 Historically this article most often used machine <strong>{recMachine.recommendedMachine}</strong> ({recMachine.sampleSize} historical samples, {recMachine.confidence})
+            <div style={{ color: 'var(--text-tertiary)', marginTop: 2 }}>
+              Uses historical short-code naming — may not exactly match a live machine name above.
+            </div>
+          </div>
+        )}
+
+        {risk && (risk.faulty?.sampleSize > 0 || risk.fob?.sampleSize > 0) && (
+          <div style={{ background: 'var(--warning-light)', border: '1px solid var(--warning)',
+            borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 12 }}>
+            <div>
+              ⚠️ Faulty risk for this article: <strong>{(risk.faulty.riskRate * 100).toFixed(0)}%</strong> ({risk.faulty.sampleSize} samples, {risk.faulty.confidence})
+              {risk.faulty.topReasons?.length > 0 && (
+                <span style={{ color: 'var(--text-tertiary)' }}> — most common: {risk.faulty.topReasons[0].value} ({risk.faulty.topReasons[0].count}x)</span>
+              )}
+            </div>
+            {risk.fob?.sampleSize > 0 && (
+              <div style={{ marginTop: 2 }}>
+                FOB risk: <strong>{(risk.fob.riskRate * 100).toFixed(0)}%</strong> ({risk.fob.sampleSize} samples, {risk.fob.confidence})
+              </div>
+            )}
+          </div>
+        )}
 
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
           <thead>

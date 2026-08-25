@@ -3,20 +3,21 @@ import {
   getLearnedDuration, getLearnedDurationBatch,
   getFaultyRisk, getFaultyRiskBatch,
   getFobRisk, getFobRiskBatch,
-  getRecommendedMachine, getRecommendedRoute,
+  getRecommendedMachine, getRecommendedRoute, getRecommendedSupervisor,
 } from '@/lib/predictiveStats'
 
 // ── app/api/predict — live statistics-based predictions (not trained ML) ────
 // GET ?type=duration&processCode=D&article=A-1599
-// GET ?type=faulty_risk&article=A-1599&colour=BLACK
-// GET ?type=fob_risk&article=A-1599&colour=BLACK
+// GET ?type=faulty_risk&article=A-1599&colour=BLACK&supervisor=Kundan%20M.
+// GET ?type=fob_risk&article=A-1599&colour=BLACK&supervisor=Kundan%20M.
 //   -> RiskEstimate: { article, colour, riskRate, sampleSize, factoryAverageRate, confidence, basis, topReasons }
-// GET ?type=machine&article=A-1599&colour=BLACK   (article required)
-// GET ?type=route&article=A-1599&colour=BLACK     (article required)
+// GET ?type=machine&article=A-1599&colour=BLACK      (article required)
+// GET ?type=route&article=A-1599&colour=BLACK        (article required)
+// GET ?type=supervisor&article=A-1599&colour=BLACK   (article required)
 //
 // POST { type: 'duration_batch', pairs: [{processCode, article?}, ...] }
-// POST { type: 'faulty_risk_batch', segments: [{article?, colour?}, ...] }
-// POST { type: 'fob_risk_batch', segments: [{article?, colour?}, ...] }
+// POST { type: 'faulty_risk_batch', segments: [{article?, colour?, supervisor?}, ...] }
+// POST { type: 'fob_risk_batch', segments: [{article?, colour?, supervisor?}, ...] }
 //   -> batch variants: ONE Supabase fetch covering every pair/segment, not
 //      one fetch each. Use these instead of looping the GET endpoints when
 //      you need many estimates at once (e.g. Delay Predictor across every
@@ -25,7 +26,8 @@ import {
 // See lib/predictiveStats.ts for how these are computed — live queries with
 // shrinkage toward a wider average when the specific sample is thin, not a
 // stored/trained model. machine/route recommendations draw on the imported
-// historical_* tables only (see that file's header for why).
+// historical_* tables only (see that file's header for why) — supervisor
+// blends live + historical since names match cleanly between the two.
 
 export async function GET(req: NextRequest) {
   try {
@@ -33,6 +35,7 @@ export async function GET(req: NextRequest) {
     const type = searchParams.get('type')
     const article = searchParams.get('article') || undefined
     const colour = searchParams.get('colour') || undefined
+    const supervisor = searchParams.get('supervisor') || undefined
 
     if (type === 'duration') {
       const processCode = searchParams.get('processCode')
@@ -44,12 +47,12 @@ export async function GET(req: NextRequest) {
     }
 
     if (type === 'faulty_risk') {
-      const result = await getFaultyRisk(article, colour)
+      const result = await getFaultyRisk(article, colour, supervisor)
       return NextResponse.json(result)
     }
 
     if (type === 'fob_risk') {
-      const result = await getFobRisk(article, colour)
+      const result = await getFobRisk(article, colour, supervisor)
       return NextResponse.json(result)
     }
 
@@ -65,7 +68,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(result)
     }
 
-    return NextResponse.json({ error: "type must be one of 'duration', 'faulty_risk', 'fob_risk', 'machine', 'route'" }, { status: 400 })
+    if (type === 'supervisor') {
+      if (!article) return NextResponse.json({ error: 'article is required for type=supervisor' }, { status: 400 })
+      const result = await getRecommendedSupervisor(article, colour)
+      return NextResponse.json(result)
+    }
+
+    return NextResponse.json({ error: "type must be one of 'duration', 'faulty_risk', 'fob_risk', 'machine', 'route', 'supervisor'" }, { status: 400 })
   } catch (err: any) {
     return NextResponse.json({ error: `Server error: ${err?.message || String(err)}` }, { status: 500 })
   }
