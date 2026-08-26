@@ -77,6 +77,16 @@ export default function LabFmsPage() {
     } finally { setSaving(false) }
   }
 
+  const markLabApproval = async (r: any) => {
+    setSaving(true)
+    try {
+      const res = await patchFmsData(r, { labApprovalAt: new Date().toISOString() })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('✓ Lab Approval marked')
+      load()
+    } finally { setSaving(false) }
+  }
+
   const saveDetails = async () => {
     if (!detailsModal) return
     setSaving(true)
@@ -110,6 +120,7 @@ export default function LabFmsPage() {
         <StatCard label="Fabric Received"     value={requests.filter(r=>r.fms_data?.fabricReceivedAt).length}    color="var(--success)" />
         <StatCard label="Delivery Date Entered" value={requests.filter(r=>r.fms_data?.deliveryDate).length}      color="var(--warning)" />
         <StatCard label="1st Submission Done" value={requests.filter(r=>r.fms_data?.firstSubmissionAt).length}   color="var(--purple)" />
+        <StatCard label="Lab Approval Done"   value={requests.filter(r=>r.fms_data?.labApprovalAt).length}        color="#8E24AA" />
       </div>
 
       {toast && (
@@ -138,11 +149,13 @@ export default function LabFmsPage() {
                 <th rowSpan={2} style={hd()}>Delivery Date</th>
                 <th colSpan={4} style={hd('#BBDEFB', '#0C447C')}>Greige RFS Fabric Received</th>
                 <th colSpan={4} style={hd('#FFE0B2', '#E65100')}>1st Submission</th>
+                <th colSpan={4} style={hd('#E1BEE7', '#6A1B9A')}>Lab Approval</th>
                 <th rowSpan={2} style={hd()}>Details</th>
               </tr>
               <tr>
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'f'+h} style={hd('#BBDEFB', '#0C447C')}>{h}</th>)}
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'s'+h} style={hd('#FFE0B2', '#E65100')}>{h}</th>)}
+                {['Planned','Actual','Status','Delay'].map(h => <th key={'a'+h} style={hd('#E1BEE7', '#6A1B9A')}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -211,6 +224,16 @@ export default function LabFmsPage() {
                   </td>
                   <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>{fd.firstSubmissionAt ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#FFE0B2' }}>-</td>
+
+                  {/* Lab Approval */}
+                  <td style={{ ...td, background: '#E1BEE7' }}>-</td>
+                  <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A' }}>
+                    {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : (
+                      <button className="xs primary" disabled={saving} onClick={() => markLabApproval(r)}>Approve ✓</button>
+                    )}
+                  </td>
+                  <td style={{ ...td, background: '#E1BEE7', textAlign: 'center' }}>{fd.labApprovalAt ? '✓' : '-'}</td>
+                  <td style={{ ...td, background: '#E1BEE7' }}>-</td>
 
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     <button className="xs" onClick={() => { setDetailsModal(r); setDetailsForm(fd) }}>L/A/B/DE</button>
