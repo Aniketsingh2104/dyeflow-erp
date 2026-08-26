@@ -35,6 +35,23 @@ export default function LabFmsPage() {
     } finally { setSaving(false) }
   }
 
+  // Explicit action, not inferred from having a Chart Number — sets a real
+  // `submitted` flag that the Submitted page now keys off directly.
+  const markSubmission = async () => {
+    if (!editModal) return
+    if (!fmsData.chartNumber?.trim()) { alert('Chart Number is required before marking submission.'); return }
+    if (!fmsData.submissionDate) { alert('Submission Date is required.'); return }
+    setSaving(true)
+    try {
+      const payload = { ...fmsData, submitted: true }
+      const res = await labPost({ action: 'update_request', id: editModal.id, fmsData: payload })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('✓ Marked as Submitted')
+      setEditModal(null)
+      load()
+    } finally { setSaving(false) }
+  }
+
   // Only blank the page on the true first load; actions here call load()
   // again afterward, which would otherwise wipe the whole page every time.
   if (loading && requests.length === 0) return (
@@ -47,7 +64,8 @@ export default function LabFmsPage() {
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <StatCard label="In Lab FMS"      value={requests.length}                                             color="var(--accent)" />
         <StatCard label="With Chart No"   value={requests.filter(r=>r.fms_data?.chartNumber).length}          color="var(--success)" />
-        <StatCard label="With Delivery"   value={requests.filter(r=>r.fms_data?.deliveryDate).length}         color="var(--purple)" />
+        <StatCard label="Submitted"       value={requests.filter(r=>r.fms_data?.submitted).length}            color="var(--purple)" />
+        <StatCard label="With Delivery"   value={requests.filter(r=>r.fms_data?.deliveryDate).length}         color="var(--warning)" />
       </div>
 
       {toast && (
@@ -66,7 +84,7 @@ export default function LabFmsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Request No','Indent No','Date','Unit','Party','Shade/Pantone','Fastness','Chart No','Delivery Date','Actions'].map(h => (
+                {['Request No','Indent No','Date','Unit','Party','Shade/Pantone','Fastness','Chart No','Submission Date','Submitted','Delivery Date','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -87,6 +105,14 @@ export default function LabFmsPage() {
                   <td style={td}>{r.shade_pantone || '-'}</td>
                   <td style={td}>{r.fastness_type || '-'}</td>
                   <td style={td}>{r.fms_data?.chartNumber || <span style={{ color: 'var(--text-tertiary)' }}>—</span>}</td>
+                  <td style={td}>{r.fms_data?.submissionDate || <span style={{ color: 'var(--text-tertiary)' }}>—</span>}</td>
+                  <td style={td}>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                      background: r.fms_data?.submitted ? 'var(--purple-light)' : 'var(--bg-secondary)',
+                      color: r.fms_data?.submitted ? 'var(--purple)' : 'var(--text-tertiary)' }}>
+                      {r.fms_data?.submitted ? 'Submitted' : 'Pending'}
+                    </span>
+                  </td>
                   <td style={td}>{r.fms_data?.deliveryDate || <span style={{ color: 'var(--text-tertiary)' }}>—</span>}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     <button className="xs primary" onClick={() => {
@@ -124,6 +150,11 @@ export default function LabFmsPage() {
                   onChange={e => setFmsData((p: any) => ({ ...p, deliveryDate: e.target.value }))} />
               </div>
               <div className="form-group">
+                <label>Submission Date</label>
+                <input type="date" value={fmsData.submissionDate || ''}
+                  onChange={e => setFmsData((p: any) => ({ ...p, submissionDate: e.target.value }))} />
+              </div>
+              <div className="form-group">
                 <label>L Value</label>
                 <input value={fmsData.lValue || ''} placeholder="L*"
                   onChange={e => setFmsData((p: any) => ({ ...p, lValue: e.target.value }))} />
@@ -152,6 +183,10 @@ export default function LabFmsPage() {
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="primary" onClick={saveFms} disabled={saving}>
                 {saving ? 'Saving…' : '✓ Save'}
+              </button>
+              <button className="primary" style={{ background: 'var(--purple)' }}
+                onClick={markSubmission} disabled={saving || fmsData.submitted}>
+                {fmsData.submitted ? '✓ Already Submitted' : saving ? 'Saving…' : '✓ Mark Submission'}
               </button>
               <button onClick={() => setEditModal(null)}>Cancel</button>
             </div>

@@ -1,5 +1,7 @@
 'use client'
-// Submitted = confirmed requests with chart number filled
+// Submitted = confirmed requests explicitly marked submitted from Lab FMS
+// (Chart Number + Submission Date, via the Mark Submission action) — not
+// just inferred from having a Chart Number filled in.
 import { useEffect, useState, useCallback } from 'react'
 import { labApi, StatCard, fmtDateTime } from '../_shared'
 
@@ -12,8 +14,8 @@ export default function LabSubmittedPage() {
     try {
       const res = await labApi({ type: 'requests' })
       if (res.ok) {
-        const confirmed = (res.data || []).filter((r: any) => r.confirmed && r.fms_data?.chartNumber)
-        setRequests(confirmed)
+        const submitted = (res.data || []).filter((r: any) => r.confirmed && r.fms_data?.submitted)
+        setRequests(submitted)
       }
     } finally { setLoading(false) }
   }, [])
@@ -37,13 +39,13 @@ export default function LabSubmittedPage() {
         borderRadius: 10, overflow: 'auto' }}>
         {requests.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-tertiary)', fontSize: 14 }}>
-            No submitted requests yet. Fill Chart Number in Lab FMS page.
+            No submitted requests yet. Use Mark Submission in Lab FMS page.
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Request No','Date','Unit','Party','Shade/Pantone','Chart No','Delivery Date','DE Value','Remark'].map(h => (
+                {['Request No','Date','Unit','Party','Shade/Pantone','Chart No','Submission Date','Delivery Date','DE Value','Remark'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
@@ -61,6 +63,7 @@ export default function LabSubmittedPage() {
                   <td style={{ ...td, fontWeight: 500 }}>{r.party || '-'}</td>
                   <td style={td}>{r.shade_pantone || '-'}</td>
                   <td style={{ ...td, fontWeight: 700, color: 'var(--success)' }}>{r.fms_data?.chartNumber || '-'}</td>
+                  <td style={td}>{r.fms_data?.submissionDate || '-'}</td>
                   <td style={td}>{r.fms_data?.deliveryDate || '-'}</td>
                   <td style={td}>{r.fms_data?.deValue || '-'}</td>
                   <td style={td}>{r.fms_data?.remark || '-'}</td>
