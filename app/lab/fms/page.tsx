@@ -1,9 +1,11 @@
 'use client'
 // Lab FMS — confirmed requests (both Sample Received + Parameters OK done on
-// the Requested page), tracked through three stages in the same visual
-// format as the Greige Register (colored section headers, each with its own
-// Planned/Actual/Status/Delay). Planned columns are placeholders ("-") until
-// the timing rule (anchor + offset per stage) is defined.
+// the Requested page), tracked in the same visual format as the Greige
+// Register (colored section headers, each with Planned/Actual/Status/Delay).
+// Delivery Date sits as a plain field beside Chart No (not its own tracked
+// section) — only two tracked sections remain: Greige RFS Fabric Received
+// and 1st Submission. Planned columns are placeholders ("-") until the
+// timing rule (anchor + offset per stage) is defined.
 
 import { useEffect, useState, useCallback } from 'react'
 import { labApi, labPost, StatCard, fmtDateTime } from '../_shared'
@@ -48,9 +50,7 @@ export default function LabFmsPage() {
   const saveField = async (r: any, field: string) => {
     setSaving(true)
     try {
-      const extra: Record<string, any> = { [field]: editValue }
-      if (field === 'deliveryDate') extra.deliveryDateEnteredAt = new Date().toISOString()
-      const res = await patchFmsData(r, extra)
+      const res = await patchFmsData(r, { [field]: editValue })
       if (!res.ok) { alert('Error: ' + res.error); return }
       setEditingField(null)
       load()
@@ -106,10 +106,10 @@ export default function LabFmsPage() {
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        <StatCard label="In Lab FMS"           value={requests.length}                                                color="var(--accent)" />
-        <StatCard label="Fabric Received"      value={requests.filter(r=>r.fms_data?.fabricReceivedAt).length}       color="var(--success)" />
-        <StatCard label="Delivery Date Entered" value={requests.filter(r=>r.fms_data?.deliveryDate).length}          color="var(--warning)" />
-        <StatCard label="1st Submission Done"  value={requests.filter(r=>r.fms_data?.firstSubmissionAt).length}      color="var(--purple)" />
+        <StatCard label="In Lab FMS"          value={requests.length}                                            color="var(--accent)" />
+        <StatCard label="Fabric Received"     value={requests.filter(r=>r.fms_data?.fabricReceivedAt).length}    color="var(--success)" />
+        <StatCard label="Delivery Date Entered" value={requests.filter(r=>r.fms_data?.deliveryDate).length}      color="var(--warning)" />
+        <StatCard label="1st Submission Done" value={requests.filter(r=>r.fms_data?.firstSubmissionAt).length}   color="var(--purple)" />
       </div>
 
       {toast && (
@@ -125,7 +125,7 @@ export default function LabFmsPage() {
             No confirmed requests in Lab FMS. Both Sample Received and Parameters OK must be marked on the Requested page first.
           </div>
         ) : (
-          <table style={{ borderCollapse: 'collapse', minWidth: 1500, width: '100%', fontSize: 11 }}>
+          <table style={{ borderCollapse: 'collapse', minWidth: 1400, width: '100%', fontSize: 11 }}>
             <thead>
               <tr>
                 <th rowSpan={2} style={hd()}>Request No</th>
@@ -135,14 +135,13 @@ export default function LabFmsPage() {
                 <th rowSpan={2} style={hd()}>Party</th>
                 <th rowSpan={2} style={hd()}>Shade/Pantone</th>
                 <th rowSpan={2} style={hd()}>Chart No</th>
+                <th rowSpan={2} style={hd()}>Delivery Date</th>
                 <th colSpan={4} style={hd('#BBDEFB', '#0C447C')}>Greige RFS Fabric Received</th>
-                <th colSpan={4} style={hd('#C8E6C9', '#1B5E20')}>Delivery Date Entry</th>
                 <th colSpan={4} style={hd('#FFE0B2', '#E65100')}>1st Submission</th>
                 <th rowSpan={2} style={hd()}>Details</th>
               </tr>
               <tr>
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'f'+h} style={hd('#BBDEFB', '#0C447C')}>{h}</th>)}
-                {['Planned','Actual','Status','Delay'].map(h => <th key={'d'+h} style={hd('#C8E6C9', '#1B5E20')}>{h}</th>)}
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'s'+h} style={hd('#FFE0B2', '#E65100')}>{h}</th>)}
               </tr>
             </thead>
@@ -160,8 +159,8 @@ export default function LabFmsPage() {
                   <td style={{ ...td, fontWeight: 500 }}>{r.party || '-'}</td>
                   <td style={td}>{r.shade_pantone || '-'}</td>
 
-                  {/* Chart No — inline editable */}
-                  <td style={{ ...td, whiteSpace: 'normal', minWidth: 130 }}>
+                  {/* Chart No — inline editable, plain field */}
+                  <td style={{ ...td, whiteSpace: 'normal', minWidth: 120 }}>
                     {editingField === `${r.id}::chartNumber` ? (
                       <div style={{ display: 'flex', gap: 4 }}>
                         <input autoFocus value={editValue} onChange={e => setEditValue(e.target.value)}
@@ -177,6 +176,22 @@ export default function LabFmsPage() {
                     )}
                   </td>
 
+                  {/* Delivery Date — inline editable, plain field right beside Chart No */}
+                  <td style={{ ...td, whiteSpace: 'normal', minWidth: 130 }}>
+                    {editingField === `${r.id}::deliveryDate` ? (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <input autoFocus type="date" value={editValue} onChange={e => setEditValue(e.target.value)}
+                          style={{ fontSize: 11, padding: '3px 6px', border: '1px solid var(--border-medium)', borderRadius: 4 }} />
+                        <button className="xs" disabled={saving} onClick={() => saveField(r, 'deliveryDate')}>✓</button>
+                      </div>
+                    ) : (
+                      <span style={{ cursor: 'pointer', fontWeight: fd.deliveryDate ? 700 : 400 }}
+                        onClick={() => startEdit(r.id, 'deliveryDate', fd.deliveryDate)}>
+                        {fd.deliveryDate || <span style={{ color: 'var(--text-tertiary)' }}>+ Enter</span>}
+                      </span>
+                    )}
+                  </td>
+
                   {/* Greige RFS Fabric Received */}
                   <td style={{ ...td, background: '#BBDEFB' }}>-</td>
                   <td style={{ ...td, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20' }}>
@@ -186,24 +201,6 @@ export default function LabFmsPage() {
                   </td>
                   <td style={{ ...td, background: '#BBDEFB', textAlign: 'center' }}>{fd.fabricReceivedAt ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#BBDEFB' }}>-</td>
-
-                  {/* Delivery Date Entry — inline editable date */}
-                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
-                  <td style={{ ...td, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20', whiteSpace: 'normal', minWidth: 130 }}>
-                    {editingField === `${r.id}::deliveryDate` ? (
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <input autoFocus type="date" value={editValue} onChange={e => setEditValue(e.target.value)}
-                          style={{ fontSize: 11, padding: '3px 6px', border: '1px solid var(--border-medium)', borderRadius: 4 }} />
-                        <button className="xs" disabled={saving} onClick={() => saveField(r, 'deliveryDate')}>✓</button>
-                      </div>
-                    ) : (
-                      <span style={{ cursor: 'pointer' }} onClick={() => startEdit(r.id, 'deliveryDate', fd.deliveryDate)}>
-                        {fd.deliveryDate || <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>+ Enter</span>}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{fd.deliveryDate ? '✓' : '-'}</td>
-                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
 
                   {/* 1st Submission */}
                   <td style={{ ...td, background: '#FFE0B2' }}>-</td>

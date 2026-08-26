@@ -5,6 +5,7 @@ import { labApi, labPost, StatCard, IssuesModal, fmtDateTime, genIssueId } from 
 
 export default function LabRequestedPage() {
   const [requests, setRequests] = useState<any[]>([])
+  const [indents,  setIndents]  = useState<any[]>([])
   const [issues,   setIssues]   = useState<any[]>([])
   const [loading,  setLoading]  = useState(true)
   const [saving,   setSaving]   = useState(false)
@@ -17,12 +18,14 @@ export default function LabRequestedPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [reqRes, issRes] = await Promise.all([
+      const [reqRes, issRes, indRes] = await Promise.all([
         labApi({ type: 'requests', recheck: '0' }),
         labApi({ type: 'issues' }),
+        labApi({ type: 'indents' }),
       ])
       if (reqRes.ok) setRequests(reqRes.data || [])
       if (issRes.ok) setIssues(issRes.data  || [])
+      if (indRes.ok) setIndents(indRes.data || [])
     } finally { setLoading(false) }
   }, [])
 
@@ -40,6 +43,8 @@ export default function LabRequestedPage() {
     : pending
 
   const openCount = (reqId: string) => issues.filter(i => i.request_id === reqId && !i.solved).length
+
+  const indentById = (id: string) => indents.find(ind => ind.id === id)
 
   // Two independent confirmations — request only moves to FMS once BOTH are
   // marked. No window.confirm dialog here (matches Greige Register's ERP✓/
@@ -126,7 +131,7 @@ export default function LabRequestedPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1400 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Lab Request No','Indent No','Date','Unit','Party','Quality','Light Source','Yarn Design','Shade/Pantone','Fastness','Remark','Issues','Sample Received','Parameters OK','Actions'].map(h => (
+                {['Lab Request No','Indent No','Date','Unit','Party','Quality','Request Given By','Order Status','Branch','Light Source','Yarn Design','Shade/Pantone','Fastness','Fastness Remark','Other Remark','Issues','Sample Received','Parameters OK','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -135,7 +140,9 @@ export default function LabRequestedPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r, i) => (
+              {filtered.map((r, i) => {
+                const ind = indentById(r.indent_id)
+                return (
                 <tr key={r.id} style={{
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                   borderBottom: '1px solid var(--border-light)' }}>
@@ -145,11 +152,15 @@ export default function LabRequestedPage() {
                   <td style={td}>{r.unit || '-'}</td>
                   <td style={{ ...td, fontWeight: 500 }}>{r.party || '-'}</td>
                   <td style={td}>{r.quality || '-'}</td>
+                  <td style={td}>{ind?.request_given_by || '-'}</td>
+                  <td style={td}>{ind?.order_status || '-'}</td>
+                  <td style={td}>{ind?.branch || '-'}</td>
                   <td style={td}>{r.light_source === 'Other' ? (r.light_source_other || 'Other') : (r.light_source || '-')}</td>
                   <td style={td}>{r.yarn_design || '-'}</td>
                   <td style={td}>{r.shade_pantone || '-'}</td>
                   <td style={td}>{r.fastness_type || '-'}</td>
-                  <td style={{ ...td, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.other_remark || r.fastness_remark || '-'}</td>
+                  <td style={{ ...td, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.fastness_remark || '-'}</td>
+                  <td style={{ ...td, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.other_remark || '-'}</td>
                   <td style={td}>
                     <span style={{ padding: '3px 9px', borderRadius: 4, fontSize: 11, fontWeight: 600,
                       background: openCount(r.id) > 0 ? 'var(--warning-light)' : 'var(--success-light)',
@@ -175,7 +186,8 @@ export default function LabRequestedPage() {
                     <button className="xs" onClick={() => setIssuesModal(r.id)}>Issues</button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         )}
