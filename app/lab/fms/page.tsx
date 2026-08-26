@@ -12,6 +12,7 @@ import { labApi, labPost, StatCard, fmtDateTime } from '../_shared'
 
 export default function LabFmsPage() {
   const [requests, setRequests] = useState<any[]>([])
+  const [indents,  setIndents]  = useState<any[]>([])
   const [loading,  setLoading]  = useState(true)
   const [toast,    setToast]    = useState('')
   const [saving,   setSaving]   = useState(false)
@@ -30,12 +31,18 @@ export default function LabFmsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await labApi({ type: 'requests' })
-      if (res.ok) setRequests((res.data || []).filter((r: any) => r.confirmed))
+      const [reqRes, indRes] = await Promise.all([
+        labApi({ type: 'requests' }),
+        labApi({ type: 'indents' }),
+      ])
+      if (reqRes.ok) setRequests((reqRes.data || []).filter((r: any) => r.confirmed))
+      if (indRes.ok) setIndents(indRes.data || [])
     } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const indentById = (id: string) => indents.find(ind => ind.id === id)
 
   const patchFmsData = async (r: any, extra: Record<string, any>) => {
     const payload = { ...(r.fms_data || {}), ...extra }
@@ -144,16 +151,27 @@ export default function LabFmsPage() {
                 <th rowSpan={2} style={hd()}>Date</th>
                 <th rowSpan={2} style={hd()}>Unit</th>
                 <th rowSpan={2} style={hd()}>Party</th>
+                <th rowSpan={2} style={hd()}>Quality</th>
+                <th rowSpan={2} style={hd()}>Request Given By</th>
+                <th rowSpan={2} style={hd()}>Order Status</th>
+                <th rowSpan={2} style={hd()}>Branch</th>
+                <th rowSpan={2} style={hd()}>Light Source</th>
+                <th rowSpan={2} style={hd()}>Yarn Design</th>
                 <th rowSpan={2} style={hd()}>Shade/Pantone</th>
+                <th rowSpan={2} style={hd()}>Fastness</th>
+                <th rowSpan={2} style={hd()}>Fastness Remark</th>
+                <th rowSpan={2} style={hd()}>Other Remark</th>
                 <th rowSpan={2} style={hd()}>Chart No</th>
                 <th rowSpan={2} style={hd()}>Delivery Date</th>
                 <th colSpan={4} style={hd('#BBDEFB', '#0C447C')}>Greige RFS Fabric Received</th>
+                <th colSpan={4} style={hd('#C8E6C9', '#1B5E20')}>Delivery Date Entry</th>
                 <th colSpan={4} style={hd('#FFE0B2', '#E65100')}>1st Submission</th>
                 <th colSpan={4} style={hd('#E1BEE7', '#6A1B9A')}>Lab Approval</th>
                 <th rowSpan={2} style={hd()}>Details</th>
               </tr>
               <tr>
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'f'+h} style={hd('#BBDEFB', '#0C447C')}>{h}</th>)}
+                {['Planned','Actual','Status','Delay'].map(h => <th key={'d'+h} style={hd('#C8E6C9', '#1B5E20')}>{h}</th>)}
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'s'+h} style={hd('#FFE0B2', '#E65100')}>{h}</th>)}
                 {['Planned','Actual','Status','Delay'].map(h => <th key={'a'+h} style={hd('#E1BEE7', '#6A1B9A')}>{h}</th>)}
               </tr>
@@ -170,7 +188,16 @@ export default function LabFmsPage() {
                   <td style={{ ...td, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(r.confirmed_at || r.created_at)}</td>
                   <td style={td}>{r.unit || '-'}</td>
                   <td style={{ ...td, fontWeight: 500 }}>{r.party || '-'}</td>
+                  <td style={td}>{r.quality || '-'}</td>
+                  <td style={td}>{indentById(r.indent_id)?.request_given_by || '-'}</td>
+                  <td style={td}>{indentById(r.indent_id)?.order_status || '-'}</td>
+                  <td style={td}>{indentById(r.indent_id)?.branch || '-'}</td>
+                  <td style={td}>{r.light_source === 'Other' ? (r.light_source_other || 'Other') : (r.light_source || '-')}</td>
+                  <td style={td}>{r.yarn_design || '-'}</td>
                   <td style={td}>{r.shade_pantone || '-'}</td>
+                  <td style={td}>{r.fastness_type || '-'}</td>
+                  <td style={{ ...td, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.fastness_remark || '-'}</td>
+                  <td style={{ ...td, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.other_remark || '-'}</td>
 
                   {/* Chart No — inline editable, plain field */}
                   <td style={{ ...td, whiteSpace: 'normal', minWidth: 120 }}>
@@ -204,6 +231,12 @@ export default function LabFmsPage() {
                       </span>
                     )}
                   </td>
+
+                  {/* Delivery Date Entry — tracked section; Actual mirrors the plain field above (that's the real entry point) */}
+                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
+                  <td style={{ ...td, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20' }}>{fd.deliveryDate || '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{fd.deliveryDate ? '✓' : '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
 
                   {/* Greige RFS Fabric Received */}
                   <td style={{ ...td, background: '#BBDEFB' }}>-</td>
