@@ -41,18 +41,25 @@ export default function LabRequestedPage() {
 
   const openCount = (reqId: string) => issues.filter(i => i.request_id === reqId && !i.solved).length
 
-  // Named confirmRequest, not confirm — a local const named `confirm` shadows
-  // window.confirm, so the dialog call below would recurse into itself
-  // (calling itself synchronously before ever reaching an await) instead of
-  // showing the browser dialog — instant stack overflow the moment Confirm
-  // is clicked, which is exactly why nothing was moving to FMS.
-  const confirmRequest = async (id: string) => {
-    if (!confirm(`Confirm this request to move to FMS?`)) return
+  // Two independent confirmations — request only moves to FMS once BOTH are
+  // marked. No window.confirm dialog here (matches Greige Register's ERP✓/
+  // Sikka✓ one-click pattern, and avoids the confirm-shadowing class of bug).
+  const markSampleReceived = async (id: string) => {
     setSaving(true)
     try {
-      const res = await labPost({ action: 'confirm_request', id })
+      const res = await labPost({ action: 'mark_sample_received', id })
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast('✓ Moved to FMS')
+      showToast(res.movedToFms ? '✓ Sample Received — both confirmed, moved to FMS' : '✓ Sample Received')
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const markParametersOk = async (id: string) => {
+    setSaving(true)
+    try {
+      const res = await labPost({ action: 'mark_parameters_ok', id })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast(res.movedToFms ? '✓ Parameters OK — both confirmed, moved to FMS' : '✓ Parameters OK')
       load()
     } finally { setSaving(false) }
   }
@@ -119,7 +126,7 @@ export default function LabRequestedPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1400 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Lab Request No','Indent No','Date','Unit','Party','Quality','Light Source','Yarn Design','Shade/Pantone','Fastness','Remark','Issues','Actions'].map(h => (
+                {['Lab Request No','Indent No','Date','Unit','Party','Quality','Light Source','Yarn Design','Shade/Pantone','Fastness','Remark','Issues','Sample Received','Parameters OK','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -150,9 +157,22 @@ export default function LabRequestedPage() {
                       {openCount(r.id) > 0 ? `${openCount(r.id)} Open` : 'Clear'}
                     </span>
                   </td>
+                  <td style={td}>
+                    {r.sample_received ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)' }}>✓ {fmtDateTime(r.sample_received_at)}</span>
+                    ) : (
+                      <button className="xs primary" disabled={saving} onClick={() => markSampleReceived(r.id)}>Sample Received</button>
+                    )}
+                  </td>
+                  <td style={td}>
+                    {r.parameters_ok ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)' }}>✓ {fmtDateTime(r.parameters_ok_at)}</span>
+                    ) : (
+                      <button className="xs primary" disabled={saving} onClick={() => markParametersOk(r.id)}>Parameters OK</button>
+                    )}
+                  </td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <button className="xs primary" disabled={saving} onClick={() => confirmRequest(r.id)}>Confirm</button>
-                    <button className="xs" style={{ marginLeft: 4 }} onClick={() => setIssuesModal(r.id)}>Issues</button>
+                    <button className="xs" onClick={() => setIssuesModal(r.id)}>Issues</button>
                   </td>
                 </tr>
               ))}

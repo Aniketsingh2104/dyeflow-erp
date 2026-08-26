@@ -113,13 +113,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, data })
   }
 
-  if (action === 'confirm_request') {
-    const { error } = await dbUpdate('lab_requests', { id }, {
-      confirmed:    true,
-      confirmed_at: new Date().toISOString(),
-    })
+  // Two independent confirmations — request only moves to FMS (confirmed=true)
+  // once BOTH sample_received and parameters_ok are true.
+  if (action === 'mark_sample_received' || action === 'mark_parameters_ok') {
+    const { data: existing } = await dbSelect('lab_requests', { id: `eq.${id}` })
+    const reqRow = existing?.[0]
+    if (!reqRow) return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404 })
+
+    const field = action === 'mark_sample_received' ? 'sample_received' : 'parameters_ok'
+    const otherField = field === 'sample_received' ? 'parameters_ok' : 'sample_received'
+    const patch: Record<string, any> = { [field]: true, [`${field}_at`]: new Date().toISOString() }
+    if (reqRow[otherField]) {
+      patch.confirmed = true
+      patch.confirmed_at = new Date().toISOString()
+    }
+    const { error } = await dbUpdate('lab_requests', { id }, patch)
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, movedToFms: !!patch.confirmed })
   }
 
   if (action === 'update_request') {
