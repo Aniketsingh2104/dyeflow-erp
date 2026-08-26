@@ -32,6 +32,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, data })
   }
 
+  // Global day-offset settings for FMS planned-date calculations
+  // (delivery_date_days, fabric_received_days) — returned as a flat
+  // { key: value } map for easy use on the client.
+  if (type === 'settings') {
+    const { data, error } = await dbSelect('lab_settings', {})
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    const map: Record<string, string> = {}
+    for (const row of (data || []) as any[]) map[row.key] = row.value
+    return NextResponse.json({ ok: true, data: map })
+  }
+
   // Default: return all three
   const [indentsRes, requestsRes] = await Promise.all([
     dbSelect('lab_indents', { order: 'created_at.desc' }),
@@ -162,6 +173,19 @@ export async function POST(req: NextRequest) {
     const { error } = await dbUpdate('lab_issues', { id }, {
       solved:    !issue.solved,
       solved_at: !issue.solved ? new Date().toISOString() : null,
+    })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
+
+  // ── Settings ─────────────────────────────────────────────────────
+
+  if (action === 'update_setting') {
+    if (!payload.key) return NextResponse.json({ ok: false, error: 'key required' }, { status: 400 })
+    const { error } = await sb('/lab_settings', {
+      method: 'POST',
+      body: JSON.stringify({ key: payload.key, value: payload.value, updated_at: new Date().toISOString() }),
+      headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })

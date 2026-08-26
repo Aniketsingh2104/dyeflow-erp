@@ -2,20 +2,42 @@
 // Lab FMS — confirmed requests (both Sample Received + Parameters OK done on
 // the Requested page), tracked in the same visual format as the Greige
 // Register (colored section headers, each with Planned/Actual/Status/Delay).
-// Delivery Date sits as a plain field beside Chart No (not its own tracked
-// section) — only two tracked sections remain: Greige RFS Fabric Received
-// and 1st Submission. Planned columns are placeholders ("-") until the
-// timing rule (anchor + offset per stage) is defined.
+//
+// Planned-date rules (global day-offsets, editable at the top of this page):
+//   Delivery Date Entry:        Planned = request Date + delivery_date_days
+//   Greige RFS Fabric Received: Planned = Delivery Date's Actual + fabric_received_days
+//                                (only when Fabric Required = Yes; otherwise "-")
+// 1st Submission and Lab Approval don't have a defined timing rule yet, so
+// their Planned/Delay stay as placeholders ("-").
 
 import { useEffect, useState, useCallback } from 'react'
 import { labApi, labPost, StatCard, fmtDateTime } from '../_shared'
 
+function delay(planned: Date | null, actualIso: string | undefined | null, now: number): string {
+  if (!planned) return '-'
+  const base = actualIso ? new Date(actualIso).getTime() : now
+  const diff = base - planned.getTime()
+  if (diff <= 0) {
+    if (actualIso) return 'On time'
+    const remain = -diff
+    const h = Math.floor(remain / 3600000)
+    const m = Math.floor((remain % 3600000) / 60000)
+    return `${h}h ${m}m left`
+  }
+  const h = Math.floor(diff / 3600000)
+  const m = Math.floor((diff % 3600000) / 60000)
+  return `${h}h ${m}m late`
+}
+
 export default function LabFmsPage() {
   const [requests, setRequests] = useState<any[]>([])
   const [indents,  setIndents]  = useState<any[]>([])
+  const [supervisors, setSupervisors] = useState<any[]>([])
+  const [settings, setSettings] = useState<Record<string, string>>({ delivery_date_days: '1', fabric_received_days: '1' })
   const [loading,  setLoading]  = useState(true)
   const [toast,    setToast]    = useState('')
   const [saving,   setSaving]   = useState(false)
+  const [now, setNow] = useState(() => Date.now())
 
   // Inline editing (Chart Number, Delivery Date) — same click-to-edit pattern
   // as Greige Register's LOT NO. column.
@@ -28,15 +50,25 @@ export default function LabFmsPage() {
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
+  // Ticks every minute so live countdowns stay accurate.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(t)
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [reqRes, indRes] = await Promise.all([
+      const [reqRes, indRes, setRes, supRes] = await Promise.all([
         labApi({ type: 'requests' }),
         labApi({ type: 'indents' }),
+        labApi({ type: 'settings' }),
+        fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
       ])
       if (reqRes.ok) setRequests((reqRes.data || []).filter((r: any) => r.confirmed))
       if (indRes.ok) setIndents(indRes.data || [])
+      if (setRes.ok) setSettings((prev) => ({ ...prev, ...setRes.data }))
+      if (supRes.ok) setSupervisors(supRes.data || [])
     } finally { setLoading(false) }
   }, [])
 
@@ -57,9 +89,29 @@ export default function LabFmsPage() {
   const saveField = async (r: any, field: string) => {
     setSaving(true)
     try {
-      const res = await patchFmsData(r, { [field]: editValue })
+      const extra: Record<string, any> = { [field]: editValue }
+      if (field === 'deliveryDate') extra.deliveryDateEnteredAt = new Date().toISOString()
+      const res = await patchFmsData(r, extra)
       if (!res.ok) { alert('Error: ' + res.error); return }
       setEditingField(null)
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const setFabricRequired = async (r: any, value: string) => {
+    setSaving(true)
+    try {
+      const res = await patchFmsData(r, { fabricRequired: value })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const setFabricSupervisor = async (r: any, value: string) => {
+    setSaving(true)
+    try {
+      const res = await patchFmsData(r, { fabricRequiredSupervisor: value })
+      if (!res.ok) { alert('Error: ' + res.error); return }
       load()
     } finally { setSaving(false) }
   }
@@ -106,6 +158,31 @@ export default function LabFmsPage() {
     } finally { setSaving(false) }
   }
 
+  const saveSetting = async (key: string, value: string) => {
+    setSettings((p) => ({ ...p, [key]: value }))
+    await labPost({ action: 'update_setting', key, value })
+  }
+
+  // ── Planned-date calculations ──────────────────────────────────────────
+
+  const deliveryPlanned = (r: any): Date | null => {
+    const anchor = r.confirmed_at || r.created_at
+    if (!anchor) return null
+    const days = parseInt(settings.delivery_date_days) || 0
+    const d = new Date(anchor)
+    d.setDate(d.getDate() + days)
+    return d
+  }
+
+  const fabricPlanned = (r: any): Date | null => {
+    const fd = r.fms_data || {}
+    if (fd.fabricRequired !== 'Yes' || !fd.deliveryDate) return null
+    const days = parseInt(settings.fabric_received_days) || 0
+    const d = new Date(fd.deliveryDate)
+    d.setDate(d.getDate() + days)
+    return d
+  }
+
   // Only blank the page on the true first load; actions here call load()
   // again afterward, which would otherwise wipe the whole page every time.
   if (loading && requests.length === 0) return (
@@ -130,6 +207,28 @@ export default function LabFmsPage() {
         <StatCard label="Lab Approval Done"   value={requests.filter(r=>r.fms_data?.labApprovalAt).length}        color="#8E24AA" />
       </div>
 
+      {/* Global planned-date settings */}
+      <div style={{ display: 'flex', gap: 20, marginBottom: 16, alignItems: 'center', fontSize: 12,
+        background: 'var(--bg-secondary)', border: '1px solid var(--border-light)', borderRadius: 8, padding: '10px 14px' }}>
+        <div style={{ fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', fontSize: 10 }}>Planned-date rules</div>
+        <div>
+          Delivery Date Entry = Date +
+          <input type="number" min="0" value={settings.delivery_date_days}
+            onChange={e => saveSetting('delivery_date_days', e.target.value)}
+            style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
+              border: '1px solid var(--border-medium)', borderRadius: 4, textAlign: 'center' }} />
+          day(s)
+        </div>
+        <div>
+          Fabric Received = Delivery Date (Actual) +
+          <input type="number" min="0" value={settings.fabric_received_days}
+            onChange={e => saveSetting('fabric_received_days', e.target.value)}
+            style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
+              border: '1px solid var(--border-medium)', borderRadius: 4, textAlign: 'center' }} />
+          day(s)
+        </div>
+      </div>
+
       {toast && (
         <div style={{ background: 'var(--success-light)', color: 'var(--success)',
           border: '1px solid var(--success)', borderRadius: 8, padding: '8px 14px',
@@ -143,7 +242,7 @@ export default function LabFmsPage() {
             No confirmed requests in Lab FMS. Both Sample Received and Parameters OK must be marked on the Requested page first.
           </div>
         ) : (
-          <table style={{ borderCollapse: 'collapse', minWidth: 1400, width: '100%', fontSize: 11 }}>
+          <table style={{ borderCollapse: 'collapse', minWidth: 1700, width: '100%', fontSize: 11 }}>
             <thead>
               <tr>
                 <th rowSpan={2} style={hd()}>Request No</th>
@@ -163,6 +262,7 @@ export default function LabFmsPage() {
                 <th rowSpan={2} style={hd()}>Other Remark</th>
                 <th rowSpan={2} style={hd()}>Chart No</th>
                 <th rowSpan={2} style={hd()}>Delivery Date</th>
+                <th rowSpan={2} style={hd()}>Fabric Required</th>
                 <th colSpan={4} style={hd('#BBDEFB', '#0C447C')}>Greige RFS Fabric Received</th>
                 <th colSpan={4} style={hd('#C8E6C9', '#1B5E20')}>Delivery Date Entry</th>
                 <th colSpan={4} style={hd('#FFE0B2', '#E65100')}>1st Submission</th>
@@ -179,6 +279,8 @@ export default function LabFmsPage() {
             <tbody>
               {requests.map((r, i) => {
                 const fd = r.fms_data || {}
+                const dPlanned = deliveryPlanned(r)
+                const fPlanned = fabricPlanned(r)
                 return (
                 <tr key={r.id} style={{
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
@@ -232,23 +334,49 @@ export default function LabFmsPage() {
                     )}
                   </td>
 
-                  {/* Delivery Date Entry — tracked section; Actual mirrors the plain field above (that's the real entry point) */}
-                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
-                  <td style={{ ...td, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20' }}>{fd.deliveryDate || '-'}</td>
-                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{fd.deliveryDate ? '✓' : '-'}</td>
-                  <td style={{ ...td, background: '#C8E6C9' }}>-</td>
+                  {/* Fabric Required — Yes/No, then Supervisor dropdown if Yes */}
+                  <td style={{ ...td, whiteSpace: 'normal', minWidth: 150 }}>
+                    <select value={fd.fabricRequired || ''} disabled={saving}
+                      onChange={e => setFabricRequired(r, e.target.value)}
+                      style={{ fontSize: 11, padding: '3px 6px', border: '1px solid var(--border-medium)', borderRadius: 4 }}>
+                      <option value="">Choose</option>
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                    </select>
+                    {fd.fabricRequired === 'Yes' && (
+                      <select value={fd.fabricRequiredSupervisor || ''} disabled={saving}
+                        onChange={e => setFabricSupervisor(r, e.target.value)}
+                        style={{ fontSize: 11, padding: '3px 6px', marginTop: 4, display: 'block',
+                          border: '1px solid var(--border-medium)', borderRadius: 4 }}>
+                        <option value="">Select Supervisor</option>
+                        {supervisors.map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
+                      </select>
+                    )}
+                  </td>
 
                   {/* Greige RFS Fabric Received */}
-                  <td style={{ ...td, background: '#BBDEFB' }}>-</td>
+                  <td style={{ ...td, background: '#BBDEFB' }}>{fPlanned ? fmtDateTime(fPlanned.toISOString()) : '-'}</td>
                   <td style={{ ...td, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20' }}>
                     {fd.fabricReceivedAt ? fmtDateTime(fd.fabricReceivedAt) : (
                       <button className="xs primary" disabled={saving} onClick={() => markFabricReceived(r)}>Received ✓</button>
                     )}
                   </td>
                   <td style={{ ...td, background: '#BBDEFB', textAlign: 'center' }}>{fd.fabricReceivedAt ? '✓' : '-'}</td>
-                  <td style={{ ...td, background: '#BBDEFB' }}>-</td>
+                  <td style={{ ...td, background: '#BBDEFB',
+                    color: !fd.fabricReceivedAt && fPlanned && now > fPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
+                    {delay(fPlanned, fd.fabricReceivedAt, now)}
+                  </td>
 
-                  {/* 1st Submission */}
+                  {/* Delivery Date Entry — Actual auto-fills from the plain field above */}
+                  <td style={{ ...td, background: '#C8E6C9' }}>{dPlanned ? fmtDateTime(dPlanned.toISOString()) : '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20' }}>{fd.deliveryDate || '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{fd.deliveryDate ? '✓' : '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9',
+                    color: !fd.deliveryDateEnteredAt && dPlanned && now > dPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
+                    {delay(dPlanned, fd.deliveryDateEnteredAt, now)}
+                  </td>
+
+                  {/* 1st Submission — timing rule not yet defined */}
                   <td style={{ ...td, background: '#FFE0B2' }}>-</td>
                   <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100' }}>
                     {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : (
@@ -258,7 +386,7 @@ export default function LabFmsPage() {
                   <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>{fd.firstSubmissionAt ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#FFE0B2' }}>-</td>
 
-                  {/* Lab Approval */}
+                  {/* Lab Approval — timing rule not yet defined */}
                   <td style={{ ...td, background: '#E1BEE7' }}>-</td>
                   <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A' }}>
                     {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : (
