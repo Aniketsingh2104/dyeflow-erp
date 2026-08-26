@@ -41,7 +41,12 @@ export default function LabRequestedPage() {
 
   const openCount = (reqId: string) => issues.filter(i => i.request_id === reqId && !i.solved).length
 
-  const confirm = async (id: string) => {
+  // Named confirmRequest, not confirm — a local const named `confirm` shadows
+  // window.confirm, so the dialog call below would recurse into itself
+  // (calling itself synchronously before ever reaching an await) instead of
+  // showing the browser dialog — instant stack overflow the moment Confirm
+  // is clicked, which is exactly why nothing was moving to FMS.
+  const confirmRequest = async (id: string) => {
     if (!confirm(`Confirm this request to move to FMS?`)) return
     setSaving(true)
     try {
@@ -146,7 +151,7 @@ export default function LabRequestedPage() {
                     </span>
                   </td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <button className="xs primary" disabled={saving} onClick={() => confirm(r.id)}>Confirm</button>
+                    <button className="xs primary" disabled={saving} onClick={() => confirmRequest(r.id)}>Confirm</button>
                     <button className="xs" style={{ marginLeft: 4 }} onClick={() => setIssuesModal(r.id)}>Issues</button>
                   </td>
                 </tr>

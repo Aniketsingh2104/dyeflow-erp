@@ -28,7 +28,9 @@ export default function RecheckedLabPage() {
 
   useEffect(() => { load() }, [load])
 
-  const confirm = async (id: string) => {
+  // Named confirmRequest, not confirm — a local const named `confirm` shadows
+  // window.confirm, causing infinite self-recursion the moment it's called.
+  const confirmRequest = async (id: string) => {
     if (!confirm('Confirm this recheck to move to FMS?')) return
     setSaving(true)
     try {
@@ -121,7 +123,7 @@ export default function RecheckedLabPage() {
                     </span>
                   </td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    {!r.confirmed && <button className="xs primary" disabled={saving} onClick={() => confirm(r.id)}>Confirm</button>}
+                    {!r.confirmed && <button className="xs primary" disabled={saving} onClick={() => confirmRequest(r.id)}>Confirm</button>}
                     <button className="xs" style={{ marginLeft: r.confirmed ? 0 : 4 }} onClick={() => setIssuesModal(r.id)}>Issues</button>
                   </td>
                 </tr>

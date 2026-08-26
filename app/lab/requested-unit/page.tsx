@@ -26,7 +26,10 @@ export default function RequestedUnitPage() {
     ? requests.filter(r => r.unit === unit)
     : requests
 
-  const confirm = async (id: string) => {
+  // Named confirmRequest, not confirm — avoids shadowing window.confirm
+  // (this function doesn't call it today, but naming it `confirm` is exactly
+  // the mistake that caused an infinite-recursion bug on other Lab pages).
+  const confirmRequest = async (id: string) => {
     setSaving(true)
     try {
       await labPost({ action: 'confirm_request', id })
@@ -99,7 +102,7 @@ export default function RequestedUnitPage() {
                   <td style={td}>{r.fastness_type || '-'}</td>
                   <td style={td}>{r.yarn_design || '-'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <button className="xs primary" disabled={saving} onClick={() => confirm(r.id)}>Confirm</button>
+                    <button className="xs primary" disabled={saving} onClick={() => confirmRequest(r.id)}>Confirm</button>
                   </td>
                 </tr>
               ))}

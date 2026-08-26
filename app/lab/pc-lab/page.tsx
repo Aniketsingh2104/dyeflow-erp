@@ -24,7 +24,11 @@ export default function PcLabPage() {
 
   useEffect(() => { load() }, [load])
 
-  const confirm = async (id: string) => {
+  // Named confirmRequest, not confirm — a local const named `confirm` shadows
+  // window.confirm, so the dialog call below would recurse into itself
+  // instead of showing the browser dialog (infinite synchronous recursion,
+  // instant stack overflow the moment the button is clicked).
+  const confirmRequest = async (id: string) => {
     if (!confirm('Confirm to move to FMS?')) return
     setSaving(true)
     try {
@@ -84,7 +88,7 @@ export default function PcLabPage() {
                   <td style={td}>{r.fastness_type || '-'}</td>
                   <td style={td}>{r.other_remark || '-'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <button className="xs primary" disabled={saving} onClick={() => confirm(r.id)}>Confirm</button>
+                    <button className="xs primary" disabled={saving} onClick={() => confirmRequest(r.id)}>Confirm</button>
                   </td>
                 </tr>
               ))}
