@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'create_indent') {
     const { data, error } = await dbInsert('lab_indents', {
-      id:                payload.id,
+      id,
       unit:              payload.unit,
       party_name:        payload.partyName,
       quality:           payload.quality,
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'create_request') {
     const { data, error } = await dbInsert('lab_requests', {
-      id:                       payload.id,
+      id,
       indent_id:                payload.indentId || null,
       unit:                     payload.unit || null,
       party:                    payload.party || null,
@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'create_issue') {
     const { data, error } = await dbInsert('lab_issues', {
-      id:          payload.id,
+      id,
       request_id:  payload.requestId,
       description: payload.description,
       priority:    payload.priority || 'Medium',
