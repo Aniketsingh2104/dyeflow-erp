@@ -42,7 +42,7 @@ export default function LabIndentPage() {
     try {
       const [res, custRes] = await Promise.all([
         labApi(),
-        fetch('/api/masters?table=customers', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/customers', { cache: 'no-store' }).then(r => r.json()),
       ])
       if (res.ok) { setIndents(res.indents || []); setRequests(res.requests || []) }
       const allIssuesRes = await labApi({ type: 'issues' })
@@ -282,7 +282,7 @@ export default function LabIndentPage() {
               {([
                 ['unit','Unit','select'],['partyName','Party Name','datalist'],
                 ['quality','Quality','text'],['numberOfLabDip','No. of LabDIP','number'],
-                ['requestGivenBy','Request Given By','select2'],['orderStatus','Order Status','select3'],
+                ['requestGivenBy','Request Given By','text'],['orderStatus','Order Status','select3'],
                 ['branch','Branch','select4'],['lightSource','Light Source','select5'],
               ] as [string,string,string][]).map(([key, label, type]) => (
                 <div key={key} className="form-group">
@@ -291,11 +291,6 @@ export default function LabIndentPage() {
                     <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
                       <option value="">Choose</option>
                       {LAB_UNIT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : type === 'select2' ? (
-                    <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
-                      <option value="">Choose</option>
-                      {LAB_BRANCHES.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   ) : type === 'select3' ? (
                     <select value={(form as any)[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}>
