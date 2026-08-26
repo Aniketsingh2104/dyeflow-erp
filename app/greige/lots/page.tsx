@@ -12,6 +12,12 @@ async function greigeApi(params?: Record<string, string>) {
   return res.json()
 }
 
+async function ordersApi(params?: Record<string, string>) {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+  const res = await fetch(`/api/orders${qs}`, { cache: 'no-store' })
+  return res.json()
+}
+
 function fmtDateTime(d: any) {
   if (!d) return '-'
   try { return new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
@@ -21,18 +27,21 @@ function fmtDateTime(d: any) {
 export default function GreigeLotsPage() {
   const [entries, setEntries] = useState<any[]>([])
   const [lots,    setLots]    = useState<any[]>([])
+  const [orders,  setOrders]  = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search,  setSearch]  = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [entriesRes, lotsRes] = await Promise.all([
+      const [entriesRes, lotsRes, ordersRes] = await Promise.all([
         greigeApi(),
         greigeApi({ type: 'lots' }),
+        ordersApi({ limit: '3000' }),
       ])
       if (entriesRes.ok) setEntries(entriesRes.data || [])
       if (lotsRes.ok)    setLots(lotsRes.data    || [])
+      if (ordersRes.ok)  setOrders(ordersRes.data || [])
     } finally { setLoading(false) }
   }, [])
 
@@ -44,10 +53,32 @@ export default function GreigeLotsPage() {
     return m
   }, [entries])
 
-  // One row per lot, joined back to its parent entry for party/challan/article.
+  // Consumption per lot number, summed across every order whose lot_no
+  // matches (trimmed + case-insensitive, since orders.lot_no is free-typed
+  // text and real data has inconsistent spacing/casing — e.g. "591 B").
+  const consumedByLot = useMemo(() => {
+    const m: Record<string, { kg: number; qty: number; taka: number }> = {}
+    for (const o of orders) {
+      const key = String(o.lot_no || '').trim().toUpperCase()
+      if (!key) continue
+      if (!m[key]) m[key] = { kg: 0, qty: 0, taka: 0 }
+      m[key].kg   += parseFloat(o.qty_kg)    || 0
+      m[key].qty  += parseFloat(o.qty_mtr)   || 0
+      m[key].taka += parseInt(o.no_of_taka)  || 0
+    }
+    return m
+  }, [orders])
+
+  // One row per lot, joined back to its parent entry for party/challan/article,
+  // and to matching orders for consumed → pending Kg/Meter/Taka.
   const rows = useMemo(() => {
     return lots.map((l: any) => {
       const e = entryById[l.entry_id] || {}
+      const key = String(l.lot_number || '').trim().toUpperCase()
+      const consumed = consumedByLot[key] || { kg: 0, qty: 0, taka: 0 }
+      const pendingKg   = l.kg   != null ? Math.round((parseFloat(l.kg)  - consumed.kg)  * 100) / 100 : null
+      const pendingQty  = l.qty  != null ? Math.round((parseFloat(l.qty) - consumed.qty) * 100) / 100 : null
+      const pendingTaka = l.taka != null ? (parseInt(l.taka) - consumed.taka) : null
       return {
         ...l,
         party:        e.party        || '-',
@@ -58,9 +89,13 @@ export default function GreigeLotsPage() {
         entry_kg:     e.kg,
         entry_qty:    e.qty,
         entry_created: e.created_at,
+        consumedKg:   consumed.kg,
+        consumedQty:  consumed.qty,
+        consumedTaka: consumed.taka,
+        pendingKg, pendingQty, pendingTaka,
       }
     })
-  }, [lots, entryById])
+  }, [lots, entryById, consumedByLot])
 
   const filtered = search.trim()
     ? rows.filter(r => [r.lot_number, r.party, r.challan_no, r.article]
@@ -117,7 +152,7 @@ export default function GreigeLotsPage() {
           <table style={{ borderCollapse: 'collapse', minWidth: 900, width: '100%', fontSize: 12 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Lot No.', 'Qty (Kg)', 'Qty (Meter)', 'Taka', 'Party', 'Challan No.', 'Article', 'Blend', 'Entry Date', 'Status'].map(h => (
+                {['Lot No.', 'Qty (Kg)', 'Qty (Meter)', 'Taka', 'Pending Kg', 'Pending Meter', 'Pending Taka', 'Party', 'Challan No.', 'Article', 'Blend', 'Entry Date', 'Status'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)',
@@ -134,6 +169,15 @@ export default function GreigeLotsPage() {
                   <td style={td}>{r.kg != null ? r.kg : '-'}</td>
                   <td style={td}>{r.qty != null ? r.qty : '-'}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.taka != null ? r.taka : '-'}</td>
+                  <td style={{ ...td, fontWeight: 700, color: r.pendingKg != null && r.pendingKg < 0 ? 'var(--danger)' : r.pendingKg === 0 ? 'var(--text-tertiary)' : 'var(--warning)' }}>
+                    {r.pendingKg != null ? r.pendingKg : '-'}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700, color: r.pendingQty != null && r.pendingQty < 0 ? 'var(--danger)' : r.pendingQty === 0 ? 'var(--text-tertiary)' : 'var(--warning)' }}>
+                    {r.pendingQty != null ? r.pendingQty : '-'}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700, color: r.pendingTaka != null && r.pendingTaka < 0 ? 'var(--danger)' : r.pendingTaka === 0 ? 'var(--text-tertiary)' : 'var(--warning)' }}>
+                    {r.pendingTaka != null ? r.pendingTaka : '-'}
+                  </td>
                   <td style={{ ...td, fontWeight: 600 }}>{r.party}</td>
                   <td style={td}>{r.challan_no}</td>
                   <td style={td}>{r.article}</td>
