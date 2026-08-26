@@ -35,7 +35,9 @@ export default function LabFmsPage() {
     } finally { setSaving(false) }
   }
 
-  if (loading) return (
+  // Only blank the page on the true first load; actions here call load()
+  // again afterward, which would otherwise wipe the whole page every time.
+  if (loading && requests.length === 0) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</div>
   )

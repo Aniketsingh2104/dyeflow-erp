@@ -154,7 +154,9 @@ export default function LabIndentPage() {
     showToast('✓ Issue raised')
   }
 
-  if (loading) return (
+  // Only blank the page on the true first load; saveIndent/saveRequest/
+  // closeIndent/toggleIssue/addIssue all call load() again afterward.
+  if (loading && indents.length === 0) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '60vh', color: 'var(--text-tertiary)', fontSize: 14 }}>
       Loading lab indents…
