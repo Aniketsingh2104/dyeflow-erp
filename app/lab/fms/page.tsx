@@ -3,12 +3,17 @@
 // the Requested page), tracked in the same visual format as the Greige
 // Register (colored section headers, each with Planned/Actual/Status/Delay).
 //
-// Planned-date rules (global day-offsets, editable at the top of this page):
-//   Delivery Date Entry:        Planned = request Date + delivery_date_days
-//   Greige RFS Fabric Received: Planned = Delivery Date's Actual + fabric_received_days
-//                                (only when Fabric Required = Yes; otherwise "-")
-// 1st Submission and Lab Approval don't have a defined timing rule yet, so
-// their Planned/Delay stay as placeholders ("-").
+// Planned-date rules (global day-offsets, editable at the top of this page —
+// any user can edit for now; admin-only restriction is deferred to the
+// future User Management module):
+//   1. Greige RFS Fabric Received: Planned = FMS Date + fabric_received_days
+//      — ONLY when Fabric Required = Yes; otherwise skipped entirely ("-").
+//   2. Delivery Date Entry: Planned = (Fabric Required = Yes ? Fabric
+//      Received's Actual : FMS Date) + delivery_date_days. Auto-marks Done
+//      (and Actual generates) only once BOTH Chart No AND Delivery Date are
+//      filled in.
+//   3. 1st Submission: Planned = Delivery Date value written + first_submission_days.
+//   4. Lab Approval: Planned = 1st Submission's Actual + lab_approval_days.
 
 import { useEffect, useState, useCallback } from 'react'
 import { labApi, labPost, StatCard, fmtDateTime } from '../_shared'
@@ -33,7 +38,9 @@ export default function LabFmsPage() {
   const [requests, setRequests] = useState<any[]>([])
   const [indents,  setIndents]  = useState<any[]>([])
   const [supervisors, setSupervisors] = useState<any[]>([])
-  const [settings, setSettings] = useState<Record<string, string>>({ delivery_date_days: '1', fabric_received_days: '1' })
+  const [settings, setSettings] = useState<Record<string, string>>({
+    delivery_date_days: '1', fabric_received_days: '1', first_submission_days: '1', lab_approval_days: '1',
+  })
   const [loading,  setLoading]  = useState(true)
   const [toast,    setToast]    = useState('')
   const [saving,   setSaving]   = useState(false)
@@ -165,20 +172,47 @@ export default function LabFmsPage() {
 
   // ── Planned-date calculations ──────────────────────────────────────────
 
-  const deliveryPlanned = (r: any): Date | null => {
-    const anchor = r.confirmed_at || r.created_at
+  const fmsDate = (r: any) => r.confirmed_at || r.created_at
+
+  // 1. Greige RFS Fabric Received — only when Fabric Required = Yes.
+  const fabricPlanned = (r: any): Date | null => {
+    const fd = r.fms_data || {}
+    if (fd.fabricRequired !== 'Yes') return null
+    const anchor = fmsDate(r)
     if (!anchor) return null
-    const days = parseInt(settings.delivery_date_days) || 0
+    const days = parseInt(settings.fabric_received_days) || 0
     const d = new Date(anchor)
     d.setDate(d.getDate() + days)
     return d
   }
 
-  const fabricPlanned = (r: any): Date | null => {
+  // 2. Delivery Date Entry — anchor depends on whether Fabric was required.
+  const deliveryPlanned = (r: any): Date | null => {
     const fd = r.fms_data || {}
-    if (fd.fabricRequired !== 'Yes' || !fd.deliveryDate) return null
-    const days = parseInt(settings.fabric_received_days) || 0
+    const days = parseInt(settings.delivery_date_days) || 0
+    const anchor = fd.fabricRequired === 'Yes' ? fd.fabricReceivedAt : fmsDate(r)
+    if (!anchor) return null
+    const d = new Date(anchor)
+    d.setDate(d.getDate() + days)
+    return d
+  }
+
+  // 3. 1st Submission — from the Delivery Date value written (not a timestamp).
+  const submissionPlanned = (r: any): Date | null => {
+    const fd = r.fms_data || {}
+    if (!fd.deliveryDate) return null
+    const days = parseInt(settings.first_submission_days) || 0
     const d = new Date(fd.deliveryDate)
+    d.setDate(d.getDate() + days)
+    return d
+  }
+
+  // 4. Lab Approval — from 1st Submission's Actual timestamp.
+  const approvalPlanned = (r: any): Date | null => {
+    const fd = r.fms_data || {}
+    if (!fd.firstSubmissionAt) return null
+    const days = parseInt(settings.lab_approval_days) || 0
+    const d = new Date(fd.firstSubmissionAt)
     d.setDate(d.getDate() + days)
     return d
   }
@@ -207,12 +241,20 @@ export default function LabFmsPage() {
         <StatCard label="Lab Approval Done"   value={requests.filter(r=>r.fms_data?.labApprovalAt).length}        color="#8E24AA" />
       </div>
 
-      {/* Global planned-date settings */}
-      <div style={{ display: 'flex', gap: 20, marginBottom: 16, alignItems: 'center', fontSize: 12,
+      {/* Global planned-date settings — any user can edit for now */}
+      <div style={{ display: 'flex', gap: 20, marginBottom: 16, alignItems: 'center', fontSize: 12, flexWrap: 'wrap',
         background: 'var(--bg-secondary)', border: '1px solid var(--border-light)', borderRadius: 8, padding: '10px 14px' }}>
         <div style={{ fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', fontSize: 10 }}>Planned-date rules</div>
         <div>
-          Delivery Date Entry = Date +
+          1. Fabric Received = FMS Date +
+          <input type="number" min="0" value={settings.fabric_received_days}
+            onChange={e => saveSetting('fabric_received_days', e.target.value)}
+            style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
+              border: '1px solid var(--border-medium)', borderRadius: 4, textAlign: 'center' }} />
+          day(s)
+        </div>
+        <div>
+          2. Delivery Date = (Fabric Actual or FMS Date) +
           <input type="number" min="0" value={settings.delivery_date_days}
             onChange={e => saveSetting('delivery_date_days', e.target.value)}
             style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
@@ -220,9 +262,17 @@ export default function LabFmsPage() {
           day(s)
         </div>
         <div>
-          Fabric Received = Delivery Date (Actual) +
-          <input type="number" min="0" value={settings.fabric_received_days}
-            onChange={e => saveSetting('fabric_received_days', e.target.value)}
+          3. 1st Submission = Delivery Date +
+          <input type="number" min="0" value={settings.first_submission_days}
+            onChange={e => saveSetting('first_submission_days', e.target.value)}
+            style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
+              border: '1px solid var(--border-medium)', borderRadius: 4, textAlign: 'center' }} />
+          day(s)
+        </div>
+        <div>
+          4. Lab Approval = Submission Actual +
+          <input type="number" min="0" value={settings.lab_approval_days}
+            onChange={e => saveSetting('lab_approval_days', e.target.value)}
             style={{ width: 44, margin: '0 6px', padding: '3px 6px', fontSize: 12,
               border: '1px solid var(--border-medium)', borderRadius: 4, textAlign: 'center' }} />
           day(s)
@@ -279,8 +329,11 @@ export default function LabFmsPage() {
             <tbody>
               {requests.map((r, i) => {
                 const fd = r.fms_data || {}
-                const dPlanned = deliveryPlanned(r)
                 const fPlanned = fabricPlanned(r)
+                const dPlanned = deliveryPlanned(r)
+                const sPlanned = submissionPlanned(r)
+                const aPlanned = approvalPlanned(r)
+                const deliveryDone = !!(fd.chartNumber && fd.deliveryDate)
                 return (
                 <tr key={r.id} style={{
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
@@ -354,11 +407,13 @@ export default function LabFmsPage() {
                     )}
                   </td>
 
-                  {/* Greige RFS Fabric Received */}
+                  {/* 1. Greige RFS Fabric Received */}
                   <td style={{ ...td, background: '#BBDEFB' }}>{fPlanned ? fmtDateTime(fPlanned.toISOString()) : '-'}</td>
                   <td style={{ ...td, background: '#BBDEFB', fontWeight: 700, color: '#1B5E20' }}>
                     {fd.fabricReceivedAt ? fmtDateTime(fd.fabricReceivedAt) : (
-                      <button className="xs primary" disabled={saving} onClick={() => markFabricReceived(r)}>Received ✓</button>
+                      fd.fabricRequired === 'Yes'
+                        ? <button className="xs primary" disabled={saving} onClick={() => markFabricReceived(r)}>Received ✓</button>
+                        : <span style={{ color: 'var(--text-tertiary)' }}>-</span>
                     )}
                   </td>
                   <td style={{ ...td, background: '#BBDEFB', textAlign: 'center' }}>{fd.fabricReceivedAt ? '✓' : '-'}</td>
@@ -367,34 +422,40 @@ export default function LabFmsPage() {
                     {delay(fPlanned, fd.fabricReceivedAt, now)}
                   </td>
 
-                  {/* Delivery Date Entry — Actual auto-fills from the plain field above */}
+                  {/* 2. Delivery Date Entry — Done only once BOTH Chart No + Delivery Date are set */}
                   <td style={{ ...td, background: '#C8E6C9' }}>{dPlanned ? fmtDateTime(dPlanned.toISOString()) : '-'}</td>
                   <td style={{ ...td, background: '#C8E6C9', fontWeight: 700, color: '#1B5E20' }}>{fd.deliveryDate || '-'}</td>
-                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{fd.deliveryDate ? '✓' : '-'}</td>
+                  <td style={{ ...td, background: '#C8E6C9', textAlign: 'center' }}>{deliveryDone ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#C8E6C9',
-                    color: !fd.deliveryDateEnteredAt && dPlanned && now > dPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
-                    {delay(dPlanned, fd.deliveryDateEnteredAt, now)}
+                    color: !deliveryDone && dPlanned && now > dPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
+                    {delay(dPlanned, deliveryDone ? fd.deliveryDateEnteredAt : null, now)}
                   </td>
 
-                  {/* 1st Submission — timing rule not yet defined */}
-                  <td style={{ ...td, background: '#FFE0B2' }}>-</td>
+                  {/* 3. 1st Submission */}
+                  <td style={{ ...td, background: '#FFE0B2' }}>{sPlanned ? fmtDateTime(sPlanned.toISOString()) : '-'}</td>
                   <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100' }}>
                     {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : (
                       <button className="xs primary" disabled={saving} onClick={() => markFirstSubmission(r)}>Submit ✓</button>
                     )}
                   </td>
                   <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>{fd.firstSubmissionAt ? '✓' : '-'}</td>
-                  <td style={{ ...td, background: '#FFE0B2' }}>-</td>
+                  <td style={{ ...td, background: '#FFE0B2',
+                    color: !fd.firstSubmissionAt && sPlanned && now > sPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
+                    {delay(sPlanned, fd.firstSubmissionAt, now)}
+                  </td>
 
-                  {/* Lab Approval — timing rule not yet defined */}
-                  <td style={{ ...td, background: '#E1BEE7' }}>-</td>
+                  {/* 4. Lab Approval */}
+                  <td style={{ ...td, background: '#E1BEE7' }}>{aPlanned ? fmtDateTime(aPlanned.toISOString()) : '-'}</td>
                   <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A' }}>
                     {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : (
                       <button className="xs primary" disabled={saving} onClick={() => markLabApproval(r)}>Approve ✓</button>
                     )}
                   </td>
                   <td style={{ ...td, background: '#E1BEE7', textAlign: 'center' }}>{fd.labApprovalAt ? '✓' : '-'}</td>
-                  <td style={{ ...td, background: '#E1BEE7' }}>-</td>
+                  <td style={{ ...td, background: '#E1BEE7',
+                    color: !fd.labApprovalAt && aPlanned && now > aPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
+                    {delay(aPlanned, fd.labApprovalAt, now)}
+                  </td>
 
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     <button className="xs" onClick={() => { setDetailsModal(r); setDetailsForm(fd) }}>L/A/B/DE</button>
