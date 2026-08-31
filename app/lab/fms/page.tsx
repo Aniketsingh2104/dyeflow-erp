@@ -478,16 +478,16 @@ export default function LabFmsPage() {
                     {delay(dPlanned, deliveryDone ? fd.deliveryDateEnteredAt : null, now)}
                   </td>
 
-                  {/* 3. 1st Submission — checkbox, ticking opens the Lab Number modal */}
+                  {/* 3. 1st Submission — checkbox lives in Status; ticking opens the Lab Number modal */}
                   <td style={{ ...td, background: '#FFE0B2' }}>{sPlanned ? fmtDateTime(sPlanned.toISOString()) : '-'}</td>
-                  <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100', whiteSpace: 'normal' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: saving ? 'default' : 'pointer' }}>
-                      <input type="checkbox" checked={!!fd.firstSubmissionAt} disabled={saving}
-                        onChange={e => toggleFirstSubmission(r, e.target.checked)} />
-                      {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : 'Not submitted'}
-                    </label>
+                  <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100' }}>
+                    {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : '-'}
+                  </td>
+                  <td style={{ ...td, background: '#FFE0B2', textAlign: 'center', whiteSpace: 'normal' }}>
+                    <input type="checkbox" checked={!!fd.firstSubmissionAt} disabled={saving}
+                      onChange={e => toggleFirstSubmission(r, e.target.checked)} />
                     {fd.labNumbers?.length > 0 && (
-                      <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                      <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
                         {fd.labNumbers.map((ln: string, idx: number) => (
                           <span key={idx} style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px',
                             borderRadius: 6, background: '#E65100', color: '#fff' }}>{ln}</span>
@@ -495,22 +495,20 @@ export default function LabFmsPage() {
                       </div>
                     )}
                   </td>
-                  <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>{fd.firstSubmissionAt ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#FFE0B2',
                     color: !fd.firstSubmissionAt && sPlanned && now > sPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
                     {delay(sPlanned, fd.firstSubmissionAt, now)}
                   </td>
 
-                  {/* 4. Lab Approval — checkbox */}
+                  {/* 4. Lab Approval — checkbox lives in Status */}
                   <td style={{ ...td, background: '#E1BEE7' }}>{aPlanned ? fmtDateTime(aPlanned.toISOString()) : '-'}</td>
-                  <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A', whiteSpace: 'normal' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: saving ? 'default' : 'pointer' }}>
-                      <input type="checkbox" checked={!!fd.labApprovalAt} disabled={saving}
-                        onChange={e => toggleLabApproval(r, e.target.checked)} />
-                      {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : 'Not approved'}
-                    </label>
+                  <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A' }}>
+                    {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : '-'}
                   </td>
-                  <td style={{ ...td, background: '#E1BEE7', textAlign: 'center' }}>{fd.labApprovalAt ? '✓' : '-'}</td>
+                  <td style={{ ...td, background: '#E1BEE7', textAlign: 'center' }}>
+                    <input type="checkbox" checked={!!fd.labApprovalAt} disabled={saving}
+                      onChange={e => toggleLabApproval(r, e.target.checked)} />
+                  </td>
                   <td style={{ ...td, background: '#E1BEE7',
                     color: !fd.labApprovalAt && aPlanned && now > aPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
                     {delay(aPlanned, fd.labApprovalAt, now)}
