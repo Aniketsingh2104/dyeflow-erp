@@ -55,6 +55,12 @@ export default function LabFmsPage() {
   const [detailsModal, setDetailsModal] = useState<any>(null)
   const [detailsForm,  setDetailsForm]  = useState<any>({})
 
+  // Lab Number(s) modal — opens when ticking the 1st Submission checkbox.
+  // Same proven pattern as Greige Register's lot-entry form: separate boxes
+  // per row, "+ Add Another", no compound syntax to type.
+  const [labNumberModal, setLabNumberModal] = useState<any>(null)
+  const [labNumberRows, setLabNumberRows] = useState<string[]>([''])
+
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
   // Ticks every minute so live countdowns stay accurate.
@@ -133,22 +139,63 @@ export default function LabFmsPage() {
     } finally { setSaving(false) }
   }
 
-  const markFirstSubmission = async (r: any) => {
-    setSaving(true)
-    try {
-      const res = await patchFmsData(r, { firstSubmissionAt: new Date().toISOString() })
-      if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast('✓ 1st Submission marked')
-      load()
-    } finally { setSaving(false) }
-  }
-
   const markLabApproval = async (r: any) => {
     setSaving(true)
     try {
       const res = await patchFmsData(r, { labApprovalAt: new Date().toISOString() })
       if (!res.ok) { alert('Error: ' + res.error); return }
       showToast('✓ Lab Approval marked')
+      load()
+    } finally { setSaving(false) }
+  }
+
+  // 1st Submission — checkbox toggle. Ticking opens the Lab Number modal
+  // (required before it actually saves as submitted); unticking clears the
+  // flag directly, no confirmation — keeps it easy to correct a mis-click.
+  // Lab Numbers already entered stay stored so re-ticking can reuse them.
+  const openLabNumberModal = (r: any) => {
+    const existing = r.fms_data?.labNumbers || []
+    setLabNumberRows(existing.length > 0 ? existing : [''])
+    setLabNumberModal(r)
+  }
+  const addLabNumberRow = () => setLabNumberRows(prev => [...prev, ''])
+  const removeLabNumberRow = (idx: number) => setLabNumberRows(prev => prev.filter((_, i) => i !== idx))
+  const updateLabNumberRow = (idx: number, value: string) => setLabNumberRows(prev => prev.map((v, i) => i === idx ? value : v))
+
+  const saveLabNumbers = async () => {
+    if (!labNumberModal) return
+    const cleaned = labNumberRows.map(v => v.trim()).filter(Boolean)
+    if (cleaned.length === 0) { alert('Enter at least one Lab Number.'); return }
+    setSaving(true)
+    try {
+      const res = await patchFmsData(labNumberModal, { labNumbers: cleaned, firstSubmissionAt: new Date().toISOString() })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('✓ 1st Submission marked')
+      setLabNumberModal(null)
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const unmarkFirstSubmission = async (r: any) => {
+    setSaving(true)
+    try {
+      const res = await patchFmsData(r, { firstSubmissionAt: null })
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      load()
+    } finally { setSaving(false) }
+  }
+
+  const toggleFirstSubmission = (r: any, checked: boolean) => {
+    if (checked) openLabNumberModal(r)
+    else unmarkFirstSubmission(r)
+  }
+
+  // Lab Approval — simple checkbox toggle, no extra data needed.
+  const toggleLabApproval = async (r: any, checked: boolean) => {
+    setSaving(true)
+    try {
+      const res = await patchFmsData(r, { labApprovalAt: checked ? new Date().toISOString() : null })
+      if (!res.ok) { alert('Error: ' + res.error); return }
       load()
     } finally { setSaving(false) }
   }
@@ -431,11 +478,21 @@ export default function LabFmsPage() {
                     {delay(dPlanned, deliveryDone ? fd.deliveryDateEnteredAt : null, now)}
                   </td>
 
-                  {/* 3. 1st Submission */}
+                  {/* 3. 1st Submission — checkbox, ticking opens the Lab Number modal */}
                   <td style={{ ...td, background: '#FFE0B2' }}>{sPlanned ? fmtDateTime(sPlanned.toISOString()) : '-'}</td>
-                  <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100' }}>
-                    {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : (
-                      <button className="xs primary" disabled={saving} onClick={() => markFirstSubmission(r)}>Submit ✓</button>
+                  <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100', whiteSpace: 'normal' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: saving ? 'default' : 'pointer' }}>
+                      <input type="checkbox" checked={!!fd.firstSubmissionAt} disabled={saving}
+                        onChange={e => toggleFirstSubmission(r, e.target.checked)} />
+                      {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : 'Not submitted'}
+                    </label>
+                    {fd.labNumbers?.length > 0 && (
+                      <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                        {fd.labNumbers.map((ln: string, idx: number) => (
+                          <span key={idx} style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px',
+                            borderRadius: 6, background: '#E65100', color: '#fff' }}>{ln}</span>
+                        ))}
+                      </div>
                     )}
                   </td>
                   <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>{fd.firstSubmissionAt ? '✓' : '-'}</td>
@@ -444,12 +501,14 @@ export default function LabFmsPage() {
                     {delay(sPlanned, fd.firstSubmissionAt, now)}
                   </td>
 
-                  {/* 4. Lab Approval */}
+                  {/* 4. Lab Approval — checkbox */}
                   <td style={{ ...td, background: '#E1BEE7' }}>{aPlanned ? fmtDateTime(aPlanned.toISOString()) : '-'}</td>
-                  <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A' }}>
-                    {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : (
-                      <button className="xs primary" disabled={saving} onClick={() => markLabApproval(r)}>Approve ✓</button>
-                    )}
+                  <td style={{ ...td, background: '#E1BEE7', fontWeight: 700, color: '#6A1B9A', whiteSpace: 'normal' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: saving ? 'default' : 'pointer' }}>
+                      <input type="checkbox" checked={!!fd.labApprovalAt} disabled={saving}
+                        onChange={e => toggleLabApproval(r, e.target.checked)} />
+                      {fd.labApprovalAt ? fmtDateTime(fd.labApprovalAt) : 'Not approved'}
+                    </label>
                   </td>
                   <td style={{ ...td, background: '#E1BEE7', textAlign: 'center' }}>{fd.labApprovalAt ? '✓' : '-'}</td>
                   <td style={{ ...td, background: '#E1BEE7',
@@ -511,6 +570,42 @@ export default function LabFmsPage() {
                 {saving ? 'Saving…' : '✓ Save'}
               </button>
               <button onClick={() => setDetailsModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lab Number(s) — opens on ticking 1st Submission, no compound syntax to type */}
+      {labNumberModal && (
+        <div className="modal-overlay" onClick={() => setLabNumberModal(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Lab Number(s) — {labNumberModal.id}</span>
+              <button className="small" onClick={() => setLabNumberModal(null)}>✕</button>
+            </div>
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 14px',
+              marginBottom: 14, fontSize: 13 }}>
+              {labNumberModal.party} · {labNumberModal.shade_pantone}
+            </div>
+            {labNumberRows.map((val, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                <input value={val} placeholder="e.g. LN-001" autoFocus={idx === 0}
+                  onChange={e => updateLabNumberRow(idx, e.target.value)}
+                  style={{ flex: 1, padding: '7px 10px', fontSize: 13,
+                    border: '1px solid var(--border-medium)', borderRadius: 6 }} />
+                <button className="xs" onClick={() => removeLabNumberRow(idx)}
+                  disabled={labNumberRows.length === 1}
+                  style={{ opacity: labNumberRows.length === 1 ? 0.3 : 1 }}>✕</button>
+              </div>
+            ))}
+            <button className="small" onClick={addLabNumberRow} style={{ marginBottom: 14 }}>
+              + Add Another Lab Number
+            </button>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setLabNumberModal(null)}>Cancel</button>
+              <button className="primary" onClick={saveLabNumbers} disabled={saving}>
+                {saving ? 'Saving…' : '✓ Save & Mark Submitted'}
+              </button>
             </div>
           </div>
         </div>
