@@ -483,17 +483,9 @@ export default function LabFmsPage() {
                   <td style={{ ...td, background: '#FFE0B2', fontWeight: 700, color: '#E65100' }}>
                     {fd.firstSubmissionAt ? fmtDateTime(fd.firstSubmissionAt) : '-'}
                   </td>
-                  <td style={{ ...td, background: '#FFE0B2', textAlign: 'center', whiteSpace: 'normal' }}>
+                  <td style={{ ...td, background: '#FFE0B2', textAlign: 'center' }}>
                     <input type="checkbox" checked={!!fd.firstSubmissionAt} disabled={saving}
                       onChange={e => toggleFirstSubmission(r, e.target.checked)} />
-                    {fd.labNumbers?.length > 0 && (
-                      <div style={{ marginTop: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
-                        {fd.labNumbers.map((ln: string, idx: number) => (
-                          <span key={idx} style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px',
-                            borderRadius: 6, background: '#E65100', color: '#fff' }}>{ln}</span>
-                        ))}
-                      </div>
-                    )}
                   </td>
                   <td style={{ ...td, background: '#FFE0B2',
                     color: !fd.firstSubmissionAt && sPlanned && now > sPlanned.getTime() ? 'var(--danger)' : 'inherit' }}>
