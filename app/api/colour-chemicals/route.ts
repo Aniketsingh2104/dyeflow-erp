@@ -4,7 +4,7 @@ import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 export async function GET() {
   const { data, error } = await dbSelect('colour_chemicals',
     { order: 'name.asc', limit: '5000' },
-    'id,name,created_at'
+    'id,name,type,unit,notes,lead_time,safety_factor,avg_daily_consumption,created_at'
   )
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   return NextResponse.json({ ok: true, data, total: data.length })
@@ -26,6 +26,20 @@ export async function POST(req: NextRequest) {
     const { id, name } = body
     if (!id || !name?.trim()) return NextResponse.json({ ok: false, error: 'id and name required' }, { status: 400 })
     const { error } = await dbUpdate('colour_chemicals', { id }, { name: name.trim() })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
+
+  // Reorder-planning inputs (Lead Time, Safety Factor, Avg Daily Consumption)
+  // — MAX Level is computed from these on the client, not stored.
+  if (action === 'update_planning') {
+    const { id, leadTime, safetyFactor, avgDailyConsumption } = body
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const patch: Record<string, any> = {}
+    if (leadTime !== undefined) patch.lead_time = leadTime === '' ? null : parseFloat(leadTime)
+    if (safetyFactor !== undefined) patch.safety_factor = safetyFactor === '' ? null : parseFloat(safetyFactor)
+    if (avgDailyConsumption !== undefined) patch.avg_daily_consumption = avgDailyConsumption === '' ? null : parseFloat(avgDailyConsumption)
+    const { error } = await dbUpdate('colour_chemicals', { id }, patch)
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })
   }
