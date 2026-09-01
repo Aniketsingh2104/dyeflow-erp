@@ -5,14 +5,16 @@ import { dbSelect, sb } from '@/lib/supabase'
 // GET  -> { chemicals: colour_chemicals[], stock: colour_store_stock[] }
 //         (client computes "latest per name" from the stock array — kept
 //         simple since history matters too, not just the latest snapshot)
-// POST { action: 'upload_stock', stockDate, rows: [{name, qty}] }
+// POST { action: 'upload_stock', stockDate, rows: [{name, group, qty, rate}] }
 //   -> upserts one row per name for that date (name+stock_date is unique,
-//      so re-uploading the same date corrects rather than duplicates)
+//      so re-uploading the same date corrects rather than duplicates).
+//      qty is stored exactly as uploaded (grams, from the real report format
+//      — Balance Qty column) — conversion to Kg happens at display time only.
 
 export async function GET() {
   const [chemRes, stockRes] = await Promise.all([
     dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,created_at'),
-    dbSelect('colour_store_stock', { order: 'stock_date.desc', limit: '20000' }, 'id,chemical_id,name,stock_qty,stock_date,created_at'),
+    dbSelect('colour_store_stock', { order: 'stock_date.desc', limit: '20000' }, 'id,chemical_id,name,group_name,stock_qty,stock_date,rate,created_at'),
   ])
   if (chemRes.error) return NextResponse.json({ ok: false, error: chemRes.error }, { status: 500 })
   if (stockRes.error) return NextResponse.json({ ok: false, error: stockRes.error }, { status: 500 })
@@ -39,7 +41,9 @@ export async function POST(req: NextRequest) {
       return {
         chemical_id: byNameLower[name.toLowerCase()] || null,
         name,
+        group_name: r.group ? String(r.group).trim() : null,
         stock_qty: parseFloat(r.qty) || 0,
+        rate: r.rate != null && r.rate !== '' ? parseFloat(r.rate) : null,
         stock_date: stockDate,
       }
     }).filter((r: any) => r.name)

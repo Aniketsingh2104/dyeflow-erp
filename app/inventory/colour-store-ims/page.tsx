@@ -1,9 +1,11 @@
 'use client'
 // Colour Store IMS — shows every name in the Colour Chemical Master with its
-// latest recorded stock, and lets you upload a daily Excel (Name + Stock
-// columns) — stock is recorded date-wise (colour_store_stock, one row per
-// name per date), so re-uploading the same date corrects rather than
-// duplicates, and history stays available for every past date.
+// latest recorded stock, and lets you upload the daily Consumable Trial
+// Balance Report (fixed columns: B=Name, C=Group, K=Balance Qty in grams,
+// L=Rate — all other columns ignored). Stock is recorded date-wise
+// (colour_store_stock, one row per name per date), so re-uploading the same
+// date corrects rather than duplicates. Balance Qty is stored exactly as
+// uploaded (grams) and only converted to Kg for display.
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
@@ -57,7 +59,13 @@ export default function ColourStoreIMSPage() {
   const rows = useMemo(() => {
     return chemicals.map((c: any) => {
       const latest = latestByName[String(c.name).trim().toLowerCase()]
-      return { ...c, latestStock: latest?.stock_qty ?? null, latestDate: latest?.stock_date ?? null }
+      return {
+        ...c,
+        latestStockG: latest?.stock_qty ?? null,
+        latestGroup: latest?.group_name ?? null,
+        latestRate: latest?.rate ?? null,
+        latestDate: latest?.stock_date ?? null,
+      }
     })
   }, [chemicals, latestByName])
 
@@ -92,18 +100,20 @@ export default function ColourStoreIMSPage() {
       const rawRows = await parseExcel(file)
       if (rawRows.length < 2) throw new Error('File has no data rows.')
 
-      const headers = rawRows[0].map(h => h.toLowerCase().trim())
-      const nameIdx = headers.findIndex(h => h.includes('name'))
-      const stockIdx = headers.findIndex(h => h.includes('stock') || h.includes('qty'))
-      if (nameIdx === -1 || stockIdx === -1) {
-        throw new Error('Could not find a "Name" column and a "Stock" column in the file.')
-      }
+      // Fixed columns from the real report format: B=Name, C=Group,
+      // K=Balance Qty (grams), L=Rate. 0-indexed: B=1, C=2, K=10, L=11.
+      const NAME_COL = 1, GROUP_COL = 2, QTY_COL = 10, RATE_COL = 11
 
       const parsedRows = rawRows.slice(1)
-        .map(r => ({ name: r[nameIdx], qty: r[stockIdx] }))
+        .map(r => ({
+          name:  r[NAME_COL],
+          group: r[GROUP_COL],
+          qty:   r[QTY_COL],
+          rate:  r[RATE_COL],
+        }))
         .filter(r => r.name)
 
-      if (parsedRows.length === 0) throw new Error('No valid rows found.')
+      if (parsedRows.length === 0) throw new Error('No valid rows found — check that column B has names and column K has Balance Qty.')
 
       const res = await fetch('/api/colour-store', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -149,7 +159,7 @@ export default function ColourStoreIMSPage() {
           </button>
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8 }}>
-          File must have a column with "Name" in the header and a column with "Stock" (or "Qty") in the header — any other columns are ignored.
+          Expects the daily Consumable Trial Balance Report format: column B = Name, column C = Group, column K = Balance Qty (grams), column L = Rate. All other columns are ignored.
         </div>
 
         {uploadError && (
@@ -192,7 +202,7 @@ export default function ColourStoreIMSPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Name', 'Latest Stock', 'Last Updated'].map(h => (
+                {['Name', 'Group', 'Latest Stock (Kg)', 'Rate', 'Last Updated'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -205,10 +215,12 @@ export default function ColourStoreIMSPage() {
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                   borderBottom: '1px solid var(--border-light)' }}>
                   <td style={{ padding: '9px 12px', fontWeight: 600 }}>{r.name}</td>
+                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{r.latestGroup || '-'}</td>
                   <td style={{ padding: '9px 12px', fontWeight: 700,
-                    color: r.latestStock != null ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
-                    {r.latestStock != null ? r.latestStock : 'No data yet'}
+                    color: r.latestStockG != null ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
+                    {r.latestStockG != null ? (parseFloat(r.latestStockG) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 }) : 'No data yet'}
                   </td>
+                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{r.latestRate != null ? r.latestRate : '-'}</td>
                   <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>
                     {r.latestDate ? fmtDate(r.latestDate) : '-'}
                   </td>
