@@ -216,6 +216,12 @@ export default function Navigation() {
       ]
     },
     {
+      label: 'Inventory Management',
+      items: [
+        { name: 'Colour Store IMS', path: '/inventory/colour-store-ims' },
+      ]
+    },
+    {
       label: 'Reports',
       items: [
         { name: 'Reports', path: '/reports' },
