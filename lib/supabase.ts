@@ -55,6 +55,32 @@ export async function dbSelect<T = any>(
   return { data: data ?? [], error }
 }
 
+// Supabase/PostgREST caps every single request at a server-configured max
+// row count (commonly 1000) REGARDLESS of any `limit` query param the
+// client sends — a `limit: '20000'` request silently truncates once the
+// table crosses that cap. This pages through with the Range header,
+// accumulating every row, for tables that can realistically grow past it
+// (e.g. colour_store_stock, which gains ~480 rows per day of uploads).
+export async function dbSelectAll<T = any>(
+  table: string, query: Record<string, string> = {}, select = '*', pageSize = 1000
+): Promise<{ data: T[]; error: string | null }> {
+  const all: T[] = []
+  let offset = 0
+  while (true) {
+    const params: Record<string, string> = { select, ...query }
+    const { data, error } = await sb<T[]>(`/${table}`, {
+      params,
+      headers: { 'Range-Unit': 'items', 'Range': `${offset}-${offset + pageSize - 1}` },
+    })
+    if (error) return { data: all, error }
+    const batch = (data as T[]) || []
+    all.push(...batch)
+    if (batch.length < pageSize) break
+    offset += pageSize
+  }
+  return { data: all, error: null }
+}
+
 export async function dbInsert<T = any>(
   table: string, row: Record<string, any>
 ): Promise<{ data: T | null; error: string | null }> {
