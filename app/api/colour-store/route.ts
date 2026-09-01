@@ -6,10 +6,16 @@ import { dbSelect, dbSelectAll, sb } from '@/lib/supabase'
 //         (client computes "latest per name" from the stock array — kept
 //         simple since history matters too, not just the latest snapshot)
 // POST { action: 'upload_stock', stockDate, rows: [{name, group, qty, rate}] }
-//   -> upserts one row per name for that date (name+stock_date is unique,
-//      so re-uploading the same date corrects rather than duplicates).
-//      qty is stored exactly as uploaded (grams, from the real report format
-//      — Balance Qty column) — conversion to Kg happens at display time only.
+//   -> All-or-nothing: every name in the file must already exist in the
+//      Colour Chemical Master, checked BEFORE anything is saved. If even one
+//      name doesn't match, nothing is saved and the response lists exactly
+//      which names are missing (ok:false, error:'not_in_master', unmatched:[]).
+//      Add the missing item(s) to the master, then re-upload.
+//   -> On success: upserts one row per name for that date (name+stock_date
+//      is unique, so re-uploading the same date corrects rather than
+//      duplicates). qty is stored exactly as uploaded (grams, from the real
+//      report format — Balance Qty column) — conversion to Kg happens at
+//      display time only.
 
 export async function GET() {
   const [chemRes, stockRes] = await Promise.all([
@@ -36,17 +42,31 @@ export async function POST(req: NextRequest) {
     const byNameLower: Record<string, string> = {}
     for (const c of (chemicals || []) as any[]) byNameLower[String(c.name).trim().toLowerCase()] = c.id
 
-    const upsertRows = rows.map((r: any) => {
-      const name = String(r.name || '').trim()
-      return {
-        chemical_id: byNameLower[name.toLowerCase()] || null,
-        name,
-        group_name: r.group ? String(r.group).trim() : null,
-        stock_qty: parseFloat(r.qty) || 0,
-        rate: r.rate != null && r.rate !== '' ? parseFloat(r.rate) : null,
-        stock_date: stockDate,
-      }
-    }).filter((r: any) => r.name)
+    const cleanedRows = rows
+      .map((r: any) => ({ name: String(r.name || '').trim(), group: r.group, qty: r.qty, rate: r.rate }))
+      .filter((r: any) => r.name)
+
+    // Validate EVERY name before saving ANYTHING.
+    const unmatchedNames = Array.from(new Set(
+      cleanedRows.filter((r: any) => !byNameLower[r.name.toLowerCase()]).map((r: any) => r.name)
+    ))
+    if (unmatchedNames.length > 0) {
+      return NextResponse.json({
+        ok: false,
+        error: 'not_in_master',
+        unmatched: unmatchedNames,
+        message: `${unmatchedNames.length} item(s) in this file are not in the Colour Chemical Master. Nothing was saved. Add them to the master first, then re-upload.`,
+      }, { status: 400 })
+    }
+
+    const upsertRows = cleanedRows.map((r: any) => ({
+      chemical_id: byNameLower[r.name.toLowerCase()],
+      name: r.name,
+      group_name: r.group ? String(r.group).trim() : null,
+      stock_qty: parseFloat(r.qty) || 0,
+      rate: r.rate != null && r.rate !== '' ? parseFloat(r.rate) : null,
+      stock_date: stockDate,
+    }))
 
     const { error } = await sb('/colour_store_stock', {
       method: 'POST',
@@ -55,9 +75,7 @@ export async function POST(req: NextRequest) {
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-    const matched = upsertRows.filter((r: any) => r.chemical_id).length
-    const unmatched = upsertRows.filter((r: any) => !r.chemical_id).map((r: any) => r.name)
-    return NextResponse.json({ ok: true, saved: upsertRows.length, matched, unmatched })
+    return NextResponse.json({ ok: true, saved: upsertRows.length })
   }
 
   return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })

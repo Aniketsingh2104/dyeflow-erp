@@ -3,16 +3,22 @@
 // sheet's design:
 //   - Lead Time, Safety Factor, Avg Daily Consumption are entered per item
 //     (editable here) — MAX Level = Lead Time × Safety Factor × Avg Daily
-//     Consumption is computed from them, never stored.
+//     Consumption is computed live from them, never stored, so it updates
+//     the instant any of the three changes.
 //   - Every uploaded date gets its own column (not just "latest") — a full
 //     running history, left to right, oldest to newest.
 //   - Each date-cell is color-coded against that item's own MAX Level,
 //     using the exact thresholds found in the reference sheet's conditional
 //     formatting: <33% red, 33–66% yellow, 66–100% green.
-// Upload still reads the daily Consumable Trial Balance Report (fixed
-// columns: B=Name, C=Group, K=Balance Qty in grams, L=Rate). Balance Qty and
-// Rate are stored exactly as uploaded and only converted to Kg / per-Kg at
-// display time.
+//   - Status (for sorting/filtering/the reorder suggestion) is always based
+//     on the MOST RECENT uploaded date, not history.
+// Upload validates every name against the Colour Chemical Master BEFORE
+// saving anything — all-or-nothing. If any name doesn't match, nothing is
+// saved and the missing names are listed so they can be added to the master
+// first. Upload still reads the daily Consumable Trial Balance Report
+// (fixed columns: B=Name, C=Group, K=Balance Qty in grams, L=Rate). Balance
+// Qty and Rate are stored exactly as uploaded and only converted to Kg /
+// per-Kg at display time.
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
@@ -28,6 +34,8 @@ function fmtDate(d: string) {
   return `${day}/${m}/${y}`
 }
 
+type Status = 'red' | 'yellow' | 'green' | 'none'
+
 /** Color-codes a date-cell's stock (Kg) against that item's MAX Level, using
  *  the exact thresholds extracted from the reference sheet's conditional
  *  formatting rules ($K*0.33 and $K*0.66 boundaries). */
@@ -41,18 +49,28 @@ function stockCellStyle(stockKg: number | null, maxLevel: number | null): React.
   return { background: 'transparent', color: 'var(--text-primary)', fontWeight: 600 } // excess — no rule found for >100%, left plain
 }
 
+function statusOf(stockKg: number | null, maxLevel: number | null): Status {
+  if (stockKg == null || !maxLevel || maxLevel <= 0) return 'none'
+  const pct = stockKg / maxLevel
+  if (pct < 0.33) return 'red'
+  if (pct < 0.66) return 'yellow'
+  return 'green'
+}
+
 export default function ColourStoreIMSPage() {
   const [chemicals, setChemicals] = useState<any[]>([])
   const [stock,      setStock]    = useState<any[]>([])
   const [loading,    setLoading]  = useState(true)
   const [search,     setSearch]   = useState('')
+  const [groupFilter, setGroupFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<Status | ''>('')
   const [saving,     setSaving]   = useState(false)
 
   const [file,        setFile]        = useState<File | null>(null)
   const [uploadDate,  setUploadDate]  = useState(todayStr())
   const [uploading,   setUploading]   = useState(false)
   const [uploadResult, setUploadResult] = useState<any>(null)
-  const [uploadError, setUploadError] = useState('')
+  const [uploadError, setUploadError] = useState<{ message: string; unmatched: string[] } | null>(null)
 
   // Inline editing for the three planning fields.
   const [editingPlan, setEditingPlan] = useState<string | null>(null) // `${id}::field`
@@ -89,6 +107,7 @@ export default function ColourStoreIMSPage() {
     for (const s of stock) set.add(s.stock_date)
     return Array.from(set).sort()
   }, [stock])
+  const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : null
 
   // name -> date -> stock_qty (grams)
   const stockByNameDate = useMemo(() => {
@@ -111,19 +130,46 @@ export default function ColourStoreIMSPage() {
       const maxLevel = (leadTime != null && safetyFactor != null && avgConsumption != null)
         ? leadTime * safetyFactor * avgConsumption
         : null
+      const dateValues = stockByNameDate[key] || {}
+      const latestG = latestDate ? dateValues[latestDate] : undefined
+      const latestKg = latestG != null ? latestG / 1000 : null
+      const status = statusOf(latestKg, maxLevel)
+      const suggestedReorder = (status === 'red' || status === 'yellow') && maxLevel != null
+        ? Math.max(0, maxLevel - (latestKg || 0))
+        : null
       return {
         ...c,
         leadTime, safetyFactor, avgConsumption, maxLevel,
         latestGroup: latest?.group_name ?? null,
         latestRate: latest?.rate ?? null,
-        dateValues: stockByNameDate[key] || {},
+        latestKg, status, suggestedReorder,
+        dateValues,
       }
     })
-  }, [chemicals, latestByName, stockByNameDate])
+  }, [chemicals, latestByName, stockByNameDate, latestDate])
 
-  const filtered = search.trim()
-    ? rows.filter(r => String(r.name).toLowerCase().includes(search.toLowerCase()))
-    : rows
+  const groupOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of rows) if (r.latestGroup) set.add(r.latestGroup)
+    return Array.from(set).sort()
+  }, [rows])
+
+  const redCount = rows.filter(r => r.status === 'red').length
+  const yellowCount = rows.filter(r => r.status === 'yellow').length
+
+  const filtered = useMemo(() => {
+    let result = rows
+    if (search.trim()) result = result.filter(r => String(r.name).toLowerCase().includes(search.toLowerCase()))
+    if (groupFilter) result = result.filter(r => r.latestGroup === groupFilter)
+    if (statusFilter) result = result.filter(r => r.status === statusFilter)
+    return result
+  }, [rows, search, groupFilter, statusFilter])
+
+  // Critical (red) items first, then yellow, then green, then no-data items last.
+  const sorted = useMemo(() => {
+    const rank: Record<Status, number> = { red: 0, yellow: 1, green: 2, none: 3 }
+    return [...filtered].sort((a, b) => rank[a.status as Status] - rank[b.status as Status])
+  }, [filtered])
 
   // ── Planning-field editing ──────────────────────────────────────────────
 
@@ -166,8 +212,8 @@ export default function ColourStoreIMSPage() {
     })
 
   const handleUpload = async () => {
-    if (!file) { setUploadError('Choose a file first.'); return }
-    setUploading(true); setUploadError(''); setUploadResult(null)
+    if (!file) { setUploadError({ message: 'Choose a file first.', unmatched: [] }); return }
+    setUploading(true); setUploadError(null); setUploadResult(null)
     try {
       const rawRows = await parseExcel(file)
       if (rawRows.length < 2) throw new Error('File has no data rows.')
@@ -192,12 +238,18 @@ export default function ColourStoreIMSPage() {
         body: JSON.stringify({ action: 'upload_stock', stockDate: uploadDate, rows: parsedRows }),
       }).then(r => r.json())
 
-      if (!res.ok) throw new Error(res.error || 'Upload failed')
+      if (!res.ok) {
+        if (res.error === 'not_in_master') {
+          setUploadError({ message: res.message, unmatched: res.unmatched || [] })
+          return
+        }
+        throw new Error(res.error || 'Upload failed')
+      }
       setUploadResult(res)
       setFile(null)
       load()
     } catch (err: any) {
-      setUploadError(err.message || 'Upload failed')
+      setUploadError({ message: err.message || 'Upload failed', unmatched: [] })
     } finally { setUploading(false) }
   }
 
@@ -226,33 +278,57 @@ export default function ColourStoreIMSPage() {
             <input type="date" value={uploadDate} onChange={e => setUploadDate(e.target.value)}
               style={{ padding: '6px 10px', fontSize: 13 }} />
           </div>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={e => { setFile(e.target.files?.[0] || null); setUploadError(''); setUploadResult(null) }}
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={e => { setFile(e.target.files?.[0] || null); setUploadError(null); setUploadResult(null) }}
             style={{ fontSize: 13 }} />
           <button className="primary" onClick={handleUpload} disabled={!file || uploading}>
             {uploading ? 'Uploading…' : '⬆ Upload Stock'}
           </button>
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8 }}>
-          Expects the daily Consumable Trial Balance Report format: column B = Name, column C = Group, column K = Balance Qty (grams), column L = Rate. All other columns are ignored.
+          Expects the daily Consumable Trial Balance Report format: column B = Name, column C = Group, column K = Balance Qty (grams), column L = Rate. All other columns are ignored. Every name must already exist in the Colour Chemical Master — if any name doesn't match, nothing is saved.
         </div>
 
         {uploadError && (
           <div style={{ marginTop: 10, background: 'var(--danger-light)', color: 'var(--danger)',
             border: '1px solid var(--danger)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-            {uploadError}
+            {uploadError.message}
+            {uploadError.unmatched.length > 0 && (
+              <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {uploadError.unmatched.map((n: string, i: number) => (
+                  <span key={i} style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                    background: 'var(--danger)', color: '#fff' }}>{n}</span>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {uploadResult && (
           <div style={{ marginTop: 10, background: 'var(--success-light)', color: 'var(--success)',
             border: '1px solid var(--success)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-            ✓ {uploadResult.saved} row(s) saved for {fmtDate(uploadDate)} — {uploadResult.matched} matched the master list.
-            {uploadResult.unmatched?.length > 0 && (
-              <div style={{ marginTop: 4, color: 'var(--warning)' }}>
-                ⚠ {uploadResult.unmatched.length} name(s) didn't match the master list (saved anyway, but not linked): {uploadResult.unmatched.join(', ')}
-              </div>
-            )}
+            ✓ {uploadResult.saved} row(s) saved for {fmtDate(uploadDate)} — all matched the master list.
           </div>
         )}
+      </div>
+
+      {/* Summary counts */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button onClick={() => setStatusFilter(statusFilter === 'red' ? '' : 'red')}
+          style={{ background: '#FEE2E2', border: statusFilter === 'red' ? '2px solid #FF0000' : '1px solid #FCA5A5',
+            borderRadius: 8, padding: '10px 16px', cursor: 'pointer', textAlign: 'left' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#B91C1C', textTransform: 'uppercase' }}>Below 33% (Critical)</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#B91C1C' }}>{redCount}</div>
+        </button>
+        <button onClick={() => setStatusFilter(statusFilter === 'yellow' ? '' : 'yellow')}
+          style={{ background: '#FEF9C3', border: statusFilter === 'yellow' ? '2px solid #CA8A04' : '1px solid #FDE68A',
+            borderRadius: 8, padding: '10px 16px', cursor: 'pointer', textAlign: 'left' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#854D0E', textTransform: 'uppercase' }}>33–66%</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#854D0E' }}>{yellowCount}</div>
+        </button>
+        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
+          borderRadius: 8, padding: '10px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Total Items</div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{chemicals.length}</div>
+        </div>
       </div>
 
       {/* Color legend */}
@@ -263,28 +339,44 @@ export default function ColourStoreIMSPage() {
         <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#6AA84F', marginRight: 4, verticalAlign: 'middle' }} />66–100% of MAX (Normal)</span>
       </div>
 
-      {/* Stock table */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Current Stock</div>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
-          style={{ width: 220, padding: '6px 10px', fontSize: 12,
-            border: '1px solid var(--border-medium)', borderRadius: 5,
-            background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+      {/* Filters */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Current Stock (sorted by urgency)</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
+            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+            <option value="">All Groups</option>
+            {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as Status | '')}
+            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+            <option value="">All Status</option>
+            <option value="red">Below 33%</option>
+            <option value="yellow">33–66%</option>
+            <option value="green">66–100% (Normal)</option>
+          </select>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
+            style={{ width: 200, padding: '6px 10px', fontSize: 12,
+              border: '1px solid var(--border-medium)', borderRadius: 5,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+        </div>
       </div>
 
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
         borderRadius: 10, overflow: 'auto' }}>
-        {filtered.length === 0 ? (
+        {sorted.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-tertiary)', fontSize: 14 }}>
             {chemicals.length === 0
               ? 'No items in Colour Chemical Master yet. Add some in Setup → Colour Chemical Master.'
-              : 'No items match your search.'}
+              : 'No items match your filters.'}
           </div>
         ) : (
-          <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 900 + allDates.length * 90 }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 1000 + allDates.length * 90 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Sr. No.', 'Name', 'Group', 'Rate (per Kg)', 'Lead Time', 'Safety Factor', 'Avg Daily Consumption', 'MAX Level'].map(h => (
+                {['Sr. No.', 'Name', 'Group', 'Rate (per Kg)', 'Lead Time', 'Safety Factor', 'Avg Daily Consumption', 'MAX Level', 'Suggested Reorder (Kg)'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
@@ -297,7 +389,7 @@ export default function ColourStoreIMSPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r, i) => (
+              {sorted.map((r, i) => (
                 <tr key={r.id} style={{
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                   borderBottom: '1px solid var(--border-light)' }}>
@@ -347,6 +439,12 @@ export default function ColourStoreIMSPage() {
                   {/* MAX Level — computed, not editable */}
                   <td style={{ padding: '9px 12px', fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {r.maxLevel != null ? r.maxLevel.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '-'}
+                  </td>
+
+                  {/* Suggested Reorder — MAX Level minus latest stock, only when below MAX */}
+                  <td style={{ padding: '9px 12px', fontWeight: 700, whiteSpace: 'nowrap',
+                    color: r.suggestedReorder != null ? 'var(--danger)' : 'var(--text-tertiary)' }}>
+                    {r.suggestedReorder != null ? r.suggestedReorder.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '-'}
                   </td>
 
                   {/* One cell per date, color-coded against MAX Level */}
