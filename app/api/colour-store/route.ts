@@ -13,7 +13,7 @@ import { dbSelect, sb } from '@/lib/supabase'
 
 export async function GET() {
   const [chemRes, stockRes] = await Promise.all([
-    dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,created_at'),
+    dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,lead_time,safety_factor,avg_daily_consumption,created_at'),
     dbSelect('colour_store_stock', { order: 'stock_date.desc', limit: '20000' }, 'id,chemical_id,name,group_name,stock_qty,stock_date,rate,created_at'),
   ])
   if (chemRes.error) return NextResponse.json({ ok: false, error: chemRes.error }, { status: 500 })
