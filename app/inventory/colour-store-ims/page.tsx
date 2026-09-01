@@ -73,6 +73,11 @@ export default function ColourStoreIMSPage() {
     ? rows.filter(r => String(r.name).toLowerCase().includes(search.toLowerCase()))
     : rows
 
+  // Most recent date present in the data at all (stock array is pre-sorted
+  // stock_date desc by the API) — used as the stock column's header, so it's
+  // always clear which day's numbers are being shown.
+  const latestOverallDate = stock.length > 0 ? stock[0]?.stock_date : null
+
   // ── Excel upload ──────────────────────────────────────────────────────
 
   const parseExcel = (f: File): Promise<string[][]> =>
@@ -202,7 +207,7 @@ export default function ColourStoreIMSPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Name', 'Group', 'Latest Stock (Kg)', 'Rate', 'Last Updated'].map(h => (
+                {['Sr. No.', 'Name', 'Group', 'Rate', latestOverallDate ? `Stock (Kg) — ${fmtDate(latestOverallDate)}` : 'Stock (Kg)'].map(h => (
                   <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                     letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -214,15 +219,13 @@ export default function ColourStoreIMSPage() {
                 <tr key={r.id} style={{
                   background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                   borderBottom: '1px solid var(--border-light)' }}>
+                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{i + 1}</td>
                   <td style={{ padding: '9px 12px', fontWeight: 600 }}>{r.name}</td>
                   <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{r.latestGroup || '-'}</td>
+                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{r.latestRate != null ? r.latestRate : '-'}</td>
                   <td style={{ padding: '9px 12px', fontWeight: 700,
                     color: r.latestStockG != null ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
                     {r.latestStockG != null ? (parseFloat(r.latestStockG) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 }) : 'No data yet'}
-                  </td>
-                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>{r.latestRate != null ? r.latestRate : '-'}</td>
-                  <td style={{ padding: '9px 12px', color: 'var(--text-tertiary)' }}>
-                    {r.latestDate ? fmtDate(r.latestDate) : '-'}
                   </td>
                 </tr>
               ))}
