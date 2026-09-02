@@ -340,7 +340,7 @@ export default function ColourStoreIMSPage() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>Current Stock (sorted by urgency)</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
@@ -373,7 +373,7 @@ export default function ColourStoreIMSPage() {
               : 'No items match your filters.'}
           </div>
         ) : (
-          <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 1000 + allDates.length * 90 }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 12, width: 'max-content', minWidth: 1000 + allDates.length * 90 }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
                 {['Sr. No.', 'Name', 'Group', 'Rate (per Kg)', 'Lead Time', 'Safety Factor', 'Avg Daily Consumption', 'MAX Level', 'Suggested Reorder (Kg)'].map(h => (
