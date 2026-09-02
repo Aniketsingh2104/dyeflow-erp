@@ -80,9 +80,9 @@ export default function ColourStoreIMSPage() {
   const [search,      setSearch]      = useState('')
   const [groupFilter, setGroupFilter] = useState('')
   const [bandFilter,  setBandFilter]  = useState<Band | ''>('')
-  const [dateWindow,  setDateWindow]  = useState(4)
-  const [sortKey,     setSortKey]     = useState('status')
-  const [sortDir,     setSortDir]     = useState<1 | -1>(1)
+  // Default: heaviest-consuming items first, alphabetical within ties.
+  const [sortKey,     setSortKey]     = useState('avg')
+  const [sortDir,     setSortDir]     = useState<1 | -1>(-1)
 
   const [uploadOpen,   setUploadOpen]   = useState(false)
   const [file,         setFile]         = useState<File | null>(null)
@@ -120,10 +120,7 @@ export default function ColourStoreIMSPage() {
     return Array.from(set).sort()
   }, [stock])
 
-  const shownDates = useMemo(
-    () => (dateWindow >= 999 ? allDates : allDates.slice(-dateWindow)),
-    [allDates, dateWindow]
-  )
+  const shownDates = allDates
   const latestDate = allDates.length ? allDates[allDates.length - 1] : null
 
   const stockByNameDate = useMemo(() => {
@@ -208,7 +205,7 @@ export default function ColourStoreIMSPage() {
   }
   const resetFilters = () => {
     setSearch(''); setGroupFilter(''); setBandFilter('')
-    setSortKey('status'); setSortDir(1)
+    setSortKey('avg'); setSortDir(-1)
   }
 
   const startEditPlan = (id: string, field: string, current: any) => {
@@ -316,6 +313,10 @@ export default function ColourStoreIMSPage() {
     borderBottom: '1px solid var(--border-light)', whiteSpace: 'nowrap',
   }
   const arrow = (k: string) => (sortKey === k ? (sortDir === 1 ? ' ↑' : ' ↓') : '')
+
+  // Selects/inputs need an explicit width and no flex-grow — without this they
+  // stretch to fill the strip and each ends up on its own line.
+  const SEL: React.CSSProperties = { ...CTRL, width: 200, flex: '0 0 auto' }
 
   const segment = (key: Band | '', label: string, count: number, accent?: string) => {
     const active = bandFilter === key
@@ -449,17 +450,26 @@ export default function ColourStoreIMSPage() {
             {segment('ok',   'Healthy',      counts.ok,   ACCENT.ok)}
             {segment('none', 'No plan data', counts.none)}
           </span>
-          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} style={CTRL}>
+          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} style={SEL}>
             <option value="">All groups</option>
             {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
-            style={{ ...CTRL, width: 200 }} />
-          <select value={dateWindow} onChange={e => setDateWindow(Number(e.target.value))} style={CTRL}>
-            <option value={4}>Last 4 dates</option>
-            <option value={8}>Last 8 dates</option>
-            <option value={12}>Last 12 dates</option>
-            <option value={999}>All dates</option>
+            style={SEL} />
+          <select value={`${sortKey}:${sortDir}`}
+            onChange={e => {
+              const [k, d] = e.target.value.split(':')
+              setSortKey(k); setSortDir(Number(d) as 1 | -1)
+            }} style={SEL}>
+            <option value="avg:-1">Avg use — high to low</option>
+            <option value="avg:1">Avg use — low to high</option>
+            <option value="name:1">Name — A to Z</option>
+            <option value="name:-1">Name — Z to A</option>
+            <option value="status:1">Status — critical first</option>
+            <option value="reorder:-1">Order Kg — high to low</option>
+            <option value="max:-1">MAX Kg — high to low</option>
+            <option value="stock:-1">Stock — high to low</option>
+            <option value="rate:-1">Rate — high to low</option>
           </select>
           <button onClick={resetFilters}
             style={{ ...CTRL, border: 'none', background: 'transparent',
@@ -474,7 +484,7 @@ export default function ColourStoreIMSPage() {
                 : 'No items match these filters.'}
             </div>
           ) : (
-            <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
+            <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content' }}>
               <thead>
                 <tr>
                   <th onClick={() => toggleSort('name')}
