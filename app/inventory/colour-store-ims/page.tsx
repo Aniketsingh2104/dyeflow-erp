@@ -263,29 +263,31 @@ export default function ColourStoreIMSPage() {
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
-      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Colour Store IMS</div>
-      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>
-        {chemicals.length} item(s) in Colour Chemical Master · {allDates.length} date(s) recorded · click Lead Time / Safety Factor / Avg Consumption to edit
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>Colour Store IMS</span>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+          {chemicals.length} items · {allDates.length} date(s) · click Lead Time / Safety Factor / Avg Consumption to edit
+        </span>
       </div>
 
-      {/* Upload card */}
+      {/* Upload card — everything on one line */}
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
-        borderRadius: 10, padding: '16px 18px', marginBottom: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Upload Daily Stock (Excel)</div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontSize: 11 }}>Stock Date</label>
-            <input type="date" value={uploadDate} onChange={e => setUploadDate(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: 13 }} />
-          </div>
+        borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>Upload Daily Stock</span>
+          <input type="date" value={uploadDate} onChange={e => setUploadDate(e.target.value)}
+            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)',
+              borderRadius: 5, background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           <input type="file" accept=".xlsx,.xls,.csv" onChange={e => { setFile(e.target.files?.[0] || null); setUploadError(null); setUploadResult(null) }}
-            style={{ fontSize: 13 }} />
-          <button className="primary" onClick={handleUpload} disabled={!file || uploading}>
-            {uploading ? 'Uploading…' : '⬆ Upload Stock'}
+            style={{ fontSize: 12, maxWidth: 260 }} />
+          <button className="primary" onClick={handleUpload} disabled={!file || uploading}
+            style={{ whiteSpace: 'nowrap' }}>
+            {uploading ? 'Uploading…' : '⬆ Upload'}
           </button>
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 8 }}>
-          Expects the daily Consumable Trial Balance Report format: column B = Name, column C = Group, column K = Balance Qty (grams), column L = Rate. All other columns are ignored. Every name must already exist in the Colour Chemical Master — if any name doesn't match, nothing is saved.
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', flex: 1, minWidth: 200 }}
+            title="Expects the daily Consumable Trial Balance Report format: column B = Name, column C = Group, column K = Balance Qty (grams), column L = Rate. All other columns are ignored.">
+            Cols B/C/K/L · every name must exist in the master, or nothing is saved
+          </span>
         </div>
 
         {uploadError && (
@@ -310,57 +312,51 @@ export default function ColourStoreIMSPage() {
         )}
       </div>
 
-      {/* Summary counts */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+      {/* Summary counts + legend + filters — one compact row */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <button onClick={() => setStatusFilter(statusFilter === 'red' ? '' : 'red')}
           style={{ background: '#FEE2E2', border: statusFilter === 'red' ? '2px solid #FF0000' : '1px solid #FCA5A5',
-            borderRadius: 8, padding: '10px 16px', cursor: 'pointer', textAlign: 'left' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#B91C1C', textTransform: 'uppercase' }}>Below 33% (Critical)</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#B91C1C' }}>{redCount}</div>
+            borderRadius: 6, padding: '4px 12px', cursor: 'pointer', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: '#B91C1C' }}>{redCount}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#B91C1C' }}>Below 33%</span>
         </button>
         <button onClick={() => setStatusFilter(statusFilter === 'yellow' ? '' : 'yellow')}
           style={{ background: '#FEF9C3', border: statusFilter === 'yellow' ? '2px solid #CA8A04' : '1px solid #FDE68A',
-            borderRadius: 8, padding: '10px 16px', cursor: 'pointer', textAlign: 'left' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#854D0E', textTransform: 'uppercase' }}>33–66%</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#854D0E' }}>{yellowCount}</div>
+            borderRadius: 6, padding: '4px 12px', cursor: 'pointer', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: '#854D0E' }}>{yellowCount}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#854D0E' }}>33–66%</span>
         </button>
         <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
-          borderRadius: 8, padding: '10px 16px' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Total Items</div>
-          <div style={{ fontSize: 20, fontWeight: 800 }}>{chemicals.length}</div>
+          borderRadius: 6, padding: '4px 12px', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 16, fontWeight: 800 }}>{chemicals.length}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)' }}>Total</span>
         </div>
-      </div>
 
-      {/* Color legend */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontSize: 11, alignItems: 'center' }}>
-        <span style={{ fontWeight: 700, color: 'var(--text-tertiary)' }}>Legend:</span>
-        <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#FF0000', marginRight: 4, verticalAlign: 'middle' }} />Below 33% of MAX</span>
-        <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#FFFF00', marginRight: 4, verticalAlign: 'middle' }} />33–66% of MAX</span>
-        <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#6AA84F', marginRight: 4, verticalAlign: 'middle' }} />66–100% of MAX (Normal)</span>
-      </div>
+        <div style={{ width: 1, height: 22, background: 'var(--border-light)' }} />
 
-      {/* Filters */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Current Stock (sorted by urgency)</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
-            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
-              background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-            <option value="">All Groups</option>
-            {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as Status | '')}
-            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
-              background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-            <option value="">All Status</option>
-            <option value="red">Below 33%</option>
-            <option value="yellow">33–66%</option>
-            <option value="green">66–100% (Normal)</option>
-          </select>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
-            style={{ width: 200, padding: '6px 10px', fontSize: 12,
-              border: '1px solid var(--border-medium)', borderRadius: 5,
-              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+        <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
+          style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+            background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+          <option value="">All Groups</option>
+          {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as Status | '')}
+          style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+            background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+          <option value="">All Status</option>
+          <option value="red">Below 33%</option>
+          <option value="yellow">33–66%</option>
+          <option value="green">66–100% (Normal)</option>
+        </select>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
+          style={{ width: 180, padding: '5px 8px', fontSize: 12,
+            border: '1px solid var(--border-medium)', borderRadius: 5,
+            background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 10, alignItems: 'center', color: 'var(--text-tertiary)' }}>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#FF0000', marginRight: 4, verticalAlign: 'middle' }} />&lt;33%</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#FFFF00', marginRight: 4, verticalAlign: 'middle' }} />33–66%</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#6AA84F', marginRight: 4, verticalAlign: 'middle' }} />66–100%</span>
         </div>
       </div>
 
