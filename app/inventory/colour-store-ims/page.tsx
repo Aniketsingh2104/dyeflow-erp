@@ -276,10 +276,11 @@ export default function ColourStoreIMSPage() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>Upload Daily Stock</span>
           <input type="date" value={uploadDate} onChange={e => setUploadDate(e.target.value)}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)',
+            style={{ padding: '5px 8px', fontSize: 12, width: 150, flex: '0 0 auto',
+              border: '1px solid var(--border-medium)',
               borderRadius: 5, background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           <input type="file" accept=".xlsx,.xls,.csv" onChange={e => { setFile(e.target.files?.[0] || null); setUploadError(null); setUploadResult(null) }}
-            style={{ fontSize: 12, maxWidth: 260 }} />
+            style={{ fontSize: 12, width: 230, flex: '0 0 auto' }} />
           <button className="primary" onClick={handleUpload} disabled={!file || uploading}
             style={{ whiteSpace: 'nowrap' }}>
             {uploading ? 'Uploading…' : '⬆ Upload'}
@@ -335,13 +336,15 @@ export default function ColourStoreIMSPage() {
         <div style={{ width: 1, height: 22, background: 'var(--border-light)' }} />
 
         <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
-          style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+          style={{ padding: '5px 8px', fontSize: 12, width: 140, flex: '0 0 auto',
+            border: '1px solid var(--border-medium)', borderRadius: 5,
             background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
           <option value="">All Groups</option>
           {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as Status | '')}
-          style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border-medium)', borderRadius: 5,
+          style={{ padding: '5px 8px', fontSize: 12, width: 170, flex: '0 0 auto',
+            border: '1px solid var(--border-medium)', borderRadius: 5,
             background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
           <option value="">All Status</option>
           <option value="red">Below 33%</option>
@@ -349,7 +352,7 @@ export default function ColourStoreIMSPage() {
           <option value="green">66–100% (Normal)</option>
         </select>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
-          style={{ width: 180, padding: '5px 8px', fontSize: 12,
+          style={{ width: 180, flex: '0 0 auto', padding: '5px 8px', fontSize: 12,
             border: '1px solid var(--border-medium)', borderRadius: 5,
             background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
 
