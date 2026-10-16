@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbDelete, dbUpdate } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'delete') {
+    // Delete — admin only (checked on the server — lib/auth.ts)
+    { const deny = await requireAdmin(req); if (deny) return deny }
     const { error } = await dbDelete('shift_logs', { id: body.id })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })

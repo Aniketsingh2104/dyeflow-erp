@@ -10,7 +10,8 @@ import {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface DyeflowUserWithPassword extends DyeflowUser {
-  password?: string
+  hasPassword?: boolean
+  passwordHashed?: boolean
   fullName?: string
   isActive?: boolean
 }
@@ -52,7 +53,9 @@ function shapeUser(row: any): DyeflowUserWithPassword {
     permissions: row.permissions || DEFAULT_USER_PERMISSIONS,
     createdAt:   row.created_at,
     isActive:    row.is_active !== false,
-    password:    row.password || '',   // plain text for now
+    // The server never sends passwords — only whether one is set / hashed
+    hasPassword:    !!row.has_password,
+    passwordHashed: !!row.password_hashed,
   }
 }
 
@@ -117,7 +120,7 @@ export default function UserManagementPage() {
   const [saveError,         setSaveError]         = useState('')
 
   const [formData, setFormData] = useState({
-    username: '', password: '', confirmPassword: '',
+    username: '', fullName: '', password: '', confirmPassword: '',
     role: 'custom' as RolePreset, scopeMode: 'all', unit: '', party: '', notes: '',
   })
   const [formPerms, setFormPerms] = useState<UserPermissions>(DEFAULT_USER_PERMISSIONS)
@@ -170,7 +173,7 @@ export default function UserManagementPage() {
   // ── Modal helpers ─────────────────────────────────────────────────────────
   const openAddModal = () => {
     setEditingUserId(''); setSaveError('')
-    setFormData({ username: '', password: '', confirmPassword: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
+    setFormData({ username: '', fullName: '', password: '', confirmPassword: '', role: 'custom', scopeMode: 'all', unit: '', party: '', notes: '' })
     setFormPerms(DEFAULT_USER_PERMISSIONS)
     setModalTab('basic'); setIsModalOpen(true)
   }
@@ -179,7 +182,7 @@ export default function UserManagementPage() {
     if (!user) return
     setEditingUserId(userId); setSaveError('')
     setFormData({
-      username: user.username || '', password: '', confirmPassword: '',
+      username: user.username || '', fullName: user.fullName || user.username || '', password: '', confirmPassword: '',
       role: (user.role as RolePreset) || 'custom', scopeMode: user.scopeMode || 'all',
       unit: user.unit || '', party: user.party || '', notes: user.notes || '',
     })
@@ -200,7 +203,7 @@ export default function UserManagementPage() {
     try {
       const payload: Record<string, any> = {
         username:    formData.username.trim().toLowerCase(),
-        full_name:   formData.username.trim(),
+        full_name:   formData.fullName.trim() || formData.username.trim(),
         role:        formData.role,
         permissions: formData.role === 'admin' ? null : formPerms,
         scope_mode:  formData.scopeMode,
@@ -239,6 +242,20 @@ export default function UserManagementPage() {
     })
     const data = await res.json()
     if (!data.ok) { alert('Delete failed: ' + (data.error || 'Unknown error')); return }
+    await loadData()
+  }
+
+  // ── Active / Inactive toggle (inactive users can't sign in) ──────────────
+  const toggleActive = async (user: DyeflowUserWithPassword) => {
+    const next = !user.isActive
+    if (!confirm(`${next ? 'Activate' : 'Deactivate'} "${user.username}"?${next ? '' : '\nThey will be signed out and cannot sign in until activated again.'}`)) return
+    const res  = await fetch('/api/users', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ action: 'update', id: user.id, is_active: next }),
+    })
+    const data = await res.json()
+    if (!data.ok) { alert('Failed: ' + (data.error || 'Unknown error')); return }
     await loadData()
   }
 
@@ -296,30 +313,46 @@ export default function UserManagementPage() {
           <table>
             <thead>
               <tr>
-                <th>Username</th><th>Role</th><th>Password</th><th>Data Scope</th>
+                <th>Username</th><th>Role</th><th>Status</th><th>Password</th><th>Data Scope</th>
                 <th>Supervisor Filter</th><th>Pages</th><th>Session</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading users from Supabase…</td></tr>
+                <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading users from Supabase…</td></tr>
               ) : users.length === 0 ? (
-                <tr><td colSpan={8} className="empty-state">No users found. Add your first user above.</td></tr>
+                <tr><td colSpan={9} className="empty-state">No users found. Add your first user above.</td></tr>
               ) : (
                 users.map(user => {
                   const isActive = (user.username || '').toLowerCase() === loggedInUsername
                   const granted  = user.role === 'admin' ? '∞' : `${countGranted(user.permissions || DEFAULT_USER_PERMISSIONS)}`
                   const sfLabel  = user.permissions?.supervisorFilter || 'all'
                   return (
-                    <tr key={user.id}>
-                      <td style={{ fontWeight: 600 }}>{user.username}</td>
+                    <tr key={user.id} style={user.isActive ? undefined : { opacity: 0.55 }}>
+                      <td style={{ fontWeight: 600 }}>
+                        {user.username}
+                        {user.fullName && user.fullName !== user.username && (
+                          <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>{user.fullName}</div>
+                        )}
+                      </td>
                       <td>
                         <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 600, background: user.role === 'admin' ? 'var(--danger-light)' : 'var(--accent-light)', color: user.role === 'admin' ? 'var(--danger)' : 'var(--accent-dark)' }}>
                           {ROLE_LABELS[user.role as RolePreset] || user.role}
                         </span>
                       </td>
-                      <td style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-tertiary)' }}>
-                        {user.password ? '••••••••' : <span style={{ color: 'var(--danger)', fontSize: 11 }}>Not set</span>}
+                      <td>
+                        <button className="xs" onClick={() => toggleActive(user)} disabled={isActive}
+                          title={isActive ? "You can't deactivate your own account" : (user.isActive ? 'Click to deactivate' : 'Click to activate')}
+                          style={{ fontWeight: 600, color: user.isActive ? 'var(--success)' : 'var(--danger)' }}>
+                          {user.isActive ? '● Active' : '○ Inactive'}
+                        </button>
+                      </td>
+                      <td style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                        {!user.hasPassword
+                          ? <span style={{ color: 'var(--danger)', fontSize: 11 }}>Not set</span>
+                          : user.passwordHashed
+                            ? <span title="Stored securely (hashed)">🔒 Secure</span>
+                            : <span style={{ color: 'var(--warning)', fontSize: 11 }} title="Old plain-text password — becomes secure on this user's next sign-in">⚠ Old format</span>}
                       </td>
                       <td style={{ fontSize: 12 }}>{getScopeSummary(user)}</td>
                       <td style={{ fontSize: 12 }}>
@@ -330,7 +363,8 @@ export default function UserManagementPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
                         <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
-                        <button className="xs danger" onClick={() => deleteUser(user.id)}>Delete</button>
+                        <button className="xs danger" onClick={() => deleteUser(user.id)} disabled={isActive}
+                          title={isActive ? "You can't delete your own account" : undefined}>Delete</button>
                       </td>
                     </tr>
                   )
@@ -341,7 +375,7 @@ export default function UserManagementPage() {
         </div>
 
         <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border-light)' }}>
-          ✓ Users are stored in Supabase and synced across all devices automatically.
+          ✓ Users are stored in Supabase. Passwords are stored hashed — nobody (including admins) can read them; use Reset Pwd to set a new one.
         </div>
       </div>
 
@@ -400,6 +434,10 @@ export default function UserManagementPage() {
                       <label>Username *</label>
                       <input value={formData.username} onChange={e => setFormData(f => ({ ...f, username: e.target.value }))} placeholder="e.g. kundan.m" autoFocus autoComplete="off" />
                       <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, display: 'block' }}>Stored lowercase. Used to log in.</span>
+                    </div>
+                    <div className="form-group">
+                      <label>Full Name</label>
+                      <input value={formData.fullName} onChange={e => setFormData(f => ({ ...f, fullName: e.target.value }))} placeholder="e.g. Kundan Mishra" autoComplete="off" />
                     </div>
                     <div className="form-group">
                       <label>Role</label>

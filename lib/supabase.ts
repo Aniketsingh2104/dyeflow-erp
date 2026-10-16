@@ -122,12 +122,29 @@ export async function dbDelete(
   return { error }
 }
 
+/** Signed-in username for the current API request (set by proxy.ts), or null. */
+export async function currentUsername(): Promise<string | null> {
+  try {
+    const { headers } = await import('next/headers')
+    const h = await headers()
+    return h.get('x-dyeflow-username')
+  } catch {
+    return null   // not inside a request (scripts, build)
+  }
+}
+
 export async function auditLog(entry: {
   username?: string; action: string; entity_type: string;
   entity_id?: string; field?: string; old_value?: string; new_value?: string; note?: string
 }): Promise<void> {
+  // Always record the real signed-in user. If the caller passed a label
+  // (e.g. 'AI Actions Agent') keep it alongside: "aniket1 (AI Actions Agent)".
+  const who = await currentUsername()
+  const username = entry.username
+    ? (who && who !== entry.username ? `${who} (${entry.username})` : entry.username)
+    : (who || null)
   await sb('/audit_log', {
-    method: 'POST', body: JSON.stringify(entry),
+    method: 'POST', body: JSON.stringify({ ...entry, username }),
     headers: { 'Prefer': 'return=minimal' },
   })
 }

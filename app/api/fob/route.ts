@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
 import { startReprocess } from '@/lib/repair'
+import { requireAdmin } from '@/lib/auth'
 
 
 export async function GET(req: NextRequest) {
@@ -178,6 +179,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'delete') {
+    // Delete — admin only (checked on the server — lib/auth.ts)
+    { const deny = await requireAdmin(req); if (deny) return deny }
     const { error } = await sb('/fob_records', { method:'DELETE', params:{ id:`eq.${id}` } })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
     return NextResponse.json({ ok:true })

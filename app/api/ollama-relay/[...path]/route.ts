@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import crypto from 'node:crypto'
 
 // ── app/api/ollama-relay/[...path] — secret-gated proxy to local Ollama ─────
 // Lets the LIVE Vercel deployment reach Ollama running on this PC, without
@@ -18,6 +19,16 @@ import { NextRequest, NextResponse } from 'next/server'
 const RELAY_SECRET = process.env.OLLAMA_RELAY_SECRET
 const OLLAMA_LOCAL_URL = 'http://localhost:11434'
 
+// Only the calls the RAG assistant actually needs (lib/rag/ollama.ts).
+// Model management (/api/pull, /api/delete, /api/create …) is never relayed.
+const ALLOWED_PATHS = new Set(['/api/embed', '/api/embeddings', '/api/generate', '/api/chat'])
+
+function secretMatches(provided: string | null): boolean {
+  if (!provided || !RELAY_SECRET) return false
+  const a = Buffer.from(provided), b = Buffer.from(RELAY_SECRET)
+  return a.length === b.length && crypto.timingSafeEqual(a, b)   // constant-time compare
+}
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   if (!RELAY_SECRET) {
     return NextResponse.json(
@@ -26,13 +37,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pat
     )
   }
 
-  const provided = req.headers.get('x-ollama-relay-secret')
-  if (provided !== RELAY_SECRET) {
+  if (!secretMatches(req.headers.get('x-ollama-relay-secret'))) {
     return NextResponse.json({ error: 'Invalid or missing relay secret' }, { status: 401 })
   }
 
   const { path } = await params
   const targetPath = '/' + (path || []).join('/')
+  if (!ALLOWED_PATHS.has(targetPath)) {
+    return NextResponse.json({ error: `Path not allowed through relay: ${targetPath}` }, { status: 403 })
+  }
   const body = await req.text()
 
   try {

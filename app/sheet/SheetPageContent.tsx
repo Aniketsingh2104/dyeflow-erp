@@ -53,7 +53,7 @@ export default function SheetPageContent() {
 
         const sessionRaw = localStorage.getItem('dyeflow_session')
         const session    = sessionRaw ? JSON.parse(sessionRaw) : null
-        const isAdmin    = !session || session.role === 'admin' || !session.permissions
+        const isAdmin    = session?.role === 'admin'   // no session / no role = not admin
         const allowed    = session?.permissions?.allowedSheets || []
         if (!isAdmin && !allowed.includes(sheetId)) { setSheet({ __accessDenied: true }); return }
 

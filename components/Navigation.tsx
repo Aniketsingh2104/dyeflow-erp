@@ -7,7 +7,8 @@ import { DarkModeToggle, NotificationCenter, KeyboardShortcuts } from '@/compone
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 
 function canViewPath(path: string, userPerms: Record<string, any> | null, admin: boolean): boolean {
-  if (admin || !userPerms) return true
+  if (admin) return true
+  if (!userPerms) return false   // fail closed: non-admin with no permissions sees nothing
   if (userPerms[path]) return !!userPerms[path].view
   for (const key of Object.keys(userPerms)) {
     if (path.startsWith(key + '/') || key.startsWith(path + '/')) return !!userPerms[key].view
@@ -28,14 +29,14 @@ export default function Navigation() {
   const [fmsItems,        setFmsItems]        = useState<NavItem[]>([])
   const [supervisorItems, setSupervisorItems] = useState<NavItem[]>([])
   const [userPerms,       setUserPerms]       = useState<Record<string, any> | null>(null)
-  const [userIsAdmin,     setUserIsAdmin]     = useState(true)
+  const [userIsAdmin,     setUserIsAdmin]     = useState(false)
   const [loggedInUser,    setLoggedInUser]    = useState('')
 
   const loadUserPerms = useCallback(() => {
     const user  = getActiveUserRecord()
     const admin = isAdminUser(user)
     setUserIsAdmin(admin)
-    setUserPerms(admin || !user?.permissions ? null : (user.permissions?.pages || {}))
+    setUserPerms(admin ? null : (user?.permissions?.pages || {}))
     try {
       const s = localStorage.getItem('dyeflow_session')
       if (s) setLoggedInUser(JSON.parse(s)?.username || '')
@@ -135,14 +136,16 @@ export default function Navigation() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Clears the signed HttpOnly session cookie on the server
+    try { await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'logout' }) }) } catch {}
     localStorage.removeItem('dyeflow_session')
-    document.cookie = 'dyeflow_session=; path=/; max-age=0'
+    document.cookie = 'dyeflow_session=; path=/; max-age=0'   // remove the old (pre-security) cookie too
     router.replace('/login')
   }
 
   const filterItems = (items: NavItem[]): NavItem[] => {
-    if (userIsAdmin || !userPerms) return items
+    if (userIsAdmin) return items
     return items.filter(item => canViewPath(item.path, userPerms, userIsAdmin))
   }
 

@@ -161,7 +161,7 @@ export function getCurrentUser(): { username: string; role: string } | null {
     const raw = localStorage.getItem('dyeflow_session')
     if (!raw) return null
     const s = JSON.parse(raw)
-    return s?.username ? { username: s.username, role: s.role || 'admin' } : null
+    return s?.username ? { username: s.username, role: s.role || 'custom' } : null
   } catch { return null }
 }
 

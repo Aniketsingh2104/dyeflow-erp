@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { embedTexts, OllamaError, OLLAMA_BASE_URL, EMBED_MODEL } from '@/lib/rag/ollama'
 import { dbUpsert } from '@/lib/supabase'
 import knowledgeChunksJson from '@/lib/rag/knowledge_chunks.json'
+import { requireAdmin } from '@/lib/auth'
 
 // ── app/api/ai/embed/seed — one-time knowledge base seeding job ─────────────
 // Embeds every chunk in lib/rag/knowledge_chunks.json via Ollama
@@ -77,7 +78,9 @@ function ollamaErrorResponse(err: OllamaError) {
   )
 }
 
-export async function POST(_req: NextRequest) {
+export async function POST(req: NextRequest) {
+  // Re-seeding the knowledge base is an admin maintenance action
+  { const deny = await requireAdmin(req); if (deny) return deny }
   try {
     const results = await runSeed()
     const failed = results.filter((r) => r.status === 'error')

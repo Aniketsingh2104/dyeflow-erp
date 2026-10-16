@@ -69,7 +69,7 @@ export default function AuditLogPage() {
         setEntries(data.data.map((e: any) => ({
           id:         e.id,
           timestamp:  e.created_at,
-          user:       e.user,
+          user:       e.username || e.user || '-',   // column is 'username'
           action:     e.action,
           entityType: e.entity_type,
           entityId:   e.entity_id,

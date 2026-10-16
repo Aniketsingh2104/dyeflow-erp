@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'delete') {
+    // Delete — admin only (checked on the server — lib/auth.ts)
+    { const deny = await requireAdmin(req); if (deny) return deny }
     const { error } = await sb('/order_sheets', {
       method: 'DELETE',
       params: { id: `eq.${payload.id}` },

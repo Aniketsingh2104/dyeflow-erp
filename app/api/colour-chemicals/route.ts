@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET() {
   const { data, error } = await dbSelect('colour_chemicals',
@@ -13,6 +14,12 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action } = body
+
+  // Master edits are admin only; 'update_planning' (lead time / safety /
+  // avg use on the Colour Store IMS page) stays open to signed-in users.
+  if (action !== 'update_planning') {
+    const deny = await requireAdmin(req); if (deny) return deny
+  }
 
   if (action === 'create') {
     const { name } = body

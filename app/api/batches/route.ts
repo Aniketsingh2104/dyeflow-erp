@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 // GET /api/batches
 export async function GET(req: NextRequest) {
@@ -195,6 +196,8 @@ export async function POST(req: NextRequest) {
 
     // ── Delete one batch and restore qty to order ────────────────────────────
     if (action === 'delete_batch') {
+      // Delete — admin only (checked on the server — lib/auth.ts)
+      { const deny = await requireAdmin(req); if (deny) return deny }
       const { id, order_id } = payload
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
 

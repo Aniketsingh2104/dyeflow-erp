@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbSelect, dbInsert, sb } from '@/lib/supabase'
+import { dbSelect, dbInsert, sb, currentUsername } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -24,9 +25,9 @@ export async function POST(req: NextRequest) {
   const { action } = body
 
   if (action === 'log') {
+    // username comes from the signed-in session, not from the browser
     const { error } = await dbInsert('audit_log', {
-      id:          body.id,
-      user:        body.user || 'System',
+      username:    (await currentUsername()) || 'System',
       action:      body.action_type,
       entity_type: body.entity_type,
       entity_id:   body.entity_id,
@@ -40,6 +41,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'clear') {
+    // Clearing the audit log — admin only (checked on the server — lib/auth.ts)
+    { const deny = await requireAdmin(req); if (deny) return deny }
     const { error } = await sb('/audit_log', {
       method: 'DELETE',
       params: { id: 'neq.never' }, // delete all rows

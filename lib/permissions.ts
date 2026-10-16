@@ -220,7 +220,7 @@ export function getActiveUserRecord(): DyeflowUser | null {
     const user: DyeflowUser = {
       id:          session.id || session.username,
       username:    session.username,
-      role:        session.role || 'admin',
+      role:        session.role || 'custom',   // fail closed: no role ≠ admin
       permissions: session.permissions || undefined,
       scopeMode:   session.scopeMode || 'all',
       unit:        session.unit || '',
@@ -232,10 +232,8 @@ export function getActiveUserRecord(): DyeflowUser | null {
 
 export function isAdminUser(user: DyeflowUser | null): boolean {
   if (!user) return false
-  if (user.role === 'admin') return true
-  // Legacy: users with no role and no permissions are treated as admin
-  if (!user.role && !user.permissions) return true
-  return false
+  // Only an explicit admin role counts (no more "no role = admin" fallback)
+  return user.role === 'admin'
 }
 
 export interface PermResult {
@@ -253,7 +251,11 @@ export function usePermission(path: string): PermResult {
   useEffect(() => {
     const compute = () => {
       const user = getActiveUserRecord()
-      if (!user || isAdminUser(user)) {
+      if (!user) {
+        setResult({ canView: false, canEdit: false, canDelete: false, isAdmin: false, loading: false })
+        return
+      }
+      if (isAdminUser(user)) {
         setResult({ canView: true, canEdit: true, canDelete: true, isAdmin: true, loading: false })
         return
       }

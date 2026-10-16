@@ -1,6 +1,15 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { saveUiSession } from '@/lib/clientSession'
+
+// Only allow redirects back to our own pages (never to another site)
+function safeNext(): string {
+  if (typeof window === 'undefined') return '/'
+  const n = new URLSearchParams(window.location.search).get('next') || '/'
+  return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '/'
+}
+
 
 export default function LoginPage() {
   const router = useRouter()
@@ -9,6 +18,17 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError]               = useState('')
   const [loading, setLoading]           = useState(false)
+
+  // Already signed in (valid server session)? Go straight in.
+  useEffect(() => {
+    fetch('/api/auth', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => {
+        if (j.ok && j.user) { saveUiSession(j.user); router.replace(safeNext()) }
+        else localStorage.removeItem('dyeflow_session')
+      })
+      .catch(() => {})
+  }, [router])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -32,24 +52,12 @@ export default function LoginPage() {
         return
       }
 
-      // Store FULL user record in session so permissions work without extra DB round-trips
-      const sessionData = JSON.stringify({
-        id:          json.user.id,
-        username:    json.user.username,
-        fullName:    json.user.full_name,
-        role:        json.user.role,
-        permissions: json.user.permissions || null,
-        scopeMode:   json.user.scope_mode  || 'all',
-        unit:        json.user.unit        || null,
-        party:       json.user.party       || null,
-        loginAt:     new Date().toISOString(),
-      })
+      // The server has set the signed, HttpOnly session cookie.
+      // Keep a UI-only copy (name / menu permissions) in localStorage.
+      saveUiSession(json.user)
+      document.cookie = 'dyeflow_session=; path=/; max-age=0'   // remove the old insecure cookie if present
 
-      localStorage.setItem('dyeflow_session', sessionData)
-      // Cookie readable by Next.js middleware (7-day expiry)
-      document.cookie = `dyeflow_session=${encodeURIComponent(sessionData)}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
-
-      router.replace('/')
+      router.replace(safeNext())
     } catch {
       setError('Network error — please check your connection.')
       setLoading(false)

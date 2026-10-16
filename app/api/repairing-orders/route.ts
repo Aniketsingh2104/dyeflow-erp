@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, sb, auditLog } from '@/lib/supabase'
 import { ensureBatchProcesses } from '@/lib/repair'
+import { requireAdmin } from '@/lib/auth'
 
 // Revert batch ID: DYE26-0001-B1-R → DYE26-0001-B1, DYE26-0001-B1-RR → DYE26-0001-B1-R
 function revertBatchId(batchId: string): string {
@@ -229,6 +230,8 @@ export async function POST(req: NextRequest) {
   //             FOB source    → 'in-process' at the FOB process, FOB reopened on it
   //             The original batch (B2) is never touched.
   if (action === 'delete') {
+    // Delete / rollback — admin only (checked on the server — lib/auth.ts)
+    { const deny = await requireAdmin(req); if (deny) return deny }
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
 
     const { data: roData } = await dbSelect('repairing_orders',

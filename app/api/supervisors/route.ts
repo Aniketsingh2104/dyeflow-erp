@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET() {
   const { data, error } = await dbSelect('supervisors', { order: 'name.asc' },
@@ -9,6 +10,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  // Setup master — admin only (checked on the server — lib/auth.ts)
+  { const deny = await requireAdmin(req); if (deny) return deny }
   const { action, ...payload } = await req.json()
 
   if (action === 'create') {
