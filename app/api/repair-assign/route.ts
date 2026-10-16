@@ -21,9 +21,13 @@ export async function GET() {
     )
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
 
-    // Build repair map
+    // Build repair map — only OPEN repair orders (pending / In Repair).
+    // A batch can have older, completed repair orders (B2-R → B2-RR); those
+    // must not hide the current one.
     const repairMap: Record<string, any> = {}
-    for (const r of repairs || []) repairMap[r.batch_id] = r
+    for (const r of repairs || []) {
+      if (r.status === 'pending' || r.status === 'In Repair') repairMap[r.batch_id] = r
+    }
 
     // Get order details
     const orderIds = [...new Set((batches || []).map((b: any) => b.order_id).filter(Boolean))]
@@ -36,7 +40,9 @@ export async function GET() {
       for (const o of orders || []) orderMap[o.id] = o
     }
 
-    const enriched = (batches || []).map((b: any) => {
+    // Only batches still waiting in repair (not yet split / sent on)
+    const waiting = (batches || []).filter((b: any) => b.status === 'repairing' && repairMap[b.id])
+    const enriched = waiting.map((b: any) => {
       const order  = orderMap[b.order_id] || {}
       const repair = repairMap[b.id]      || {}
       return {

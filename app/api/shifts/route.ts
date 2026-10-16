@@ -17,9 +17,8 @@ export async function POST(req: NextRequest) {
   const { action } = body
 
   if (action === 'create') {
-    // Delete existing entry for same date + shift (overwrite)
-    await dbDelete('shift_logs', {} as any)
-    // Actually do a selective delete
+    // Replace only the existing entry for the SAME date + shift (overwrite).
+    // (Never delete without a filter — that would wipe every shift log.)
     const { data: existing } = await dbSelect('shift_logs', {
       shift_date: `eq.${body.shift_date}`,
       shift: `eq.${body.shift}`,

@@ -94,7 +94,12 @@ export default function RepairingOrderPage() {
   const getSplitId = (baseBatchId: string, idx: number) => `${baseBatchId}-S${idx}`
 
   const handleDelete = async (r: any) => {
-    const msg = `Roll back batch ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} -> ${revertId(r.batch_id_str)}`
+    if (r.batch_status && r.batch_status !== 'repairing') {
+      alert(`${r.batch_id_str} has already been split / sent on — it can no longer be rolled back.`); return
+    }
+    const msg = r.reprocess_type === 'partial'
+      ? `Roll back repair ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nIt stays a separate batch (${r.batch_id_str}); the original batch is not touched.`
+      : `Roll back batch ${r.batch_id_str} to ${r.source_type === 'fob' ? 'FOB' : 'Faulty'} page?\nBatch ID will revert: ${r.batch_id_str} -> ${revertId(r.batch_id_str)}`
     if (!confirm(msg)) return
     setSaving(true)
     try {
@@ -123,31 +128,27 @@ export default function RepairingOrderPage() {
 
   const doFullSplit = async (r: any) => {
     if (!r.batch_id) { alert('Error: Batch not linked. Refresh and try again.'); return }
-    if (!confirm('Full Split: ' + r.batch_id_str + ' (' + r.repair_kg + ' Kg) will appear on Splitted Orders as a single batch.')) return
+    if (!confirm('Full Split: ' + r.batch_id_str + ' (' + (r.batch_kg ?? r.repair_kg) + ' Kg) will appear on Splitted Orders as a single batch.')) return
     setSaving(true)
     try {
-      const res = await fetch('/api/batches', {
+      const res = await fetch('/api/repairing-orders', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action:'update', id:r.batch_id, status:'pending' })
+        body: JSON.stringify({ action:'full_split', id:r.id })
       }).then(x=>x.json())
-      if (!res.ok) { alert('Error updating batch: ' + res.error); return }
-      await fetch('/api/repairing-orders', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action:'update', id:r.id, status:'In Repair' })
-      })
+      if (!res.ok) { alert('Error: ' + res.error); return }
       showToast(r.batch_id_str + ' now on Splitted Orders page')
       load()
     } finally { setSaving(false) }
   }
 
   const openSplitModal = (r: any) => {
-    const kg   = parseFloat(r.repair_kg)  || 0
+    const kg   = parseFloat(r.batch_kg ?? r.repair_kg) || 0
     const mtr  = parseFloat(r.repair_mtr) || 0
     const taka = parseInt(r.repair_taka)  || 0
     setSplitModal(r)
     setSplitParts([
-      { kg: +(kg/2).toFixed(1), mtr: Math.round(mtr/2), taka: Math.round(taka/2), machine_id: '' },
-      { kg: +(kg/2).toFixed(1), mtr: Math.round(mtr/2), taka: Math.round(taka/2), machine_id: '' },
+      { kg: +(kg/2).toFixed(2), mtr: Math.round(mtr/2), taka: Math.round(taka/2), machine_id: '' },
+      { kg: +(kg - +(kg/2).toFixed(2)).toFixed(2), mtr: mtr - Math.round(mtr/2), taka: taka - Math.round(taka/2), machine_id: '' },
     ])
   }
 
@@ -155,46 +156,22 @@ export default function RepairingOrderPage() {
     if (!splitModal) return
     const totalKg = splitParts.reduce((s,p) => s + (parseFloat(p.kg)||0), 0)
     if (totalKg <= 0) { alert('Enter batch quantities.'); return }
+    if (!splitModal.batch_id) { alert('Error: Batch not linked. Refresh and try again.'); return }
     setSaving(true)
     try {
-      const baseId    = splitModal.batch_id_str
-      const batchUUID = splitModal.batch_id
-      if (!batchUUID) { alert('Error: Batch not linked. Refresh and try again.'); setSaving(false); return }
-      await fetch('/api/batches', {
+      // Server validates the total, creates -S1, -S2 … and the process rows
+      const res = await fetch('/api/repairing-orders', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
-          action:'update', id: batchUUID,
-          kg: parseFloat(splitParts[0].kg)||0,
-          mtr: parseFloat(splitParts[0].mtr)||0,
-          taka: parseInt(splitParts[0].taka)||0,
-          machine_id: splitParts[0].machine_id || splitModal.machine_id || null,
-          status: 'pending',
-        })
-      })
-      for (let i = 1; i < splitParts.length; i++) {
-        const p = splitParts[i]
-        await fetch('/api/batches', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({
-            action: 'create',
-            batch_id: getSplitId(baseId, i),
-            order_id: splitModal.order_id,
-            kg: parseFloat(p.kg)||0,
-            mtr: parseFloat(p.mtr)||0,
-            taka: parseInt(p.taka)||0,
+          action: 'split', id: splitModal.id,
+          parts: splitParts.map(p => ({
+            kg: parseFloat(p.kg)||0, mtr: parseFloat(p.mtr)||0, taka: parseInt(p.taka)||0,
             machine_id: p.machine_id || splitModal.machine_id || null,
-            process_route: splitModal.process_route || [],
-            status: 'pending',
-          })
+          })),
         })
-      }
-      if (splitModal.id) {
-        await fetch('/api/repairing-orders', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ action:'update', id:splitModal.id, status:'In Repair' })
-        })
-      }
-      showToast('Split into ' + splitParts.length + ' batches - now on Splitted Orders page')
+      }).then(x=>x.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showToast('Split into ' + (res.batches?.length || splitParts.length) + ' batches - now on Splitted Orders page')
       setSplitModal(null); setSplitParts([]); load()
     } finally { setSaving(false) }
   }
@@ -418,7 +395,7 @@ export default function RepairingOrderPage() {
                                 onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', repair_kg:r.repair_kg }) }}>
                                 Edit
                               </button>
-                              {r.status === 'pending' ? (<>
+                              {r.batch_status === 'repairing' ? (<>
                                 <button onClick={() => openSplitModal(r)} disabled={saving}
                                   style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
                                     border:'1px solid var(--accent)', borderRadius:4,

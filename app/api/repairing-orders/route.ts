@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
+import { dbSelect, dbInsert, dbUpdate, sb, auditLog } from '@/lib/supabase'
+import { ensureBatchProcesses } from '@/lib/repair'
 
 // Revert batch ID: DYE26-0001-B1-R → DYE26-0001-B1, DYE26-0001-B1-RR → DYE26-0001-B1-R
 function revertBatchId(batchId: string): string {
@@ -27,7 +28,7 @@ export async function GET() {
     if (batchIds.length) {
       const { data: batches } = await dbSelect('batches',
         { id: `in.(${batchIds.join(',')})`, limit: '2000' },
-        'id,batch_id,kg,mtr,taka,machines(id,name)'
+        'id,batch_id,kg,mtr,taka,status,machine_id,process_route,machines(id,name)'
       )
       for (const b of batches || []) batchMap[b.id] = b
     }
@@ -46,6 +47,10 @@ export async function GET() {
       return {
         ...r,
         batch_id_str:    batch.batch_id          || '-',
+        batch_status:    batch.status            || null,   // 'repairing' = still waiting to be split
+        batch_kg:        batch.kg                ?? null,
+        machine_id:      batch.machine_id        || null,
+        batch_route:     batch.process_route     || [],
         machine:         batch.machines?.name    || '-',
         order_number:    order.order_number      || '-',
         party:           order.party             || '-',
@@ -104,73 +109,202 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
+  // ── Split / Full Split a repair batch (server-side, one safe path) ─────────
+  // Used by the Repairing Order page AND the supervisor Repair Queue.
+  //   full_split → the repair batch itself becomes 'pending' (ready for numbering)
+  //   split      → part 1 stays on the repair batch, parts 2..n become new
+  //                batches <repairId>-S1, -S2 …  Total must equal the repair qty.
+  // Every resulting batch gets fresh 'pending' process rows for its route and
+  // its old schedule (date_calc_plan / batch_date_plans) is cleared so it is
+  // numbered and dated again like a new batch.
+  if (action === 'split' || action === 'full_split') {
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const { data: roData } = await dbSelect('repairing_orders', { id: `eq.${id}`, limit: '1' },
+      'id,batch_id,order_id,process_route,status')
+    const ro = roData?.[0]
+    if (!ro) return NextResponse.json({ ok: false, error: 'Repairing order not found' }, { status: 404 })
+
+    const { data: bData } = await dbSelect('batches', { id: `eq.${ro.batch_id}`, limit: '1' },
+      'id,batch_id,order_id,kg,mtr,taka,status,machine_id,supervisor_id,process_route')
+    const batch = bData?.[0]
+    if (!batch) return NextResponse.json({ ok: false, error: 'Repair batch not found' }, { status: 404 })
+    if (batch.status !== 'repairing') {
+      return NextResponse.json({ ok: false, error: `${batch.batch_id} is already split (status: ${batch.status}).` }, { status: 400 })
+    }
+
+    const route: string[] = (payload.process_route?.length ? payload.process_route
+      : batch.process_route?.length ? batch.process_route : ro.process_route) || []
+    if (!route.length) return NextResponse.json({ ok: false, error: 'Assign a process route first.' }, { status: 400 })
+
+    const now = new Date().toISOString()
+    const freshFields = {
+      status: 'pending', current_process: null, is_faulty: false, is_done: false,
+      process_route: route, sent_at: null,
+      date_calc_plan: null, dc_generated_once: false, dc_regenerate: false,
+      updated_at: now,
+    }
+
+    const parts: any[] = action === 'split' ? (payload.parts || []) : []
+    const created: any[] = []
+
+    if (parts.length > 1) {
+      const totalKg = parseFloat(batch.kg) || 0
+      const sumKg = parts.reduce((s: number, p: any) => s + (parseFloat(p.kg) || 0), 0)
+      if (parts.some((p: any) => !(parseFloat(p.kg) > 0))) {
+        return NextResponse.json({ ok: false, error: 'Every part needs a quantity above 0 Kg' }, { status: 400 })
+      }
+      if (Math.abs(sumKg - totalKg) > 0.5) {
+        return NextResponse.json({ ok: false,
+          error: `Parts add up to ${sumKg.toFixed(2)} Kg but the repair batch is ${totalKg} Kg — they must match.` }, { status: 400 })
+      }
+
+      // Next free -S number for this repair batch
+      const { data: sibs } = await dbSelect('batches',
+        { batch_id: `like.${batch.batch_id}-S*` }, 'batch_id')
+      let maxS = 0
+      for (const s2 of sibs || []) {
+        const m = String(s2.batch_id).match(/-S(\d+)$/)
+        if (m) maxS = Math.max(maxS, parseInt(m[1], 10))
+      }
+
+      const p0 = parts[0]
+      const { error: u0 } = await dbUpdate('batches', { id: batch.id }, {
+        ...freshFields,
+        kg:   parseFloat(p0.kg) || 0,
+        mtr:  parseFloat(p0.mtr)  || null,
+        taka: parseInt(p0.taka)   || null,
+        machine_id: p0.machine_id || batch.machine_id || null,
+      })
+      if (u0) return NextResponse.json({ ok: false, error: u0 }, { status: 500 })
+
+      for (let i = 1; i < parts.length; i++) {
+        const p = parts[i]
+        const { data: row, error: insErr } = await dbInsert('batches', {
+          batch_id:      `${batch.batch_id}-S${maxS + i}`,
+          order_id:      batch.order_id,
+          supervisor_id: batch.supervisor_id || null,
+          machine_id:    p.machine_id || batch.machine_id || null,
+          kg:   parseFloat(p.kg) || 0,
+          mtr:  parseFloat(p.mtr)  || null,
+          taka: parseInt(p.taka)   || null,
+          ...freshFields,
+        })
+        if (insErr) return NextResponse.json({ ok: false, error: `Part ${i + 1}: ${insErr}` }, { status: 500 })
+        created.push(row)
+      }
+    } else {
+      const { error: u0 } = await dbUpdate('batches', { id: batch.id }, freshFields)
+      if (u0) return NextResponse.json({ ok: false, error: u0 }, { status: 500 })
+    }
+
+    // Fresh process rows (reset the repair batch's rows for the new route)
+    await sb('/batch_processes?on_conflict=batch_id,process_code', {
+      method: 'POST',
+      body: JSON.stringify(route.map(code => ({
+        batch_id: batch.id, process_code: code, status: 'pending', done_at: null, sent_at: null, received_at: null,
+      }))),
+      headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+    })
+    for (const row of created) {
+      if (row?.id) await ensureBatchProcesses(row.id, route)
+    }
+    // Old schedule no longer applies
+    await sb('/batch_date_plans', { method: 'DELETE', params: { batch_id: `eq.${batch.id}` } })
+
+    await dbUpdate('repairing_orders', { id }, { status: 'completed', process_route: route, updated_at: now })
+    await auditLog({ action: action === 'split' ? 'repair_split' : 'repair_full_split', entity_type: 'batch',
+      entity_id: batch.batch_id, new_value: `${1 + created.length} batch(es)` })
+
+    return NextResponse.json({ ok: true, batches: [batch.batch_id, ...created.map(c => c?.batch_id)] })
+  }
+
   // ── Delete / Rollback ─────────────────────────────────────────────────────
+  // Only allowed while the repair batch is still waiting (status 'repairing').
+  // Once it has been split / sent on, rolling back would corrupt live batches.
+  //   FULL    → batch renamed back (B2-R → B2) and returned to where it was:
+  //             faulty source → status 'faulty'
+  //             FOB source    → back 'in-process' at the FOB process (FOB reopened)
+  //   PARTIAL → the separate repair batch (B2-R) stays as its OWN batch:
+  //             faulty source → 'faulty' with the faulty record reopened on it
+  //             FOB source    → 'in-process' at the FOB process, FOB reopened on it
+  //             The original batch (B2) is never touched.
   if (action === 'delete') {
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
 
-    // 1. Fetch the repairing order
     const { data: roData } = await dbSelect('repairing_orders',
       { id: `eq.${id}` },
-      'id,batch_id,faulty_id,fob_id,source_type,reprocess_type,repair_kg,repair_mtr,repair_taka'
+      'id,batch_id,faulty_id,fob_id,source_type,reprocess_type,repair_kg,repair_mtr,repair_taka,process_route'
     )
     const ro = roData?.[0]
     if (!ro) return NextResponse.json({ ok: false, error: 'Repairing order not found' }, { status: 404 })
 
-    // 2. Fetch current batch to get current batch_id string
     const { data: batchData } = await dbSelect('batches',
       { id: `eq.${ro.batch_id}` },
-      'id,batch_id,kg,mtr,taka,status'
+      'id,batch_id,kg,mtr,taka,status,process_route,last_process'
     )
     const batch = batchData?.[0]
     if (!batch) return NextResponse.json({ ok: false, error: 'Batch not found' }, { status: 404 })
 
-    // 3. Revert batch ID (remove one R)
-    const revertedBatchId = revertBatchId(batch.batch_id)
-
-    // 4. Update batch — revert ID and set back to faulty status
-    await dbUpdate('batches', { id: ro.batch_id }, {
-      batch_id:        revertedBatchId,
-      status:          'faulty',
-      current_process: null,
-      is_faulty:       true,
-    })
-
-    // 5. Reopen the source record (faulty or fob) with the repair kg
-    if (ro.source_type === 'faulty' && ro.faulty_id) {
-      // Reopen faulty record — set status back to open with repair kg
-      await dbUpdate('faulty_records', { id: ro.faulty_id }, {
-        status:    'open',
-        faulty_kg: ro.repair_kg,  // restore repair qty (full or partial)
-        notes:     'Returned from Repairing — reopened',
-        resolved_at: null,
-        reprocess_type: null,
-        reprocess_kg:   null,
-        reprocess_mtr:  null,
-        reprocess_taka: null,
-        next_process:   null,
-      })
-    } else if (ro.source_type === 'fob' && ro.fob_id) {
-      // Reopen FOB record
-      await dbUpdate('fob_records', { id: ro.fob_id }, {
-        status:      'open',
-        fob_kg:      ro.repair_kg,
-        notes:       'Returned from Repairing — reopened',
-        approved_at: null,
-        reprocess_type: null,
-        reprocess_kg:   null,
-        reprocess_mtr:  null,
-        reprocess_taka: null,
-        next_process:   null,
-      })
-    } else {
-      // No source record linked — just reopen as faulty
-      await dbUpdate('batches', { id: ro.batch_id }, {
-        status:    'faulty',
-        is_faulty: true,
-      })
+    if (batch.status !== 'repairing') {
+      return NextResponse.json({ ok: false,
+        error: `Cannot roll back: ${batch.batch_id} has already been split / sent on (status: ${batch.status}).` },
+        { status: 400 })
     }
 
-    // 6. Delete the repairing order
+    const isPartial = ro.reprocess_type === 'partial'
+    const isFob     = ro.source_type === 'fob' && !!ro.fob_id
+
+    // Where was it reported? (needed to put a FOB batch back at that process)
+    let srcProcess: string | null = batch.last_process || null
+    if (isFob) {
+      const { data: f } = await dbSelect('fob_records', { id: `eq.${ro.fob_id}`, limit: '1' }, 'id,process_code')
+      srcProcess = f?.[0]?.process_code || srcProcess
+    } else if (ro.faulty_id) {
+      const { data: f } = await dbSelect('faulty_records', { id: `eq.${ro.faulty_id}`, limit: '1' }, 'id,process_code')
+      srcProcess = f?.[0]?.process_code || srcProcess
+    }
+
+    // Partial repair batches keep their own name; full ones get the -R removed
+    const newBatchId = isPartial ? batch.batch_id : revertBatchId(batch.batch_id)
+
+    const batchPatch: Record<string, any> = {
+      batch_id:   newBatchId,
+      updated_at: new Date().toISOString(),
+    }
+    if (isFob) {
+      Object.assign(batchPatch, { status: 'in-process', current_process: srcProcess, is_faulty: false, last_process: srcProcess })
+    } else {
+      Object.assign(batchPatch, { status: 'faulty', current_process: null, is_faulty: true, last_process: srcProcess })
+    }
+    const { error: bErr } = await dbUpdate('batches', { id: batch.id }, batchPatch)
+    if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
+
+    // A partial repair batch is a new row — give it process rows so FMS works
+    if (isPartial) {
+      const route: string[] = batch.process_route || ro.process_route || []
+      await ensureBatchProcesses(batch.id, route)
+      if (srcProcess) {
+        await sb('/batch_processes', {
+          method: 'PATCH',
+          body: JSON.stringify({ status: isFob ? 'fob' : 'faulty', done_at: new Date().toISOString() }),
+          params: { batch_id: `eq.${batch.id}`, process_code: `eq.${srcProcess}` },
+          headers: { 'Prefer': 'return=minimal' },
+        })
+      }
+    }
+
+    const reopen = {
+      status: 'open',
+      batch_id: batch.id,
+      notes: 'Returned from Repairing — reopened',
+      reprocess_type: null, reprocess_kg: null, reprocess_mtr: null, reprocess_taka: null, next_process: null,
+    }
+    if (isFob) {
+      await dbUpdate('fob_records', { id: ro.fob_id }, { ...reopen, fob_kg: ro.repair_kg, approved_at: null })
+    } else if (ro.faulty_id) {
+      await dbUpdate('faulty_records', { id: ro.faulty_id }, { ...reopen, faulty_kg: ro.repair_kg, resolved_at: null })
+    }
+
     const { error } = await sb('/repairing_orders', {
       method: 'DELETE',
       params: { id: `eq.${id}` },
@@ -179,7 +313,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      reverted_batch_id: revertedBatchId,
+      reverted_batch_id: newBatchId,
       source_type: ro.source_type,
     })
   }

@@ -223,7 +223,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   // ── Generate split batch ID for repair batches ────────────────────────────
   // DYE26-0001-B1-R → DYE26-0001-B1-R-S1, DYE26-0001-B1-R-S2...
   const getRepairSplitId = (baseBatchId: string, splitIdx: number) => {
-    return `${baseBatchId}-S${splitIdx + 1}`
+    return `${baseBatchId}-S${splitIdx}`  // matches server numbering (part 2 → -S1)
   }
 
   // ── Open split modal for repair batch ────────────────────────────────────
@@ -238,19 +238,16 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     ])
   }
 
-  // ── Full split for repair batch ────────────────────────────────────────────
+  // ── Full split for repair batch (server-side: /api/repairing-orders) ──────
   const doRepairFullSplit = async (batch: any) => {
     if (!batch.process_route?.length) { alert('Assign process route first.'); return }
+    if (!batch.repair_id) { alert('Repair order not linked. Refresh and try again.'); return }
     if (!confirm(`Full split ${batch.batch_id} as single batch?`)) return
     setRepairSaving(true)
     try {
-      // Original batch keeps its ID, just confirm it's set up correctly
-      const res = await fetch('/api/batches', {
+      const res = await fetch('/api/repairing-orders', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update', id: batch.id,
-          status: 'pending', process_route: batch.process_route,
-        })
+        body: JSON.stringify({ action: 'full_split', id: batch.repair_id, process_route: batch.process_route })
       }).then(r => r.json())
       if (!res.ok) { alert('Error: ' + res.error); return }
       showRepairToast(`✓ ${batch.batch_id} ready as single batch`)
@@ -258,51 +255,29 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     } finally { setRepairSaving(false) }
   }
 
-  // ── Save repair splits ────────────────────────────────────────────────────
+  // ── Save repair splits (server validates total + creates -S1, -S2 …) ──────
   const saveRepairSplits = async () => {
     if (!repairSplitModal) return
     const totalNewKg = repairSplitParts.reduce((s, p) => s + (parseFloat(p.kg) || 0), 0)
     if (totalNewKg <= 0) { alert('Enter batch quantities.'); return }
+    if (!repairSplitModal.repair_id) { alert('Repair order not linked. Refresh and try again.'); return }
+    if (!repairSplitModal.process_route?.length) { alert('Assign process route first.'); return }
     setRepairSaving(true)
     try {
-      const baseBatchId   = repairSplitModal.batch_id  // e.g. DYE26-0001-B1-R
-      const baseProcessRoute = repairSplitModal.process_route || []
-      const baseMachineId    = repairSplitModal.machine_id    || null
-
-      // Update original batch with first split's kg
-      const firstPart = repairSplitParts[0]
-      await fetch('/api/batches', {
+      const baseMachineId = repairSplitModal.machine_id || null
+      const res = await fetch('/api/repairing-orders', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'update', id: repairSplitModal.id,
-          kg: parseFloat(firstPart.kg) || 0,
-          mtr: parseFloat(firstPart.mtr) || 0,
-          taka: parseInt(firstPart.taka) || 0,
-          machine_id: firstPart.machine_id || baseMachineId,
+          action: 'split', id: repairSplitModal.repair_id,
+          process_route: repairSplitModal.process_route,
+          parts: repairSplitParts.map(p => ({
+            kg: parseFloat(p.kg) || 0, mtr: parseFloat(p.mtr) || 0, taka: parseInt(p.taka) || 0,
+            machine_id: p.machine_id || baseMachineId,
+          })),
         })
-      })
-
-      // Create new batches for remaining splits (with -S1, -S2 suffix)
-      for (let i = 1; i < repairSplitParts.length; i++) {
-        const part   = repairSplitParts[i]
-        const newId  = getRepairSplitId(baseBatchId, i) // DYE26-0001-B1-R-S1, -S2...
-        await fetch('/api/batches', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action:        'create',
-            batch_id:      newId,
-            order_id:      repairSplitModal.order_id,
-            kg:            parseFloat(part.kg)  || 0,
-            mtr:           parseFloat(part.mtr) || 0,
-            taka:          parseInt(part.taka)  || 0,
-            machine_id:    part.machine_id || baseMachineId,
-            process_route: baseProcessRoute,
-            status:        'pending',
-          })
-        })
-      }
-
-      showRepairToast(`✓ Split into ${repairSplitParts.length} batches`)
+      }).then(r => r.json())
+      if (!res.ok) { alert('Error: ' + res.error); return }
+      showRepairToast(`✓ Split into ${res.batches?.length || repairSplitParts.length} batches`)
       setRepairSplitModal(null)
       setRepairSplitParts([])
       loadData()

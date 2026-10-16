@@ -64,9 +64,10 @@ function SplitOrderContent() {
     if (!ok && !confirm(`Remaining ${remKg.toFixed(1)} Kg. Save anyway?`)) return
     setSaving(true)
     try {
-      const batches = parts.map((p, i) => ({
-        batch_id:   `${order.order_number}-B${i + 1}`,
+      // Batches are ADDED to the order; the server assigns the batch IDs
+      const batches = parts.map((p) => ({
         kg:          parseFloat(String(p.kg)) || 0,
+        mtr:         parseFloat(String((p as any).mtr)) || 0,
         machine_id:  p.machine_id || null,
       }))
       const { error } = await createSplits(order.id, batches, order.process_route || [])

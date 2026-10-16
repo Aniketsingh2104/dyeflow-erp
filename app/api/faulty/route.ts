@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
+import { startReprocess } from '@/lib/repair'
 
-// Generate new batch ID for repairing: B2 → B2-R → B2-RR → B2-RRR
-function getRepairingBatchId(currentBatchId: string): string {
-  if (!currentBatchId) return currentBatchId
-  const match = currentBatchId.match(/^(.+?)(-R+)$/)
-  if (match) return match[1] + match[2] + 'R'
-  return currentBatchId + '-R'
-}
 
 export async function GET() {
   try {
@@ -98,79 +92,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, next_process: nextProcess })
   }
 
-  // ── Reprocess (Full or Partial) ───────────────────────────────────────────
+  // ── Reprocess (Full or Partial) — shared logic in lib/repair.ts ─────────
+  // Partial reprocess now creates a SEPARATE batch row for the repair part,
+  // so the remaining qty that carries on is never touched by the repair flow.
   if (action === 'reprocess') {
     const { batch_id, order_id, faulty_kg, process_code, process_route,
             reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka,
             reprocess_reason } = payload
     if (!reprocess_reason?.trim()) return NextResponse.json({ ok: false, error: 'Reason required' }, { status: 400 })
+    if (!batch_id) return NextResponse.json({ ok: false, error: 'batch_id required' }, { status: 400 })
 
-    const isPartial  = reprocess_type === 'partial'
-    const repairKg   = isPartial ? (parseFloat(reprocess_kg)||0) : (parseFloat(faulty_kg)||0)
-    const remainKg   = isPartial ? Math.max(0, (parseFloat(faulty_kg)||0) - repairKg) : 0
-    const route: string[] = process_route || []
-    const idx = route.findIndex((c:string) => c.toUpperCase() === (process_code||'').toUpperCase() || c === process_code)
-    const nextProcess = isPartial && remainKg > 0 && idx >= 0 && idx < route.length-1 ? route[idx+1] : null
-
-    // Update faulty record
-    await dbUpdate('faulty_records', { id }, {
-      status: 'repairing',
-      notes: reprocess_reason,
-      reprocess_type,
-      reprocess_kg:   isPartial ? repairKg : null,
-      reprocess_mtr:  isPartial ? (parseFloat(reprocess_mtr)||0) : null,
-      reprocess_taka: isPartial ? (parseFloat(reprocess_taka)||0) : null,
-      next_process:   nextProcess,
+    const r = await startReprocess({
+      source: 'faulty', recordId: id, batch_id, order_id,
+      sourceKg: parseFloat(faulty_kg) || 0, process_code, process_route: process_route || [],
+      reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka, reason: reprocess_reason,
     })
+    if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: r.status || 500 })
 
-    // Get current batch ID and generate new repairing batch ID
-    const { data: batchForId } = await dbSelect('batches', { id: `eq.${batch_id}` }, 'id,batch_id,mtr,taka')
-    const currentBatch = batchForId?.[0] || {}
-    const newBatchId = getRepairingBatchId(currentBatch.batch_id || '')
-
-    // Update batch_id to repairing ID (e.g. DYE26-0003-B2 → DYE26-0003-B2-R)
-    if (newBatchId) {
-      await dbUpdate('batches', { id: batch_id }, { batch_id: newBatchId })
-    }
-
-    // Create repairing order with new batch ID + faulty_id link for rollback
-    await dbInsert('repairing_orders', {
-      batch_id,
-      faulty_id:   id,            // link to faulty_record for rollback
-      order_id:    order_id||null,
-      repair_kg:   repairKg,
-      repair_mtr:  isPartial ? (parseFloat(reprocess_mtr)||null) : null,
-      repair_taka: isPartial ? (parseFloat(reprocess_taka)||null) : null,
-      process_route: route, status:'pending',
-      notes: reprocess_reason, source_type:'faulty', reprocess_type,
-    })
-
-    // Update batch
-    if (!isPartial || remainKg <= 0) {
-      // Full reprocess — entire batch goes to repair, kg stays same
-      await dbUpdate('batches', { id: batch_id }, {
-        is_faulty:false, status:'repairing', current_process:null,
-        kg: repairKg,  // set to exact repair kg
-      })
-    } else {
-      // For partial: calculate remaining mtr and taka proportionally
-      const totalKg = parseFloat(faulty_kg) || 0
-      const ratio = totalKg > 0 ? remainKg / totalKg : 0
-      // Use already fetched batch data
-      const remainMtr  = currentBatch.mtr  ? Math.round(currentBatch.mtr  * ratio * 10) / 10 : null
-      const remainTaka = currentBatch.taka ? Math.round(currentBatch.taka * ratio) : null
-      await dbUpdate('batches', { id: batch_id }, {
-        is_faulty:false, kg:remainKg,
-        ...(remainMtr  !== null ? { mtr:  remainMtr  } : {}),
-        ...(remainTaka !== null ? { taka: remainTaka } : {}),
-        status: nextProcess ? 'in-process' : 'done',
-        current_process: nextProcess||null,
-        sent_at: new Date().toISOString(),
-      })
-    }
-
-    await auditLog({ action:'faulty_reprocess', entity_type:'faulty_record', entity_id:id, new_value:`${reprocess_type}:${repairKg}kg` })
-    return NextResponse.json({ ok:true, repair_kg:repairKg, remain_kg:remainKg, next_process:nextProcess })
+    await auditLog({ action:'faulty_reprocess', entity_type:'faulty_record', entity_id:id,
+      new_value:`${reprocess_type}:${r.repair_kg}kg → ${r.repair_batch_id}` })
+    return NextResponse.json({ ok:true, repair_kg:r.repair_kg, remain_kg:r.remain_kg, next_process:r.next_process, repair_batch_id:r.repair_batch_id })
   }
 
   // ── Standard update ───────────────────────────────────────────────────────

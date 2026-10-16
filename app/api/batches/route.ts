@@ -41,28 +41,80 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// ── Split helpers ────────────────────────────────────────────────────────────
+// Splitting is ADDITIVE: existing batches of an order are never deleted here.
+// Batch IDs are generated on the server so they always continue from the
+// highest number the order already has (B1, B2 … even after deletes).
+async function getSplitContext(order_id: string) {
+  const { data: orderRows, error: orderErr } = await dbSelect('orders',
+    { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,qty_kg,qty_mtr,no_of_taka')
+  const order = orderRows?.[0]
+  if (orderErr || !order) {
+    return { order: null, nextNo: 0, allocatedKg: 0, error: orderErr || 'Order not found' }
+  }
+  if (!order.order_number) {
+    return { order, nextNo: 0, allocatedKg: 0, error: 'This order has no order number — set one before splitting.' }
+  }
+
+  const { data: existing } = await dbSelect('batches',
+    { order_id: `eq.${order_id}` }, 'id,batch_id,batch_number,kg')
+  let maxNo = 0
+  let allocatedKg = 0
+  for (const b of existing || []) {
+    allocatedKg += parseFloat(b.kg) || 0
+    if (b.batch_number) maxNo = Math.max(maxNo, Number(b.batch_number) || 0)
+    // Only plain "-B<n>" ids count here (repair ids like -B2-R / -B2-R-S1 don't)
+    const m = String(b.batch_id || '').match(/-B(\d+)$/)
+    if (m) maxNo = Math.max(maxNo, parseInt(m[1], 10))
+  }
+  return { order, nextNo: maxNo + 1, allocatedKg, error: null as string | null }
+}
+
+async function insertBatchProcesses(created: any[] | null | undefined, process_route: string[] | undefined) {
+  if (!created?.length || !process_route?.length) return
+  const bpRows: any[] = []
+  for (const batch of created) {
+    for (const code of process_route) {
+      bpRows.push({ batch_id: batch.id, process_code: code, status: 'pending' })
+    }
+  }
+  await sb('/batch_processes?on_conflict=batch_id,process_code', {
+    method: 'POST', body: JSON.stringify(bpRows),
+    headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+  })
+}
+
 // POST /api/batches
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { action, _user, ...payload } = body
 
+    // ── Split: ADD new batches to an order (never deletes existing ones) ─────
     if (action === 'create_splits') {
       const { order_id, batches, process_route } = payload
       if (!order_id || !batches?.length) {
         return NextResponse.json({ ok: false, error: 'order_id and batches required' }, { status: 400 })
       }
 
-      await dbDelete('batches', { order_id })
+      const ctx = await getSplitContext(order_id)
+      if (ctx.error || !ctx.order) return NextResponse.json({ ok: false, error: ctx.error }, { status: 400 })
 
-      const rows = batches.map((b: any, idx: number) => ({
-        batch_id:      b.batch_id,
+      const parts = batches.filter((b: any) => (parseFloat(b.kg) || 0) > 0)
+      if (!parts.length) {
+        return NextResponse.json({ ok: false, error: 'Every batch needs a quantity above 0 Kg' }, { status: 400 })
+      }
+
+      // Client-sent batch_id is ignored — the server numbers new batches
+      // after the highest existing one so IDs never collide or restart.
+      const rows = parts.map((b: any, idx: number) => ({
+        batch_id:      `${ctx.order.order_number}-B${ctx.nextNo + idx}`,
         order_id,
         machine_id:    b.machine_id || null,
-        batch_number:  idx + 1,
-        kg:            b.kg,
-        mtr:           b.mtr  || null,
-        taka:          b.taka || null,
+        batch_number:  ctx.nextNo + idx,
+        kg:            parseFloat(b.kg) || 0,
+        mtr:           parseFloat(b.mtr)  || null,
+        taka:          parseInt(b.taka)   || null,
         status:        'pending',
         process_route: process_route || [],  // save route on batch so machine page shows correct process
       }))
@@ -74,22 +126,11 @@ export async function POST(req: NextRequest) {
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
       await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
-
-      if (created?.length && process_route?.length) {
-        const bpRows: any[] = []
-        for (const batch of created) {
-          for (const code of process_route) {
-            bpRows.push({ batch_id: batch.id, process_code: code, status: 'pending' })
-          }
-        }
-        await sb('/batch_processes', {
-          method: 'POST', body: JSON.stringify(bpRows),
-          headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-        })
-      }
+      await insertBatchProcesses(created, process_route)
 
       await auditLog({ username: _user, action: 'split', entity_type: 'order',
-        entity_id: order_id, new_value: `${batches.length} batches` })
+        entity_id: order_id,
+        new_value: `${rows.length} batch(es) added: ${rows.map((r: any) => r.batch_id).join(', ')}` })
 
       return NextResponse.json({ ok: true, data: created })
     }
@@ -189,25 +230,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, restored_kg: batch.kg })
     }
 
-    // ── Full split: entire order qty as one single batch ────────────────────
+    // ── Full split: everything still unsplit becomes ONE new batch ──────────
+    // No batches yet  → one batch with the full order qty (B1).
+    // Some batches    → one batch with the remaining qty (B<next>), with
+    //                   mtr/taka in proportion. Existing batches are untouched.
     if (action === 'full_split') {
-      const { order_id, order_number, qty_kg, qty_mtr, no_of_taka, machine_id, process_route } = payload
+      const { order_id, machine_id, process_route } = payload
       if (!order_id) return NextResponse.json({ ok: false, error: 'order_id required' }, { status: 400 })
 
-      // Check if already has batches
-      const { data: existing } = await dbSelect('batches', { order_id: `eq.${order_id}`, limit: '1' }, 'id,kg')
-      if (existing?.length) {
-        return NextResponse.json({ ok: false, error: 'Order already has batches. Use Split to add more.' }, { status: 400 })
+      const ctx = await getSplitContext(order_id)
+      if (ctx.error || !ctx.order) return NextResponse.json({ ok: false, error: ctx.error }, { status: 400 })
+
+      const totalKg   = parseFloat(ctx.order.qty_kg)     || 0
+      const totalMtr  = parseFloat(ctx.order.qty_mtr)    || 0
+      const totalTaka = parseInt(ctx.order.no_of_taka)   || 0
+      const remainKg  = Math.round((totalKg - ctx.allocatedKg) * 100) / 100
+      if (remainKg < 0.5) {
+        return NextResponse.json({ ok: false, error: 'Order is already fully split — nothing left to split.' }, { status: 400 })
       }
+      const ratio = totalKg > 0 ? remainKg / totalKg : 1
+      const isFirst = ctx.allocatedKg <= 0
 
       const batch = {
-        batch_id:     `${order_number}-B1`,
+        batch_id:     `${ctx.order.order_number}-B${ctx.nextNo}`,
         order_id,
         machine_id:   machine_id || null,
-        batch_number: 1,
-        kg:           parseFloat(qty_kg)    || 0,
-        mtr:          parseFloat(qty_mtr)   || null,
-        taka:         parseInt(no_of_taka)  || null,
+        batch_number: ctx.nextNo,
+        kg:           remainKg,
+        mtr:          totalMtr  ? (isFirst ? totalMtr  : Math.round(totalMtr  * ratio)) : null,
+        taka:         totalTaka ? (isFirst ? totalTaka : Math.round(totalTaka * ratio)) : null,
         status:       'pending',
         process_route: process_route || [],
       }
@@ -220,20 +271,10 @@ export async function POST(req: NextRequest) {
 
       // Update order status to splitting
       await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
-
-      // Create batch_processes
-      if (created?.length && process_route?.length) {
-        const bpRows = process_route.map((code: string) => ({
-          batch_id: created[0].id, process_code: code, status: 'pending'
-        }))
-        await sb('/batch_processes', {
-          method: 'POST', body: JSON.stringify(bpRows),
-          headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
-        })
-      }
+      await insertBatchProcesses(created, process_route)
 
       await auditLog({ username: _user, action: 'full_split', entity_type: 'order',
-        entity_id: order_id, new_value: `1 batch · ${qty_kg}kg` })
+        entity_id: order_id, new_value: `${batch.batch_id} · ${remainKg}kg` })
 
       return NextResponse.json({ ok: true, data: created })
     }

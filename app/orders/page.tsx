@@ -356,6 +356,8 @@ export default function OrdersPage() {
       const ratio        = totalKg > 0 ? remainingKg / totalKg : 0
       const remainingMtr = Math.round(totalMtr  * ratio)
       const remainingTaka= Math.round(totalTaka * ratio)
+      // Tell the modal how much is already split so "Remaining after save" is right
+      setSelectedOrder({ ...enriched, _allocatedKg: allocatedKg, _existingBatchCount: existingBatches.length })
       const pm: Record<string, string[]> = o.process_machines || {}
       const primaryMachineId = (() => {
         // Get first machine from process_machines
@@ -518,7 +520,6 @@ export default function OrdersPage() {
       const existRes = await fetch(`/api/batches?order_id=${selectedOrder.id}`, { cache: 'no-store' })
       const existData = await existRes.json()
       const existingBatches: any[] = existData.data || []
-      const startIdx = existingBatches.length // new batches start after existing ones
       const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
       const remainingKg = Math.max(0, (parseFloat(selectedOrder.qty_kg) || 0) - allocatedKg)
       if (totalNewKg > remainingKg + 0.5) {
@@ -526,9 +527,9 @@ export default function OrdersPage() {
           setSaving(false); return
         }
       }
-      const batches = splitParts.map((p, idx) => ({
-        batch_id:   `${selectedOrder.order_number}-B${startIdx + idx + 1}`,
-        kg:          parseFloat(p.kg)  || 0,
+      // Batch IDs are assigned by the server (continuing after existing batches)
+      const batches = splitParts.map((p) => ({
+        kg:         parseFloat(p.kg)  || 0,
         mtr:         parseFloat(p.mtr) || 0,
         taka:        parseInt(p.taka)  || 0,
         // Use per-batch machine selection if available, else fall back to order's primary machine
@@ -1240,7 +1241,8 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
   onSave: () => void; onClose: () => void; saving: boolean
 }) {
   const totalKg   = splitParts.reduce((s, p) => s + (parseFloat(p.kg) || 0), 0)
-  const remaining = (order.qty_kg || 0) - totalKg
+  const alreadySplitKg = parseFloat(order._allocatedKg) || 0
+  const remaining = (parseFloat(order.qty_kg) || 0) - alreadySplitKg - totalKg
   const ok        = Math.abs(remaining) < 0.5
 
   // Build available machines per process from process_machines
@@ -1318,6 +1320,9 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
         <div style={{ background: 'var(--bg-secondary)', padding: '8px 14px', borderRadius: 8,
           marginBottom: 10, fontSize: 13, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <span><strong>Order Total:</strong> {order.qty_kg} Kg</span>
+          {alreadySplitKg > 0 && (
+            <span><strong>Already split:</strong> {alreadySplitKg.toFixed(1)} Kg ({order._existingBatchCount} batch{order._existingBatchCount === 1 ? '' : 'es'} — kept as they are)</span>
+          )}
           <span><strong>Article:</strong> {order.article}</span>
           <span><strong>Color:</strong> {order.color}</span>
           {hasDualMachines && (
@@ -1375,7 +1380,7 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
           <tbody>
             {splitParts.map((part, i) => (
               <tr key={i} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                <td style={{ padding: '6px 8px', fontSize: 12, fontWeight: 600 }}>#{i + 1}</td>
+                <td style={{ padding: '6px 8px', fontSize: 12, fontWeight: 600 }}>New #{i + 1}</td>
                 {(['kg', 'mtr', 'taka'] as const).map(f => (
                   <td key={f} style={{ padding: '6px 8px' }}>
                     <input type="number" value={part[f]}
