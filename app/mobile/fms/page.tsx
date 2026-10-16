@@ -97,8 +97,8 @@ function FmsContent() {
     setLoading(true)
     try {
       const [bRes, oRes, dpRes] = await Promise.all([
-        getBatches({ limit: 5000 }),
-        getOrders({ limit: 5000 }),
+        getBatches(),
+        getOrders(),
         fetch('/api/date-plans', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
       const batches: any[] = bRes.data || []

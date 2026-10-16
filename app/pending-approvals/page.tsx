@@ -8,12 +8,7 @@ const api = (path: string, body?: any) =>
     : { cache: 'no-store' }
   ).then(r => r.json())
 
-function genOrderNumber(existing: string[]): string {
-  const year = new Date().getFullYear().toString().slice(2)
-  const nums = existing.filter(n => n?.startsWith(`DYE${year}-`)).map(n => parseInt(n.split('-')[1]) || 0)
-  const next = nums.length ? Math.max(...nums) + 1 : 1
-  return `DYE${year}-${String(next).padStart(4, '0')}`
-}
+// Order numbers are assigned by the server (database counter) — see /api/orders 'create'.
 
 const fmtDate = (d?: string) => {
   if (!d) return '-'
@@ -121,8 +116,8 @@ export default function PendingApprovalsPage() {
     if (!res.ok) throw new Error(res.error || 'Save failed')
   }
 
-  const buildOrderPayload = (row: any, orderNumber: string) => ({
-    action: 'create', order_number: orderNumber, status: 'new', process_route: [],
+  const buildOrderPayload = (row: any) => ({
+    action: 'create', status: 'new', process_route: [],
     party:           row.party          || '',
     article:         row.article        || '',
     blend:           row.blend          || '',
@@ -150,14 +145,12 @@ export default function PendingApprovalsPage() {
     if (!confirm(`Approve ${toApprove.length} row(s) and create orders?`)) return
     setSaving('__bulk__', true); setProgress({done:0,total:toApprove.length})
     try {
-      const existRes  = await api('/api/orders?limit=2000')
-      const existing  = (existRes.data||[]).map((o:any)=>o.order_number)
       let done=0; const errors:string[]=[]
       for (const item of toApprove) {
-        const orderNumber = genOrderNumber([...existing]); existing.push(orderNumber)
-        const result = await api('/api/orders', buildOrderPayload(item.row, orderNumber))
+        const result = await api('/api/orders', buildOrderPayload(item.row))
         if (!result.ok) { errors.push(`Row ${item.rowIndex+1}: ${result.error}`) }
         else {
+          const orderNumber = result.data?.order_number
           try { await updateSheetRow(item, { approvalStatus:'approved', orderNumber, submitForApproval:false, requestEdit:false, receivedAt:new Date().toISOString() }) }
           catch(e) { errors.push(`Row ${item.rowIndex+1}: sheet update failed`) }
         }
@@ -172,10 +165,9 @@ export default function PendingApprovalsPage() {
   const approveSingle = async (item: SheetItem) => {
     setSaving(item.row.id, true)
     try {
-      const existRes    = await api('/api/orders?limit=2000')
-      const orderNumber = genOrderNumber((existRes.data||[]).map((o:any)=>o.order_number))
-      const result      = await api('/api/orders', buildOrderPayload(item.row, orderNumber))
+      const result      = await api('/api/orders', buildOrderPayload(item.row))
       if (!result.ok) { alert('Error: '+result.error); return }
+      const orderNumber = result.data?.order_number
       await updateSheetRow(item, { approvalStatus:'approved', orderNumber, submitForApproval:false, requestEdit:false, receivedAt:new Date().toISOString() })
       showToast(`✓ Order ${orderNumber} created`)
       await load()

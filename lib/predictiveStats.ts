@@ -289,7 +289,22 @@ interface RiskPool {
   factoryAverageRate: number
 }
 
+// The pool includes ~40k historical batches. Now that reads are no longer
+// cut off at 1000 rows, cache it for 10 minutes per server instance so the
+// Split / Assign screens stay fast.
+const RISK_POOL_TTL_MS = 10 * 60 * 1000
+const riskPoolCache: Partial<Record<'faulty' | 'fob', { at: number; pool: Promise<RiskPool> }>> = {}
+
 async function loadRiskPool(kind: 'faulty' | 'fob'): Promise<RiskPool> {
+  const hit = riskPoolCache[kind]
+  if (hit && Date.now() - hit.at < RISK_POOL_TTL_MS) return hit.pool
+  const pool = loadRiskPoolUncached(kind)
+  riskPoolCache[kind] = { at: Date.now(), pool }
+  pool.catch(() => { delete riskPoolCache[kind] })
+  return pool
+}
+
+async function loadRiskPoolUncached(kind: 'faulty' | 'fob'): Promise<RiskPool> {
   const liveTable = kind === 'faulty' ? 'faulty_records' : 'fob_records'
   const histTable = kind === 'faulty' ? 'historical_faulty' : 'historical_fob'
   const histCols = kind === 'faulty' ? 'batch_no,article,colour,faulty_type,faulty_remark' : 'batch_no,article,colour,fob_reason'

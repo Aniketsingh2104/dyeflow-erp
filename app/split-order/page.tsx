@@ -21,7 +21,7 @@ function SplitOrderContent() {
     setMachines(machRes.data   || [])
 
     if (!orderId) return
-    const { data: orders } = await getOrders({ limit: 1000 })
+    const { data: orders } = await getOrders()
     const found = (orders || []).find((o: any) => o.id === orderId || o.order_number === orderId)
     if (found) {
       setOrder(found)

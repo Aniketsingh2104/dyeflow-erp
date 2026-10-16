@@ -468,7 +468,7 @@ ${ctx}`
       // already does proper Supabase updates AND server-side audit logging —
       // no need to call logAudit separately here.
       const [ordersRes, supervisorsRes] = await Promise.all([
-        fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
       ])
       const orders: any[] = ordersRes.data || []

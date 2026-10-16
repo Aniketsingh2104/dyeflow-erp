@@ -1,5 +1,6 @@
 'use client'
 
+import { dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { getCollabInfo } from '@/lib/collab'
 
@@ -33,12 +34,7 @@ const COLUMNS = [
   { key: 'actions',         label: 'SELECT',          defaultWidth: 80  },
 ]
 
-const PROC_COL_MAP: Record<string,string> = {
-  C:'d_c', S:'d_s', H:'d_h', D:'d_d', S2:'d_s2', Rx:'d_rx', O:'d_o',
-  G:'d_g', F:'d_f', Co:'d_co', Tu:'d_tu', Add:'d_add', Level:'d_level',
-  Rc:'d_rc', Fix:'d_fix', Wash:'d_wash', Dry:'d_dry', B:'d_b',
-  R:'d_r', K:'d_k', QA:'d_qa', Packing:'d_packing', Dispatch:'d_dispatch'
-}
+// Process code → batch_date_plans column: see lib/processCodes.ts (handles Lev / Qa)
 
 const toDisplay = (ymd: string) => {
   if (!ymd) return '-'
@@ -85,8 +81,8 @@ export default function FirstProcessBatchPage() {
     setLoading(true)
     try {
       const [bRes, oRes, dpRes, repairRes] = await Promise.all([
-        fetch('/api/batches?limit=5000', { cache:'no-store' }).then(r=>r.json()),
-        fetch('/api/orders?limit=2000',  { cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/batches', { cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/orders',  { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
         fetch('/api/repairing-orders',    { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
       ])
@@ -117,7 +113,7 @@ export default function FirstProcessBatchPage() {
           const route: string[] = b.process_route || order.process_route || []
           const firstProc = route[0] || ''
           const dp = dpMap[b.id] || {}
-          const col = PROC_COL_MAP[firstProc]
+          const col = dateColFor(firstProc)
           const plannedDateRaw = col && dp[col] ? dp[col] : null
           const plannedDate = plannedDateRaw ? toDisplay(plannedDateRaw) : '-'
           return {

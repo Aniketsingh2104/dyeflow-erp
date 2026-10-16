@@ -13,8 +13,8 @@ export default function MobileHome() {
     setLoading(true)
     try {
       const [oRes, bRes, mRes, pRes] = await Promise.all([
-        fetch('/api/orders?limit=1000',  { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/machines',           { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes',          { cache: 'no-store' }).then(r => r.json()),
       ])

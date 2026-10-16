@@ -32,8 +32,9 @@ export default function RequestedUnitPage() {
   const confirmRequest = async (id: string) => {
     setSaving(true)
     try {
-      await labPost({ action: 'confirm_request', id })
-      showToast('✓ Confirmed')
+      const res = await labPost({ action: 'confirm_request', id })
+      if (!res?.ok) { alert('Not confirmed: ' + (res?.error || 'unknown error')); return }
+      showToast('✓ Confirmed — moved to Lab FMS')
       load()
     } finally { setSaving(false) }
   }

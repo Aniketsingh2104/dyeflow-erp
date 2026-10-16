@@ -52,9 +52,7 @@ function fmtDate(iso: string | null | undefined): string {
     ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
-function genOrderNumber(count: number, prefix = 'DYG'): string {
-  return `${prefix}-${new Date().getFullYear()}-${count + 1}`
-}
+// Order numbers (DYE<yy>-0001) are assigned by the server when the order is saved.
 
 // ── Status badge ─────────────────────────────────────────────────────────────
 
@@ -133,7 +131,7 @@ export default function OrdersPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     const [ordersRes, supsRes, machRes, custRes, procRes] = await Promise.all([
-      getOrders({ limit: 1000 }),
+      getOrders(),
       getSupervisors(),
       getMachines(),
       getCustomers(),
@@ -148,7 +146,7 @@ export default function OrdersPage() {
     // Load batch allocations to determine "Fully Splitted" state
     if (ordersRes.data?.length) {
       try {
-        const batchRes = await fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json())
+        const batchRes = await fetch('/api/batches', { cache: 'no-store' }).then(r => r.json())
         const batchMap: Record<string, number> = {}
         for (const b of (batchRes.data || [])) {
           batchMap[b.order_id] = (batchMap[b.order_id] || 0) + (parseFloat(b.kg) || 0)
@@ -325,7 +323,7 @@ export default function OrdersPage() {
 
   const openNewModal = () => {
     setFormData({
-      order_number:    genOrderNumber(orders.length),
+      order_number:    '',   // assigned by the server on save
       party: '', article: '', color: '', blend: '', width: '', gsm: '',
       lab_no: '', lot_no: '', challan_no: '',
       qty_kg: '', qty_mtr: '', no_of_taka: '',
@@ -399,9 +397,10 @@ export default function OrdersPage() {
         process_route: cleanData.process_route || [],
       }
       if (modal === 'new') {
-        const { error } = await createOrder(payload)
+        const { order_number: _ignored, ...newPayload } = payload
+        const { data: created, error } = await createOrder(newPayload)
         if (error) { alert('Error: ' + error); return }
-        showToast('✓ Order created')
+        showToast(`✓ Order ${created?.order_number || ''} created`)
       } else if (modal === 'edit' && selectedOrder) {
         const { error } = await updateOrder(selectedOrder.id, payload)
         if (error) { alert('Error: ' + error); return }
@@ -527,13 +526,29 @@ export default function OrdersPage() {
           setSaving(false); return
         }
       }
-      // Batch IDs are assigned by the server (continuing after existing batches)
+      // Batch IDs are assigned by the server (continuing after existing batches).
+      // Machine per process: one-machine processes automatic, two-machine
+      // processes as picked in the split screen (default: first machine).
+      const pmOrder: Record<string, string[]> = selectedOrder.process_machines || {}
+      const routeOrder: string[] = selectedOrder.process_route || []
+      const buildMap = (p: any) => {
+        const map: Record<string, string> = {}
+        for (const [code, ids] of Object.entries(pmOrder)) {
+          const list = (ids as string[]).filter(Boolean)
+          if (!list.length) continue
+          map[code] = list.length > 1 && p.pm?.[code] && list.includes(p.pm[code]) ? p.pm[code] : list[0]
+        }
+        return map
+      }
+      const firstMachine = (map: Record<string, string>) =>
+        routeOrder.map(c => map[c]).find(Boolean) || Object.values(map)[0] || ''
       const batches = splitParts.map((p) => ({
+        process_machine_map: buildMap(p),
         kg:         parseFloat(p.kg)  || 0,
         mtr:         parseFloat(p.mtr) || 0,
         taka:        parseInt(p.taka)  || 0,
         // Use per-batch machine selection if available, else fall back to order's primary machine
-        machine_id:  p.machine_id || selectedOrder.machine_id || null,
+        machine_id:  firstMachine(buildMap(p)) || p.machine_id || selectedOrder.machine_id || null,
       }))
       const { error } = await createSplits(selectedOrder.id, batches, selectedOrder.process_route || [])
       if (error) { alert('Error: ' + error); return }
@@ -944,7 +959,7 @@ export default function OrdersPage() {
 
               <div className="form-group">
                 <label>Order Number</label>
-                <input value={formData.order_number || ''} readOnly
+                <input value={formData.order_number || ''} readOnly placeholder="Assigned automatically on save"
                   style={{ background: 'var(--bg-secondary)', fontWeight: 700, color: 'var(--accent)' }} />
               </div>
             </div>
@@ -1279,7 +1294,16 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
     return opts
   })()
 
-  const hasDualMachines = allMachineOptions.length > 1
+  // Processes that have TWO machines on this order → ask which one per batch.
+  // Processes with one machine are filled in automatically.
+  const routeOrder: string[] = order.process_route || []
+  const choiceProcs: string[] = Object.entries(processMachines)
+    .filter(([, ids]) => (ids as string[]).filter(Boolean).length > 1)
+    .map(([code]) => code)
+    .sort((a, b) => routeOrder.indexOf(a) - routeOrder.indexOf(b))
+  const hasDualMachines = choiceProcs.length > 0
+  const updPm = (i: number, code: string, val: string) =>
+    setSplitParts(p => p.map((b, j) => j === i ? { ...b, pm: { ...(b.pm || {}), [code]: val } } : b))
 
   // Recommended machine (historical-only, see file header caveat) + article-
   // level faulty/FOB risk — fetched once on mount, not re-fetched per machine
@@ -1327,7 +1351,7 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
           <span><strong>Color:</strong> {order.color}</span>
           {hasDualMachines && (
             <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-              Select machine per batch ↓
+              Pick the machine for {choiceProcs.join(', ')} per batch ↓
             </span>
           )}
         </div>
@@ -1371,9 +1395,11 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Qty (Kg)</th>
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Qty (Mtr)</th>
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Taka</th>
-              {hasDualMachines && (
-                <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Machine</th>
-              )}
+              {choiceProcs.map(code => (
+                <th key={code} style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>
+                  {code} machine
+                </th>
+              ))}
               <th style={{ padding: '6px 8px', borderBottom: '1px solid var(--border-light)' }}></th>
             </tr>
           </thead>
@@ -1390,21 +1416,23 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
                         background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
                   </td>
                 ))}
-                {hasDualMachines && (
-                  <td style={{ padding: '6px 8px' }}>
-                    <select
-                      value={part.machine_id || ''}
-                      onChange={e => upd(i, 'machine_id', e.target.value)}
-                      style={{ padding: '4px 8px', fontSize: 12, border: '1px solid var(--border-medium)',
-                        borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)',
-                        fontWeight: 600, minWidth: 140 }}>
-                      <option value="">— Select —</option>
-                      {allMachineOptions.map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                )}
+                {choiceProcs.map(code => {
+                  const opts = getMachineOptions(code)
+                  return (
+                    <td key={code} style={{ padding: '6px 8px' }}>
+                      <select
+                        value={part.pm?.[code] || opts[0]?.id || ''}
+                        onChange={e => updPm(i, code, e.target.value)}
+                        style={{ padding: '4px 8px', fontSize: 12, border: '1px solid var(--border-medium)',
+                          borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)',
+                          fontWeight: 600, minWidth: 130 }}>
+                        {opts.map(m => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                  )
+                })}
                 <td style={{ padding: '6px 8px' }}>
                   {splitParts.length > 1 && (
                     <button className="xs danger" onClick={() => remove(i)}>✕</button>

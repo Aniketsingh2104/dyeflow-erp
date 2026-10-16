@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
 import { startReprocess } from '@/lib/repair'
+import { canonicalCode } from '@/lib/processCodes'
+import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 import { requireAdmin } from '@/lib/auth'
 
 
@@ -71,6 +73,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action, id, ...payload } = body
+  if (payload.process_code) payload.process_code = canonicalCode(payload.process_code)
 
   // ── Mark OK ───────────────────────────────────────────────────────────────
   if (action === 'mark_ok') {
@@ -90,6 +93,7 @@ export async function POST(req: NextRequest) {
       sent_at: new Date().toISOString(),
     })
     await auditLog({ action:'faulty_ok', entity_type:'faulty_record', entity_id:id, new_value: nextProcess || 'completed' })
+    await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
     return NextResponse.json({ ok: true, next_process: nextProcess })
   }
 
@@ -112,6 +116,7 @@ export async function POST(req: NextRequest) {
 
     await auditLog({ action:'faulty_reprocess', entity_type:'faulty_record', entity_id:id,
       new_value:`${reprocess_type}:${r.repair_kg}kg → ${r.repair_batch_id}` })
+    await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
     return NextResponse.json({ ok:true, repair_kg:r.repair_kg, remain_kg:r.remain_kg, next_process:r.next_process, repair_batch_id:r.repair_batch_id })
   }
 

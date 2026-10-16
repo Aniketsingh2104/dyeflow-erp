@@ -70,8 +70,8 @@ export default function SplittedOrdersPage() {
     setLoading(true)
     try {
       const [batchRes, orderRes, repairRes] = await Promise.all([
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/orders?limit=2000',  { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/repairing-orders',   { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
       const batches: any[] = batchRes.data || []

@@ -23,8 +23,8 @@ export default function DailyProductionSummaryPage() {
     setLoading(true)
     try {
       const [batchesRes, ordersRes, faultyRes] = await Promise.all([
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/orders?limit=5000',  { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/faulty',             { cache: 'no-store' }).then(r => r.json()),
       ])
 

@@ -221,7 +221,7 @@ function ProductionHeatmap() {
   const [cells, setCells] = useState<any[]>([])
 
   useEffect(() => {
-    fetch('/api/batches?limit=5000&status=done', { cache: 'no-store' })
+    fetch('/api/batches?status=done', { cache: 'no-store' })
       .then(r => r.json())
       .then(data => {
         const countByDay: Record<string, number> = {}
@@ -348,8 +348,8 @@ export default function DashboardPage() {
 
   const loadDashboard = useCallback(async () => {
     const [oRes, bRes, mRes] = await Promise.all([
-      fetch('/api/orders?limit=500',  { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/batches?limit=2000',{ cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches',{ cache: 'no-store' }).then(r => r.json()),
       fetch('/api/machines',          { cache: 'no-store' }).then(r => r.json()),
     ])
     let allOrders: any[] = oRes.data || []

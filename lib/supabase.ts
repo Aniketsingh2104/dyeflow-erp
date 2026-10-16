@@ -47,12 +47,61 @@ export async function sb<T = any>(
   }
 }
 
+/**
+ * Read rows. Supabase returns at most ~1000 rows per request no matter what
+ * `limit` asks for, so this pages automatically until it has `limit` rows
+ * (or every row, when no limit is given). `limit: '1'` is still one request.
+ */
+const PAGE_SIZE = 1000
+const PARALLEL_PAGES = 6
 export async function dbSelect<T = any>(
   table: string, query: Record<string, string> = {}, select = '*'
 ): Promise<{ data: T[]; error: string | null }> {
-  const params: Record<string, string> = { select, ...query }
-  const { data, error } = await sb<T[]>(`/${table}`, { params })
-  return { data: data ?? [], error }
+  const { limit: limitStr, offset: offsetStr, ...rest } = query
+  const wanted = limitStr ? Math.max(0, parseInt(limitStr, 10) || 0) : Infinity
+  const start  = offsetStr ? Math.max(0, parseInt(offsetStr, 10) || 0) : 0
+  if (wanted === 0) return { data: [], error: null }
+
+  // Paging needs a stable order; add one when the caller didn't give any
+  const mayPage = wanted > PAGE_SIZE
+  const base: Record<string, string> = { select, ...rest }
+  if (mayPage && !base.order) base.order = 'id.asc'
+
+  const fetchPage = (offset: number, limit: number) =>
+    sb<T[]>(`/${table}`, { params: { ...base, limit: String(limit), offset: String(offset) } })
+
+  // First page
+  let first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
+  if (first.error && mayPage && !rest.order && /column|id/i.test(first.error)) {
+    delete base.order                               // table has no "id" column
+    first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
+  }
+  if (first.error) return { data: [], error: first.error }
+  const all: T[] = [...((first.data as T[]) || [])]
+  if (all.length < Math.min(PAGE_SIZE, wanted)) return { data: all, error: null }
+
+  // Remaining pages, several at a time
+  let offset = start + all.length
+  while (all.length < wanted) {
+    const jobs: { offset: number; limit: number }[] = []
+    let o = offset, got = all.length
+    for (let i = 0; i < PARALLEL_PAGES && got < wanted; i++) {
+      const lim = Math.min(PAGE_SIZE, wanted - got)
+      jobs.push({ offset: o, limit: lim }); o += lim; got += lim
+    }
+    const results = await Promise.all(jobs.map(j => fetchPage(j.offset, j.limit)))
+    let done = false
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]
+      if (r.error) return { data: all, error: r.error }
+      const page = (r.data as T[]) || []
+      all.push(...page)
+      if (page.length < jobs[i].limit) { done = true; break }   // reached the end
+    }
+    if (done) break
+    offset = o
+  }
+  return { data: all, error: null }
 }
 
 // Supabase/PostgREST caps every single request at a server-configured max

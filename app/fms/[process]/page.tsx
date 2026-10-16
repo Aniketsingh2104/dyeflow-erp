@@ -1,5 +1,6 @@
 'use client'
 
+import { canonicalCode, sameCode, dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
@@ -87,7 +88,9 @@ const COL_KEY = 'fms_col_settings_v3'
 export default function FmsProcessPage() {
   const params      = useParams()
   const router      = useRouter()
-  const processCode = String(params?.process || '').toUpperCase()
+  // Standard code from the URL, case-insensitive: /fms/add → 'Add', /fms/lev → 'Lev'
+  // (it used to be upper-cased to 'ADD', which broke collab checks and faulty/reset updates)
+  const processCode = canonicalCode(decodeURIComponent(String(params?.process || '')))
 
   const [rows,     setRows]     = useState<any[]>([])
   const [allBatches, setAllBatches] = useState<any[]>([])
@@ -124,8 +127,8 @@ export default function FmsProcessPage() {
     setLoading(true)
     try {
       const [batchRes, orderRes, dpRes, fobRes] = await Promise.all([
-        getBatches({ limit: 5000 }),
-        getOrders({ limit: 1000 }),
+        getBatches(),
+        getOrders(),
         fetch('/api/date-plans', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
         fetch('/api/fob', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
@@ -140,7 +143,7 @@ export default function FmsProcessPage() {
       const fobRecords: any[] = fobRes.data || []
       const fobMap: Record<string, any> = {}
       for (const f of fobRecords) {
-        const key = `${f.batch_uuid || f.batch_id}__${f.process_code}`
+        const key = `${f.batch_uuid || f.batch_id}__${canonicalCode(f.process_code)}`
         fobMap[key] = f
       }
 
@@ -150,21 +153,14 @@ export default function FmsProcessPage() {
       for (const dp of datePlans) dpMap[dp.batch_id] = dp
 
       // Map process code to d_* column in batch_date_plans
-      const PROC_COL: Record<string, string> = {
-        C:'d_c', S:'d_s', H:'d_h', D:'d_d', S2:'d_s2', Rx:'d_rx', O:'d_o',
-        G:'d_g', F:'d_f', Co:'d_co', Tu:'d_tu', Add:'d_add', Level:'d_level',
-        Rc:'d_rc', Fix:'d_fix', Wash:'d_wash', Dry:'d_dry', B:'d_b',
-        R:'d_r', K:'d_k', QA:'d_qa', Qa:'d_qa', Packing:'d_packing',
-        Dispatch:'d_dispatch'
-      }
+      // Process code → d_* column: lib/processCodes.ts
 
       // Show batches:
       // 1. Active: currently at this process (current_process === thisProcess)
       // 2. Done here: batch_processes has done/faulty/fob entry for this process code
       // 3. Faulty/FOB here: last_process === thisProcess (batch left via faulty or FOB)
       const filtered = batches.filter(b => {
-        const bpCode = (c: string) =>
-          c?.toUpperCase() === processCode || c === processCode
+        const bpCode = (c: string) => sameCode(c, processCode)
 
         // Active at this process
         const isActive = bpCode(b.current_process)
@@ -190,19 +186,14 @@ export default function FmsProcessPage() {
 
         // Planned date from batch_date_plans for THIS process
         const dp = dpMap[b.id] || {}
-        const procColKey = PROC_COL[processCode] || PROC_COL[
-          Object.keys(PROC_COL).find(k => k.toUpperCase() === processCode) || ''
-        ] || ''
+        const procColKey = dateColFor(processCode) || ''
         const planned = procColKey && dp[procColKey]
           ? dp[procColKey].slice(0, 10)  // YYYY-MM-DD
           : ''
         // Delivery date = d_dispatch from batch_date_plans
         const dispatchDate = dp.d_dispatch ? dp.d_dispatch.slice(0, 10) : ''
         // batch_processes entry for THIS process
-        const bp = (b.batch_processes || []).find((p: any) =>
-          p.process_code?.toUpperCase() === processCode ||
-          p.process_code === processCode
-        )
+        const bp = (b.batch_processes || []).find((p: any) => sameCode(p.process_code, processCode))
         const bpStatus = bp?.status || 'pending'  // 'pending' | 'done' | 'faulty' | 'fob'
         const actual   = bp?.done_at ? bp.done_at.split('T')[0] : ''
         const actualDateTime = bp?.done_at ? bp.done_at : ''  // full timestamp for display
@@ -304,12 +295,12 @@ export default function FmsProcessPage() {
     const block = collabBlockMessage(row, processCode, allBatches)
     if (block) { alert(block); return }
     const route: string[] = (row.process_route || row.routeStr?.split('/') || [])
-    const idx  = route.findIndex((c: string) => c.toUpperCase() === processCode)
+    const idx  = route.findIndex((c: string) => sameCode(c, processCode))
     const next = idx >= 0 ? route[idx + 1] : undefined
     if (!confirm(`Mark ${row.batch_id} done in ${processCode}?`)) return
     setSaving(true)
     try {
-      const { error } = await markProcessDone(row.id, row.current_process, next)
+      const { error } = await markProcessDone(row.id, row.current_process || processCode, next)
       if (error) { alert('Error: ' + error); return }
       showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'complete'}`)
       loadRows()
@@ -322,7 +313,7 @@ export default function FmsProcessPage() {
     if (block) { alert(block); return }
     const route: string[] = row.process_route || row.routeStr?.split('/') || []
     const currentIdx = route.findIndex((c: string) =>
-      c.toUpperCase() === processCode || c === row.current_process
+      sameCode(c, processCode) || c === row.current_process
     )
 
     let prevProcess: string | null = null

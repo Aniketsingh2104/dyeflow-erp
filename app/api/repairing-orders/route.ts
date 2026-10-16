@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, sb, auditLog } from '@/lib/supabase'
 import { ensureBatchProcesses } from '@/lib/repair'
+import { deriveMachineMap } from '@/lib/machineMap'
+import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 import { requireAdmin } from '@/lib/auth'
 
 // Revert batch ID: DYE26-0001-B1-R → DYE26-0001-B1, DYE26-0001-B1-RR → DYE26-0001-B1-R
@@ -175,6 +177,7 @@ export async function POST(req: NextRequest) {
         mtr:  parseFloat(p0.mtr)  || null,
         taka: parseInt(p0.taka)   || null,
         machine_id: p0.machine_id || batch.machine_id || null,
+        process_machine_map: deriveMachineMap(route, null, p0.machine_id || batch.machine_id || null),
       })
       if (u0) return NextResponse.json({ ok: false, error: u0 }, { status: 500 })
 
@@ -185,6 +188,7 @@ export async function POST(req: NextRequest) {
           order_id:      batch.order_id,
           supervisor_id: batch.supervisor_id || null,
           machine_id:    p.machine_id || batch.machine_id || null,
+          process_machine_map: deriveMachineMap(route, null, p.machine_id || batch.machine_id || null),
           kg:   parseFloat(p.kg) || 0,
           mtr:  parseFloat(p.mtr)  || null,
           taka: parseInt(p.taka)   || null,
@@ -194,7 +198,10 @@ export async function POST(req: NextRequest) {
         created.push(row)
       }
     } else {
-      const { error: u0 } = await dbUpdate('batches', { id: batch.id }, freshFields)
+      const { error: u0 } = await dbUpdate('batches', { id: batch.id }, {
+        ...freshFields,
+        process_machine_map: deriveMachineMap(route, null, batch.machine_id || null),
+      })
       if (u0) return NextResponse.json({ ok: false, error: u0 }, { status: 500 })
     }
 
@@ -216,6 +223,7 @@ export async function POST(req: NextRequest) {
     await auditLog({ action: action === 'split' ? 'repair_split' : 'repair_full_split', entity_type: 'batch',
       entity_id: batch.batch_id, new_value: `${1 + created.length} batch(es)` })
 
+    await refreshOrderStatus(batch.order_id)   // keep orders.status in step
     return NextResponse.json({ ok: true, batches: [batch.batch_id, ...created.map(c => c?.batch_id)] })
   }
 
@@ -314,6 +322,7 @@ export async function POST(req: NextRequest) {
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
+    await refreshOrderStatusForBatch(batch.id)   // keep orders.status in step
     return NextResponse.json({
       ok: true,
       reverted_batch_id: newBatchId,

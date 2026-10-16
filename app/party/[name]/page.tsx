@@ -36,8 +36,8 @@ export default function PartyPage() {
     try {
       // Fetch orders for this party
       const [oRes, bRes] = await Promise.all([
-        fetch(`/api/orders?limit=500`, { cache: 'no-store' }).then(r => r.json()),
-        fetch(`/api/batches?limit=5000`, { cache: 'no-store' }).then(r => r.json()),
+        fetch(`/api/orders`, { cache: 'no-store' }).then(r => r.json()),
+        fetch(`/api/batches`, { cache: 'no-store' }).then(r => r.json()),
       ])
 
       const allOrders: any[] = (oRes.data || []).filter((o: any) =>

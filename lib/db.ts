@@ -9,8 +9,11 @@ export { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 
 export async function getOrders(opts?: { limit?: number; status?: string }): Promise<{ data: any[]; error: string | null }> {
   try {
-    let url = `/api/orders?limit=${opts?.limit || 500}`
-    if (opts?.status) url += `&status=${opts.status}`
+    // No limit = every order (the server pages past Supabase's 1000-row cap)
+    const qs = new URLSearchParams()
+    if (opts?.limit)  qs.set('limit', String(opts.limit))
+    if (opts?.status) qs.set('status', opts.status)
+    const url = `/api/orders${qs.toString() ? '?' + qs.toString() : ''}`
     const res  = await fetch(url, { cache: 'no-store' })
     const data = await res.json()
     return { data: data.data || [], error: data.error || null }
@@ -70,14 +73,14 @@ export async function assignSupervisor(orderId: string, supervisorId: string): P
 // Accepts either a string orderId or an options object
 export async function getBatches(optsOrId?: string | { orderId?: string; status?: string; limit?: number }): Promise<{ data: any[]; error: string | null }> {
   try {
-    let url = '/api/batches?limit=5000'
+    let url = '/api/batches'   // every batch (server pages past the 1000-row cap)
     if (typeof optsOrId === 'string') {
       url = `/api/batches?order_id=${optsOrId}`
     } else if (optsOrId && typeof optsOrId === 'object') {
       const params = new URLSearchParams()
       if (optsOrId.orderId) params.set('order_id', optsOrId.orderId)
       if (optsOrId.status)  params.set('status',   optsOrId.status)
-      params.set('limit', String(optsOrId.limit || 5000))
+      if (optsOrId.limit) params.set('limit', String(optsOrId.limit))
       url = `/api/batches?${params.toString()}`
     }
     const res  = await fetch(url, { cache: 'no-store' })

@@ -45,7 +45,7 @@ export default function GreigeEntryPage() {
   const load = useCallback(async () => {
     const [entriesRes, ordersRes] = await Promise.all([
       greigeApi(),
-      getOrders({ limit: 500 }),
+      getOrders(),
     ])
     const allEntries = entriesRes.data || []
     setEntries(allEntries)

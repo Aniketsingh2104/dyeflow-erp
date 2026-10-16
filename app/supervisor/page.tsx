@@ -32,7 +32,7 @@ export default function SupervisorPage() {
     try {
       const [supRes, orderRes] = await Promise.all([
         getSupervisors(),
-        getOrders({ limit: 1000 }),
+        getOrders(),
       ])
 
       const sups: any[]   = supRes.data   || []

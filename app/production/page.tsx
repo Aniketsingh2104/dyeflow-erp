@@ -52,8 +52,8 @@ export default function ProductionPage() {
     try {
       const [processList, oRes, bRes] = await Promise.all([
         fetchProcessList(),
-        fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
       ])
 
       const orders: any[]  = oRes.data  || []

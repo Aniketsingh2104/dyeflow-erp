@@ -8,9 +8,10 @@ export async function GET(req: NextRequest) {
   const status       = searchParams.get('status')
   const supervisorId = searchParams.get('supervisor_id')
   const party        = searchParams.get('party')
-  const limit        = searchParams.get('limit') || '500'
+  const limit        = searchParams.get('limit')   // none = all orders
 
-  const query: Record<string, string> = { order: 'priority.asc,created_at.desc', limit }
+  const query: Record<string, string> = { order: 'priority.asc,created_at.desc,id.asc' }
+  if (limit) query.limit = limit
   if (status)       query['status']        = `eq.${status}`
   if (supervisorId) query['supervisor_id'] = `eq.${supervisorId}`
   if (party)        query['party']         = `ilike.*${party}*`
@@ -65,8 +66,19 @@ export async function POST(req: NextRequest) {
       supervisorId = await lookupSupervisor(payload.article)
     }
 
+    // Order number always comes from the database counter (one format,
+    // DYE<yy>-<0001>, never duplicated even when two people save at once).
+    // Any number sent by the browser is ignored.
+    const { data: nextNo, error: noErr } = await sb<string>('/rpc/next_order_number', {
+      method: 'POST', body: '{}',
+    })
+    if (noErr || !nextNo) {
+      return NextResponse.json({ ok: false, error: 'Could not get the next order number: ' + (noErr || 'empty') }, { status: 500 })
+    }
+
     const insertPayload = {
       ...payload,
+      order_number: nextNo,
       supervisor_id: supervisorId || null,
       // Auto-set to 'assigned' if supervisor found, else keep 'new'
       status: supervisorId ? 'assigned' : (payload.status || 'new'),

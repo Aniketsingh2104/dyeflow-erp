@@ -38,8 +38,8 @@ export default function ReportsPage() {
     setLoading(true)
     try {
       const [ordersRes, batchesRes, machinesRes, supervisorsRes, faultyRes, fobRes] = await Promise.all([
-        fetch('/api/orders?limit=5000', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=10000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/machines',  { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/supervisors',{ cache: 'no-store' }).then(r => r.json()),
         fetch('/api/faulty',    { cache: 'no-store' }).then(r => r.json()),

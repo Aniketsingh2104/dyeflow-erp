@@ -133,7 +133,7 @@ export default function UserManagementPage() {
         fetch('/api/users',       { cache: 'no-store' }).then(r => r.json()),
         fetchPageList(),
         fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/orders?limit=500', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
       ])
 
       const shapedUsers = (usersRes.data || []).map(shapeUser)

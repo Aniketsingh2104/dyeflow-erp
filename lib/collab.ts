@@ -21,6 +21,8 @@
  * check that its collab partners are there too.
  */
 
+import { canonicalCode, sameCode } from '@/lib/processCodes'
+
 export interface CollabPartner {
   id: string
   batchId: string
@@ -38,6 +40,7 @@ interface BatchLike {
   id: string
   batch_id?: string
   machine_id?: string | null
+  process_machine_map?: Record<string, string> | null
   date_calc_plan?: any
   current_process?: string | null
 }
@@ -57,8 +60,12 @@ export function getCollabInfo(
   processCode: string,
   allBatches: BatchLike[]
 ): CollabInfo {
-  const planNumber = batch.date_calc_plan?.byProcess?.[processCode]
-  if (planNumber == null || !batch.machine_id) {
+  const code = canonicalCode(processCode)
+  const planNumber = batch.date_calc_plan?.byProcess?.[code]
+  // Machine that runs THIS process for the batch (per-process map, else its own machine)
+  const machineOf = (b: BatchLike) => b.process_machine_map?.[code] || b.machine_id || null
+  const myMachine = machineOf(batch)
+  if (planNumber == null || !myMachine) {
     return { hasCollab: false, partners: [], allArrived: true }
   }
 
@@ -66,14 +73,14 @@ export function getCollabInfo(
     .filter(
       (b) =>
         b.id !== batch.id &&
-        b.machine_id === batch.machine_id &&
-        b.date_calc_plan?.byProcess?.[processCode] === planNumber
+        machineOf(b) === myMachine &&
+        b.date_calc_plan?.byProcess?.[code] === planNumber
     )
     .map((b) => ({
       id: b.id,
       batchId: b.batch_id || b.id,
       currentProcess: b.current_process || null,
-      arrived: (b.current_process || '').toUpperCase() === processCode.toUpperCase(),
+      arrived: sameCode(b.current_process, code),
     }))
 
   return {

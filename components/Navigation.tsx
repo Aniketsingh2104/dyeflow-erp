@@ -50,7 +50,7 @@ export default function Navigation() {
         fetch('/api/machines',    { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes',   { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
       ])
 
       // Machines nav items
@@ -91,7 +91,7 @@ export default function Navigation() {
       const supList = sRes.data || []
       if (supList.length > 0) {
         // Fetch inbox count per supervisor from orders
-        const oRes = await fetch('/api/orders?status=assigned&limit=1000', { cache: 'no-store' }).then(r => r.json())
+        const oRes = await fetch('/api/orders?status=assigned', { cache: 'no-store' }).then(r => r.json())
         const assignedOrders = oRes.data || []
         const inboxBySup: Record<string, number> = {}
         for (const o of assignedOrders) {

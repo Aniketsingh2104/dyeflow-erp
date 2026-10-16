@@ -1,5 +1,6 @@
 'use client'
 
+import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useState, useCallback } from 'react'
 import { getMachines, getBatches, getOrders, markProcessDone } from '@/lib/db'
 
@@ -47,7 +48,7 @@ export default function MachinesPage() {
       const [machRes, batchRes, orderRes, repairRes2] = await Promise.all([
         getMachines(),
         getBatches(),
-        getOrders({ limit: 1000 }),
+        getOrders(),
         fetch('/api/repairing-orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
       // Exclude batches in repairing_orders with status='pending' (not yet split/full-split)
@@ -90,6 +91,10 @@ export default function MachinesPage() {
 
         return {
           ...b,
+          _machineIds:  new Set<string>([
+            ...Object.values(batchMachineMap(b, o)),   // every machine that runs one of its processes
+            ...(b.machine_id ? [b.machine_id] : []),
+          ]),
           orderNo:      o.order_number || '-',
           party:        o.party        || '-',
           article:      o.article      || '-',
@@ -106,7 +111,7 @@ export default function MachinesPage() {
       for (const mach of machList) {
         const mb = enriched
           .filter(b =>
-            b.machine_id === mach.id &&
+            b._machineIds.has(mach.id) &&
             b.status !== 'repairing' &&           // exclude before supervisor assigns
             !repairPendingSet.has(b.id)            // exclude not-yet-split repair batches
           )

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
+import { canonicalCode } from '@/lib/processCodes'
+import { deriveMachineMap, primaryMachine } from '@/lib/machineMap'
+import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 
 // GET /api/batches
 export async function GET(req: NextRequest) {
@@ -11,11 +14,10 @@ export async function GET(req: NextRequest) {
     const machine_id = searchParams.get('machine_id')
     const batch_id   = searchParams.get('batch_id')
     const status     = searchParams.get('status')
-    const limit      = searchParams.get('limit') || '5000'
+    const limit      = searchParams.get('limit')   // none = all batches
 
-    const query: Record<string, string> = { order: 'batch_number.asc', limit }
-    if (uuid_id)    query['id']         = `eq.${uuid_id}`
-    if (uuid_id)    query['id']         = `eq.${uuid_id}`
+    const query: Record<string, string> = { order: 'batch_number.asc,id.asc' }
+    if (limit) query.limit = limit
     if (uuid_id)    query['id']         = `eq.${uuid_id}`
     if (order_id)   query['order_id']   = `eq.${order_id}`
     if (machine_id) query['machine_id'] = `eq.${machine_id}`
@@ -25,7 +27,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await dbSelect('batches', query,
       'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
-      'date_calc_plan,dc_generated_once,dc_regenerate,' +
+      'date_calc_plan,dc_generated_once,dc_regenerate,process_machine_map,supervisor_id,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
       'created_at,updated_at,' +
       'machines(id,name,capacity),' +
@@ -48,7 +50,7 @@ export async function GET(req: NextRequest) {
 // highest number the order already has (B1, B2 … even after deletes).
 async function getSplitContext(order_id: string) {
   const { data: orderRows, error: orderErr } = await dbSelect('orders',
-    { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,qty_kg,qty_mtr,no_of_taka')
+    { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,qty_kg,qty_mtr,no_of_taka,process_machines,process_route')
   const order = orderRows?.[0]
   if (orderErr || !order) {
     return { order: null, nextNo: 0, allocatedKg: 0, error: orderErr || 'Order not found' }
@@ -90,6 +92,9 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { action, _user, ...payload } = body
+    // One standard spelling for process codes (e.g. 'ADD' → 'Add', 'QA' → 'Qa')
+    if (payload.process_code) payload.process_code = canonicalCode(payload.process_code)
+    if (payload.next_process) payload.next_process = canonicalCode(payload.next_process)
 
     // ── Split: ADD new batches to an order (never deletes existing ones) ─────
     if (action === 'create_splits') {
@@ -108,17 +113,22 @@ export async function POST(req: NextRequest) {
 
       // Client-sent batch_id is ignored — the server numbers new batches
       // after the highest existing one so IDs never collide or restart.
-      const rows = parts.map((b: any, idx: number) => ({
+      const route: string[] = process_route || ctx.order.process_route || []
+      const rows = parts.map((b: any, idx: number) => {
+        // Which machine runs each process of this batch (lib/machineMap.ts)
+        const map = deriveMachineMap(route, ctx.order.process_machines, b.machine_id || null, b.process_machine_map)
+        return {
         batch_id:      `${ctx.order.order_number}-B${ctx.nextNo + idx}`,
         order_id,
-        machine_id:    b.machine_id || null,
+        machine_id:    b.machine_id || primaryMachine(route, map) || null,
+        process_machine_map: map,
         batch_number:  ctx.nextNo + idx,
         kg:            parseFloat(b.kg) || 0,
         mtr:           parseFloat(b.mtr)  || null,
         taka:          parseInt(b.taka)   || null,
         status:        'pending',
         process_route: process_route || [],  // save route on batch so machine page shows correct process
-      }))
+      }})
 
       const { data: created, error } = await sb<any[]>('/batches', {
         method: 'POST', body: JSON.stringify(rows),
@@ -133,6 +143,7 @@ export async function POST(req: NextRequest) {
         entity_id: order_id,
         new_value: `${rows.length} batch(es) added: ${rows.map((r: any) => r.batch_id).join(', ')}` })
 
+      await refreshOrderStatus(order_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true, data: created })
     }
 
@@ -141,6 +152,7 @@ export async function POST(req: NextRequest) {
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
       const { error } = await dbUpdate('batches', { id }, { ...patch, updated_at: new Date().toISOString() })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await refreshOrderStatusForBatch(id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true })
     }
 
@@ -160,6 +172,7 @@ export async function POST(req: NextRequest) {
       await dbUpdate('batches', { id: batch_id }, batchPatch)
       await auditLog({ username: _user, action: 'process_done', entity_type: 'batch',
         entity_id: batch_id, old_value: process_code, new_value: next_process || 'completed' })
+      await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true })
     }
 
@@ -191,6 +204,7 @@ export async function POST(req: NextRequest) {
 
       await auditLog({ username: _user, action: 'faulty_mark', entity_type: 'batch',
         entity_id: batch_id, new_value: faulty_type })
+      await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true, data })
     }
 
@@ -230,6 +244,7 @@ export async function POST(req: NextRequest) {
       await auditLog({ username: _user, action: 'delete_batch', entity_type: 'batch',
         entity_id: batch.batch_id, note: `Deleted ${batch.kg} Kg` })
 
+      await refreshOrderStatus(batch.order_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true, restored_kg: batch.kg })
     }
 
@@ -254,10 +269,13 @@ export async function POST(req: NextRequest) {
       const ratio = totalKg > 0 ? remainKg / totalKg : 1
       const isFirst = ctx.allocatedKg <= 0
 
+      const fsRoute: string[] = process_route || ctx.order.process_route || []
+      const fsMap = deriveMachineMap(fsRoute, ctx.order.process_machines, machine_id || null)
       const batch = {
         batch_id:     `${ctx.order.order_number}-B${ctx.nextNo}`,
         order_id,
-        machine_id:   machine_id || null,
+        machine_id:   machine_id || primaryMachine(fsRoute, fsMap) || null,
+        process_machine_map: fsMap,
         batch_number: ctx.nextNo,
         kg:           remainKg,
         mtr:          totalMtr  ? (isFirst ? totalMtr  : Math.round(totalMtr  * ratio)) : null,
@@ -279,6 +297,7 @@ export async function POST(req: NextRequest) {
       await auditLog({ username: _user, action: 'full_split', entity_type: 'order',
         entity_id: order_id, new_value: `${batch.batch_id} · ${remainKg}kg` })
 
+      await refreshOrderStatus(order_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true, data: created })
     }
 
@@ -294,6 +313,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({ p_batch_id: batch_id, p_process_code: process_code }),
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true })
     }
 
@@ -314,6 +334,7 @@ export async function POST(req: NextRequest) {
         is_done:       false,
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await refreshOrderStatus(order_id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true, data })
     }
 

@@ -24,7 +24,7 @@ export default function BatchesPage() {
       if (error || !data) { setLoading(false); return }
 
       // Also fetch orders so we can join party, article, color, supervisor
-      const { data: orders } = await getOrders({ limit: 1000 })
+      const { data: orders } = await getOrders()
       const orderMap: Record<string, any> = {}
       for (const o of (orders || [])) orderMap[o.id] = o
 

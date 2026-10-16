@@ -143,6 +143,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, movedToFms: !!patch.confirmed })
   }
 
+  // Direct confirm (Rechecked / PC Lab / Requested Unit pages) — moves the
+  // request to Lab FMS. These pages called this action before it existed and
+  // showed "Confirmed" even though nothing was saved.
+  if (action === 'confirm_request') {
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const now = new Date().toISOString()
+    const { error } = await dbUpdate('lab_requests', { id }, { confirmed: true, confirmed_at: now })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true, movedToFms: true })
+  }
+
   if (action === 'update_request') {
     const patch: Record<string, any> = {}
     if (payload.fmsData   !== undefined) patch.fms_data   = payload.fmsData

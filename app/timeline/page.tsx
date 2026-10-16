@@ -46,7 +46,7 @@ export default function TimelinePage() {
     try {
       const [procs, res] = await Promise.all([
         fetchProcessList(),
-        fetch('/api/orders?limit=500', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
       ])
       setProcessList(procs.filter(p => p.enabled).sort((a, b) => a.order - b.order))
 

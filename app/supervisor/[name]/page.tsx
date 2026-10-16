@@ -93,7 +93,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
 
       // Fetch orders from Supabase
       const ordersRes = await fetch(
-        `/api/orders?supervisor_id=${resolvedId}&limit=500`,
+        `/api/orders?supervisor_id=${resolvedId}`,
         { cache: 'no-store' }
       ).then(r => r.json())
 

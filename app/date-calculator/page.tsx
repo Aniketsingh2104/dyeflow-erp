@@ -1,5 +1,6 @@
 'use client'
 
+import { canonicalCode } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchProcessList } from '@/lib/processMap'
 
@@ -24,13 +25,15 @@ interface BatchRow {
 interface ProcessDuration { code: string; name: string; days: number; capacity?: number }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ALL_PROCS = ['C','S','H','D','S2','Rx','O','G','F','Co','Tu','Add','Level','Rc','Fix','Wash','Dry','B','R','K','QA','Packing','Dispatch','FinalDispatch']
-const ANCHOR_PROCS = ['S','D','S2','Add','Level','Fix','Wash','Rc']  // machine process types
+// Codes follow Process Master (lib/processCodes.ts): 'Lev' and 'Qa' — the old 'Level'/'QA'
+// spelling never matched batch routes, so Levelling lost its anchor and dates.
+const ALL_PROCS = ['C','S','H','D','S2','Rx','O','G','F','Co','Tu','Add','Lev','Rc','Fix','Wash','Dry','B','R','K','Qa','Packing','Dispatch','FinalDispatch']
+const ANCHOR_PROCS = ['S','D','S2','Add','Lev','Fix','Wash','Rc']  // machine process types
 const PNAMES: Record<string,string> = {
   C:'CBR',S:'SCQ',H:'Heat-Set',D:'Dyeing',S2:'SCQ2',Rx:'Relax',O:'Opener',
-  G:'Ghanti',F:'Finish',Co:'Compactor',Tu:'Tubler',Add:'Addition',Level:'Levelling',
+  G:'Ghanti',F:'Finish',Co:'Compactor',Tu:'Tubler',Add:'Addition',Lev:'Levelling',
   Rc:'RC',Fix:'Fixing',Wash:'Washing',Dry:'Dry',B:'Brushing',R:'Raising',K:'Kundi',
-  QA:'QA',Packing:'Packing',Dispatch:'Dispatch',FinalDispatch:'Final Dispatch'
+  Qa:'QA',Packing:'Packing',Dispatch:'Dispatch',FinalDispatch:'Final Dispatch'
 }
 let _procNameCache: Record<string,string> = { ...PNAMES }
 const getPN = (c: string) => _procNameCache[c] || c
@@ -130,7 +133,7 @@ function runEngine(
     return dateToYMD(cur)
   }
 
-  const TAIL = ['QA', 'Packing', 'Dispatch', 'FinalDispatch']
+  const TAIL = ['Qa', 'Packing', 'Dispatch', 'FinalDispatch']
   let generated = 0, pushed = 0, skipped = 0
 
   for (const row of rows) {
@@ -275,8 +278,8 @@ export default function DateCalculatorPage() {
     setLoadStatus('loading')
     try {
       const [oRes, bRes, dpRes, hRes, pdRes, procList] = await Promise.all([
-        fetch('/api/orders?limit=2000',  { cache:'no-store' }).then(r=>r.json()),
-        fetch('/api/batches?limit=10000',{ cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/orders',  { cache:'no-store' }).then(r=>r.json()),
+        fetch('/api/batches',{ cache:'no-store' }).then(r=>r.json()),
         fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/setup/holidays',      { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
         fetch('/api/setup/settings?key=processDurations',{ cache:'no-store' }).then(r=>r.json()).catch(()=>({value:[]})),
@@ -285,7 +288,8 @@ export default function DateCalculatorPage() {
 
       procList.forEach((p: any) => { _procNameCache[p.code] = p.name })
       setHolidays(hRes.data || [])
-      setProcessDurations(pdRes.value || [])
+      // Saved durations may still use the old 'Level' / 'QA' codes
+      setProcessDurations((pdRes.value || []).map((d: any) => ({ ...d, code: canonicalCode(d.code) })))
 
       const orders:    any[] = oRes.data  || []
       const batches:   any[] = bRes.data  || []
@@ -309,7 +313,7 @@ export default function DateCalculatorPage() {
         if (dp.anchor_d)   anchors['D']     = dp.anchor_d
         if (dp.anchor_s2)  anchors['S2']    = dp.anchor_s2
         if (dp.anchor_add) anchors['Add']   = dp.anchor_add
-        if (dp.anchor_lev) anchors['Level'] = dp.anchor_lev
+        if (dp.anchor_lev) anchors['Lev']   = dp.anchor_lev
         if (dp.anchor_fix) anchors['Fix']   = dp.anchor_fix
         if (dp.anchor_wash)anchors['Wash']  = dp.anchor_wash
         if (dp.anchor_rc)  anchors['Rc']    = dp.anchor_rc
@@ -318,9 +322,9 @@ export default function DateCalculatorPage() {
         const dates: Record<string,string> = {}
         const PROC_MAP: Record<string,string> = {
           C:'d_c',S:'d_s',H:'d_h',D:'d_d',S2:'d_s2',Rx:'d_rx',O:'d_o',
-          G:'d_g',F:'d_f',Co:'d_co',Tu:'d_tu',Add:'d_add',Level:'d_level',
+          G:'d_g',F:'d_f',Co:'d_co',Tu:'d_tu',Add:'d_add',Lev:'d_level',
           Rc:'d_rc',Fix:'d_fix',Wash:'d_wash',Dry:'d_dry',B:'d_b',R:'d_r',
-          K:'d_k',QA:'d_qa',Packing:'d_packing',Dispatch:'d_dispatch',FinalDispatch:'d_finaldispatch'
+          K:'d_k',Qa:'d_qa',Packing:'d_packing',Dispatch:'d_dispatch',FinalDispatch:'d_finaldispatch'
         }
         for (const [proc, col] of Object.entries(PROC_MAP)) {
           if (dp[col]) dates[proc] = dp[col].slice(0,10)
@@ -462,7 +466,7 @@ export default function DateCalculatorPage() {
       }
 
       // Fetch orders to get IDs
-      const oRes = await fetch('/api/orders?limit=2000', { cache:'no-store' }).then(r=>r.json())
+      const oRes = await fetch('/api/orders', { cache:'no-store' }).then(r=>r.json())
       for (const o of (oRes.data || [])) orderMap[o.order_number] = o.id
 
       for (const row of sourceRows) {

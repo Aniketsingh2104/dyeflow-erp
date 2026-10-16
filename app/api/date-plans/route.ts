@@ -1,18 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbUpsert } from '@/lib/supabase'
+import { DATE_COL, dateColFor, anchorColFor } from '@/lib/processCodes'
 
-// All generated process columns in DB
-const PROC_COLS: Record<string, string> = {
-  C:'d_c', S:'d_s', H:'d_h', D:'d_d', S2:'d_s2', Rx:'d_rx', O:'d_o',
-  G:'d_g', F:'d_f', Co:'d_co', Tu:'d_tu', Add:'d_add', Level:'d_level',
-  Rc:'d_rc', Fix:'d_fix', Wash:'d_wash', Dry:'d_dry', B:'d_b', R:'d_r',
-  K:'d_k', QA:'d_qa', Packing:'d_packing', Dispatch:'d_dispatch', FinalDispatch:'d_finaldispatch'
-}
-
-const ANCHOR_COLS: Record<string, string> = {
-  S:'anchor_s', D:'anchor_d', S2:'anchor_s2', Add:'anchor_add',
-  Level:'anchor_lev', Fix:'anchor_fix', Wash:'anchor_wash', Rc:'anchor_rc'
-}
+// Process code → column mapping lives in lib/processCodes.ts (one standard:
+// 'Lev' → d_level / anchor_lev, 'Qa' → d_qa; old 'Level' / 'QA' still accepted).
+const PROC_COLS = DATE_COL
 
 export async function GET(req: NextRequest) {
   try {
@@ -53,7 +45,7 @@ export async function POST(req: NextRequest) {
       // Map anchor dates: { S: '2026-08-04', D: '2026-08-07' }
       if (anchors) {
         for (const [proc, isoDate] of Object.entries(anchors)) {
-          const col = ANCHOR_COLS[proc]
+          const col = anchorColFor(proc)
           if (col) row[col] = isoDate || null
         }
       }
@@ -61,7 +53,7 @@ export async function POST(req: NextRequest) {
       // Map generated dates: { C: '2026-08-06', S: '2026-08-07', D: '2026-08-09', ... }
       if (dates) {
         for (const [proc, isoDate] of Object.entries(dates)) {
-          const col = PROC_COLS[proc]
+          const col = dateColFor(proc)
           if (col) row[col] = isoDate || null
         }
       }
@@ -86,7 +78,7 @@ export async function POST(req: NextRequest) {
       const { batch_id, batch_id_str, anchors } = body
       const row: Record<string, any> = { batch_id, batch_id_str, updated_at: new Date().toISOString() }
       for (const [proc, isoDate] of Object.entries(anchors as Record<string, string>)) {
-        const col = ANCHOR_COLS[proc]
+        const col = anchorColFor(proc)
         if (col) row[col] = isoDate || null
       }
       const { data, error } = await dbUpsert('batch_date_plans', row, 'batch_id')

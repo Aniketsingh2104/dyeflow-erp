@@ -1,5 +1,6 @@
 'use client'
 
+import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
@@ -304,8 +305,8 @@ export default function MachinePage() {
       // Fetch machine, batches, and orders from Supabase APIs
       const [machRes, batchRes, orderRes, procRes, holRes, repairRes] = await Promise.all([
         fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches?limit=5000', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
         fetch(`/api/holidays?machine_id=${machineId}`, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
         fetch('/api/repairing-orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
@@ -355,7 +356,6 @@ export default function MachinePage() {
       const machineBatches: any[] = []
 
       for (const b of allBatches) {
-        if (b.machine_id !== foundMachine.id) continue
         // Skip repairing batches not yet split/full-split
         if (b.status === 'repairing') continue
         if (repairPendingUUIDs.has(b.id)) continue
@@ -365,17 +365,18 @@ export default function MachinePage() {
           || (o.process_route?.length ? o.process_route : null) || []
         const shadeType = getShadeTypeByColor(o.color || '')
 
-        // Find ALL process codes this machine handles for this order
-        const processMachinesMap: Record<string, string[]> = o.process_machines || {}
-        const machineProcessCodes: string[] = []
-        for (const [code, machineIds] of Object.entries(processMachinesMap)) {
-          if ((machineIds as string[]).includes(foundMachine.id)) {
-            machineProcessCodes.push(code)
-          }
-        }
+        // Which processes of THIS batch run on THIS machine — from the batch's
+        // own machine-per-process map (lib/machineMap.ts). A batch whose D runs
+        // on another machine now shows its D row on that machine's sheet.
+        const pmMap = batchMachineMap(b, o)
+        const machineProcessCodes: string[] = Object.entries(pmMap)
+          .filter(([, mid]) => mid === foundMachine.id)
+          .map(([code]) => code)
+          .sort((a, c) => processRoute.indexOf(a) - processRoute.indexOf(c))
 
-        // Fallback: if no process_machines entry, use first MACHINE_REQUIRED step
+        // Fallback (no machine processes known at all): the batch's own machine
         if (machineProcessCodes.length === 0) {
+          if (b.machine_id !== foundMachine.id || Object.keys(pmMap).length) continue
           const fallback = b.current_process
             || processRoute.find((c: string) => MACHINE_REQUIRED.includes(c))
             || ''
