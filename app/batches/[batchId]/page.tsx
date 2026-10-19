@@ -1,356 +1,308 @@
 'use client'
-
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+/**
+ * /batches/<batch id> — Batch Trace: the full journey of one batch.
+ *
+ *   • order details (party, article, colour, supervisor, machine)
+ *   • every process on its route: planned date, arrived, done, time spent,
+ *     late / on time — from batch_date_plans, batches.fms_enter_at and
+ *     batch_processes
+ *   • faulty / FOB records and repairs for this batch, and its repair batches
+ *   • history: every recorded action (sent, done, faulty, FOB, moves) from
+ *     the audit log
+ *
+ * <batch id> can be the batch code (DYE26-0004-B1) or its internal id.
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { loadOrSeedProcessList } from '@/lib/processMap'
+import { canonicalCode, dateColFor, sameCode } from '@/lib/processCodes'
 
-interface StageEvent {
-  code: string
-  name: string
-  enteredAt: string | null   // fmsEnterAt or dispatch sentAt
-  completedAt: string | null // fmsActualDates
-  daysSpent: number | null
-  status: 'done' | 'active' | 'pending'
-  isFaulty: boolean
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-interface TraceData {
-  batchId: string
-  orderId: string
-  orderNo: string
-  party: string
-  article: string
-  color: string
-  kg: number
-  blend: string
-  supervisor: string
-  machine: string
-  status: string
-  createdAt: string
-  route: string[]
-  stages: StageEvent[]
-  faultyHistory: { processCode: string; note: string; flaggedAt: string }[]
-  repairingOrders: any[]
-}
-
-function msDiff(a: string | null, b: string | null): number | null {
-  if (!a || !b) return null
-  const da = new Date(a), db = new Date(b)
-  if (isNaN(da.getTime()) || isNaN(db.getTime())) return null
-  return db.getTime() - da.getTime()
-}
-
-function fmtDur(ms: number | null): string {
-  if (ms === null || ms < 0) return '—'
-  const h = Math.floor(ms / 3600000)
-  const d = Math.floor(h / 24)
-  const rh = h % 24
-  if (d > 0) return `${d}d ${rh}h`
-  return `${h}h`
-}
-
-function fmtDate(s: string | null): string {
+function fmtDT(s?: string | null) {
   if (!s) return '—'
-  try {
-    const d = new Date(s)
-    if (isNaN(d.getTime())) return s
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch { return s }
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return String(s)
+  return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+function fmtD(s?: string | null) {
+  if (!s) return '—'
+  const d = new Date(String(s).length === 10 ? s + 'T00:00:00' : s)
+  if (isNaN(d.getTime())) return String(s)
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+}
+function dur(from?: string | null, to?: string | null) {
+  if (!from) return '—'
+  const ms = (to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime()
+  if (!isFinite(ms) || ms < 0) return '—'
+  const h = Math.floor(ms / 3600000), d = Math.floor(h / 24)
+  return d > 0 ? `${d}d ${h % 24}h` : `${h}h ${Math.floor((ms % 3600000) / 60000)}m`
 }
 
-function buildTrace(batchId: string): TraceData | null {
-  const raw = localStorage.getItem('dyeflow_db')
-  if (!raw) return null
-  const db = JSON.parse(raw)
-
-  const processList = loadOrSeedProcessList()
-  const procName: Record<string, string> = {}
-  processList.forEach(p => { procName[p.code] = p.name })
-
-  for (const order of (db.orders || [])) {
-    const batch = (order.splits || []).find((b: any) => b.batchId === batchId)
-    if (!batch) continue
-
-    const route: string[] = order.processRoute || []
-    const fullRoute = [...route]
-    ;['Qa', 'Packing', 'Dispatch'].forEach(x => { if (!fullRoute.includes(x)) fullRoute.push(x) })
-
-    const stages: StageEvent[] = fullRoute.map(code => {
-      const name = procName[code] || code
-      const dispatch = batch.fmsDispatch?.[code]
-      const enteredAt = batch.fmsEnterAt?.[code] || dispatch?.sentAt || null
-      const completedAt = batch.fmsActualDates?.[code] || null
-
-      let status: 'done' | 'active' | 'pending' = 'pending'
-      if (completedAt) status = 'done'
-      else if (batch.fmsCurrentProcess === code || batch.fmsActiveProcesses?.[code]) status = 'active'
-
-      const ms = msDiff(enteredAt, completedAt)
-      const daysSpent = ms !== null ? Math.round(ms / 86400000 * 10) / 10 : null
-
-      return {
-        code, name,
-        enteredAt: enteredAt || null,
-        completedAt: completedAt || null,
-        daysSpent,
-        status,
-        isFaulty: !!(batch.fmsFaulty?.active && batch.fmsFaulty.processCode === code),
-      }
-    })
-
-    // Faulty history — from fmsFaulty flag
-    const faultyHistory: any[] = []
-    if (batch.fmsFaulty?.flaggedAt) {
-      faultyHistory.push({
-        processCode: batch.fmsFaulty.processCode,
-        note: batch.fmsFaulty.note,
-        flaggedAt: batch.fmsFaulty.flaggedAt,
-      })
-    }
-    // Also from db.faultyRecords
-    for (const fr of (db.faultyRecords || [])) {
-      if (fr.batchId === batchId && !faultyHistory.find(f => f.flaggedAt === fr.date)) {
-        faultyHistory.push({ processCode: fr.faultyFrom || '?', note: fr.remarks, flaggedAt: fr.date })
-      }
-    }
-
-    const repairingOrders = (db.repairingOrders || []).filter(
-      (r: any) => r.batchId === batchId || r.batchId === `${batchId}-R`
-    )
-
-    const machineName = (() => {
-      const m = (db.machines || []).find((mx: any) => mx.id === (batch.machine || order.machine))
-      return m ? m.name : (batch.machine || order.machine || '—')
-    })()
-
-    return {
-      batchId,
-      orderId: order.id,
-      orderNo: order.orderNumber,
-      party: order.party,
-      article: order.article,
-      color: order.color,
-      kg: parseFloat(batch.kg) || 0,
-      blend: order.blend || '',
-      supervisor: order.supervisor || '—',
-      machine: machineName,
-      status: batch.status || 'pending',
-      createdAt: batch.fmsDispatch?.[fullRoute[0]]?.sentAt || order.timestamp || '',
-      route: fullRoute,
-      stages,
-      faultyHistory,
-      repairingOrders,
-    }
-  }
-  return null
+const ACTION_LABEL: Record<string, string> = {
+  split: 'Split', full_split: 'Split', batch_move: 'Moved', process_done: 'Process done',
+  faulty_mark: 'Marked faulty', faulty_ok: 'Faulty → OK', faulty_reprocess: 'Faulty → reprocess',
+  fob_create: 'FOB raised', fob_sent: 'FOB sample sent', fob_approved: 'FOB approved', fob_reprocess: 'FOB → reprocess',
+  delete_batch: 'Batch deleted', repair_split: 'Repair split', repair_full_split: 'Repair split',
 }
 
 export default function BatchTracePage() {
   const params = useParams()
-  const batchId = decodeURIComponent(String(params?.batchId || ''))
-  const [trace, setTrace] = useState<TraceData | null>(null)
-  const [notFound, setNotFound] = useState(false)
-  const [search, setSearch] = useState(batchId)
-  const [inputVal, setInputVal] = useState(batchId)
+  const router = useRouter()
+  const raw = decodeURIComponent(String(params?.batchId || '')).trim()
 
-  useEffect(() => {
-    if (!search) return
-    const t = buildTrace(search)
-    if (t) { setTrace(t); setNotFound(false) }
-    else    { setTrace(null); setNotFound(true) }
-  }, [search])
+  const [batch,   setBatch]   = useState<any>(null)
+  const [order,   setOrder]   = useState<any>(null)
+  const [plan,    setPlan]    = useState<any>(null)
+  const [procs,   setProcs]   = useState<Record<string, string>>({})
+  const [faulty,  setFaulty]  = useState<any[]>([])
+  const [fob,     setFob]     = useState<any[]>([])
+  const [repairs, setRepairs] = useState<any[]>([])
+  const [related, setRelated] = useState<any[]>([])
+  const [history, setHistory] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState('')
+  const [search,  setSearch]  = useState('')
 
-  const totalDone = trace?.stages.filter(s => s.status === 'done').length || 0
-  const totalStages = trace?.stages.length || 0
+  useEffect(() => { if (!raw) router.replace('/batches/search') }, [raw, router])
 
-  const progressPct = totalStages > 0 ? Math.round((totalDone / totalStages) * 100) : 0
+  const load = useCallback(async () => {
+    if (!raw) return
+    setLoading(true); setError('')
+    try {
+      const get = (u: string) => fetch(u, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ ok: false, data: [] }))
+      const bRes = await get(UUID_RE.test(raw) ? `/api/batches?id=${raw}` : `/api/batches?batch_id=${encodeURIComponent(raw)}`)
+      const b = bRes.data?.[0]
+      if (!b) { setBatch(null); setError(`Batch "${raw}" not found.`); return }
+      setBatch(b)
 
-  const STATUS_COLOR: Record<string, string> = {
-    done:    '#1D9E75',
-    active:  '#185FA5',
-    pending: '#9CA3AF',
-  }
-  const STATUS_BG: Record<string, string> = {
-    done:    '#EAF3DE',
-    active:  '#E6F1FB',
-    pending: '#F3F4F6',
-  }
+      const [oRes, dpRes, pRes, fRes, fobRes, roRes, sibRes] = await Promise.all([
+        get(`/api/orders?id=${b.order_id}`),
+        get(`/api/date-plans?batch_id=${b.id}`),
+        get('/api/processes'),
+        get('/api/faulty'),
+        get('/api/fob'),
+        get('/api/repairing-orders'),
+        get(`/api/batches?order_id=${b.order_id}`),
+      ])
+      setOrder(oRes.data?.[0] || null)
+      setPlan(dpRes.data?.[0] || null)
+      const names: Record<string, string> = {}
+      for (const p of pRes.data || []) names[p.code] = p.name
+      setProcs(names)
+      const myFaulty = (fRes.data || []).filter((r: any) => r.batch_id === b.id)
+      const myFob    = (fobRes.data || []).filter((r: any) => r.batch_id === b.id)
+      setFaulty(myFaulty); setFob(myFob)
+      setRepairs((roRes.data || []).filter((r: any) => r.batch_id === b.id
+        || myFaulty.some((f: any) => f.id === r.faulty_id) || myFob.some((f: any) => f.id === r.fob_id)))
+      // Repair batches made from this one (B2 → B2-R, B2-R2 …) and the batch this one was repaired from
+      const base = String(b.batch_id || '').replace(/-R+\d*$/, '')
+      setRelated((sibRes.data || []).filter((x: any) => x.id !== b.id &&
+        (String(x.batch_id || '').startsWith(b.batch_id + '-R') || (base !== b.batch_id && x.batch_id === base))))
+
+      const ids = [b.id, b.batch_id, ...myFaulty.map((r: any) => r.id), ...myFob.map((r: any) => r.id)].filter(Boolean)
+      const aRes = await get(`/api/audit?limit=500&entity_id=${encodeURIComponent(ids.join(','))}`)
+      setHistory((aRes.data || []).slice().sort((x: any, y: any) => String(x.created_at).localeCompare(String(y.created_at))))
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    } finally { setLoading(false) }
+  }, [raw])
+
+  useEffect(() => { load() }, [load])
+
+  const route: string[] = useMemo(() => {
+    const r = (batch?.process_route?.length ? batch.process_route : order?.process_route) || []
+    return r.filter(Boolean)
+  }, [batch, order])
+
+  const stages = useMemo(() => route.map((code, idx) => {
+    const bp = (batch?.batch_processes || []).find((p: any) => sameCode(p.process_code, code))
+    const enter = batch?.fms_enter_at?.[canonicalCode(code)]
+      || Object.entries(batch?.fms_enter_at || {}).find(([k]) => sameCode(k, code))?.[1] as string | undefined
+      || (idx === 0 ? batch?.sent_at : undefined)
+    const col = dateColFor(code)
+    const planned = col && plan?.[col] ? String(plan[col]).slice(0, 10) : ''
+    const isCurrent = sameCode(batch?.current_process, code) && batch?.status !== 'done'
+    const status: string = bp?.status === 'done' ? 'done'
+      : bp?.status === 'faulty' ? 'faulty' : bp?.status === 'fob' ? 'fob'
+      : isCurrent ? 'here' : 'pending'
+    const doneAt = bp?.done_at || null
+    const doneDay = doneAt ? new Date(doneAt).toLocaleDateString('en-CA') : ''
+    const today = new Date().toLocaleDateString('en-CA')
+    const late = !!planned && (doneDay ? doneDay > planned : status === 'here' && today > planned)
+    return { code, name: procs[code] || code, status, enter: enter || null, doneAt, planned, late }
+  }), [route, batch, plan, procs])
+
+  if (!raw) return null
 
   return (
-    <div className="content" style={{ maxWidth: 900, margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
+    <div className="content" style={{ maxWidth: 1000, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>🔍 Batch Trace</div>
-          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>Complete journey of any batch through FMS</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>The full journey of a batch through every process</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            value={inputVal}
-            onChange={e => setInputVal(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') setSearch(inputVal.trim()) }}
-            placeholder="Enter Batch ID…"
-            style={{ width: 200, fontSize: 13, padding: '6px 10px' }}
-          />
-          <button className="primary small" onClick={() => setSearch(inputVal.trim())}>Search</button>
-          <Link href="/batches"><button className="small">← Batches</button></Link>
-        </div>
+        <form onSubmit={e => { e.preventDefault(); if (search.trim()) router.push(`/batches/${encodeURIComponent(search.trim().toUpperCase())}`) }}
+          style={{ display: 'flex', gap: 6 }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Another batch, e.g. DYE26-0004-B1"
+            style={{ width: 240, padding: '6px 10px', fontSize: 13 }} />
+          <button className="small primary" type="submit">Trace</button>
+          <Link href="/batches/search"><button className="small" type="button">Search list</button></Link>
+        </form>
       </div>
 
-      {notFound && (
-        <div className="card">
-          <div className="empty-state" style={{ padding: '48px' }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>🔍</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Batch "{search}" not found</div>
-            <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>Check the batch ID and try again.</div>
-          </div>
-        </div>
-      )}
-
-      {trace && (
+      {loading ? (
+        <div className="card"><div className="empty-state">Loading {raw}…</div></div>
+      ) : error ? (
+        <div className="card"><div className="empty-state">{error} <Link href="/batches/search">Search batches</Link></div></div>
+      ) : batch && (
         <>
-          {/* Batch info card */}
-          <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 12, padding: '16px 20px', marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+          {/* Header */}
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)' }}>{trace.batchId}</div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3 }}>
-                  <Link href={`/orders`} style={{ color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>{trace.orderNo}</Link>
-                  {' · '}{trace.party}{' · '}{trace.article}{' · '}{trace.color}
+                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{batch.batch_id}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
+                  Order <strong>{order?.order_number || '—'}</strong> · {order?.party || '—'} · {order?.article || '—'} · {order?.color || '—'}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {trace.faultyHistory.length > 0 && (
-                  <span style={{ background: '#FEE2E2', color: '#DC2626', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>⚠ FAULTY HISTORY</span>
-                )}
-                <span style={{ background: STATUS_BG[trace.status] || '#F3F4F6', color: STATUS_COLOR[trace.status] || '#9CA3AF', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
-                  {trace.status.toUpperCase()}
-                </span>
+              <div style={{ textAlign: 'right' }}>
+                <StatusBadge status={batch.is_faulty ? 'faulty' : batch.status} />
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 6 }}>
+                  {batch.current_process ? <>Now at <strong>{procs[batch.current_process] || batch.current_process}</strong></> : batch.status === 'done' ? 'All processes finished' : 'Not at any process'}
+                </div>
               </div>
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px 16px', marginTop: 14, fontSize: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10, marginTop: 14 }}>
               {[
-                ['Qty', `${trace.kg} Kg`],
-                ['Blend', trace.blend || '—'],
-                ['Supervisor', trace.supervisor],
-                ['Machine', trace.machine],
-                ['Started', fmtDate(trace.createdAt)],
-              ].map(([l, v]) => (
-                <div key={l}>
-                  <div style={{ color: 'var(--text-tertiary)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{l}</div>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: 1 }}>{v}</div>
+                ['Kg', batch.kg], ['Mtr', batch.mtr || '—'], ['Taka', batch.taka || '—'],
+                ['Machine', batch.machines?.name || '—'], ['Supervisor', order?.supervisors?.name || '—'],
+                ['Created', fmtD(batch.created_at)], ['Planned dispatch', fmtD(plan?.d_dispatch || plan?.d_finaldispatch)],
+              ].map(([k, v]) => (
+                <div key={String(k)} style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 12px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{String(v ?? '—')}</div>
                 </div>
               ))}
             </div>
-
-            {/* Progress bar */}
-            <div style={{ marginTop: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5 }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Progress — {totalDone} of {totalStages} stages done</span>
-                <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{progressPct}%</span>
-              </div>
-              <div style={{ background: 'var(--bg-secondary)', borderRadius: 20, height: 8, overflow: 'hidden' }}>
-                <div style={{ width: `${progressPct}%`, height: '100%', background: 'var(--accent)', borderRadius: 20, transition: 'width 0.4s' }} />
-              </div>
-            </div>
           </div>
 
-          {/* Timeline */}
-          <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 12, padding: '16px 20px', marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid var(--border-light)' }}>
-              ⚙ FMS Journey
+          {/* Route timeline */}
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-title" style={{ marginBottom: 10 }}>Route</div>
+            {!stages.length ? <div className="empty-state">No route set for this batch.</div> : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-secondary)' }}>
+                      {['#', 'Process', 'Status', 'Planned', 'Arrived', 'Done', 'Time there', ''].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10, textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stages.map((s, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-light)', background: s.status === 'here' ? 'rgba(59,130,246,0.06)' : undefined }}>
+                        <td style={td}>{i + 1}</td>
+                        <td style={{ ...td, fontWeight: 600 }}>
+                          <Link href={`/fms/${encodeURIComponent(s.code)}`}>{s.name}</Link>
+                          <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}> · {s.code}</span>
+                        </td>
+                        <td style={td}><StatusBadge status={s.status} /></td>
+                        <td style={td}>{fmtD(s.planned)}</td>
+                        <td style={td}>{fmtDT(s.enter)}</td>
+                        <td style={td}>{fmtDT(s.doneAt)}</td>
+                        <td style={td}>{s.enter ? dur(s.enter, s.doneAt) : '—'}</td>
+                        <td style={{ ...td, color: s.late ? 'var(--danger)' : 'var(--success)', fontWeight: 600 }}>
+                          {s.planned && (s.doneAt || s.status === 'here') ? (s.late ? 'Late' : 'On time') : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Faulty / FOB / repairs */}
+          {(faulty.length > 0 || fob.length > 0 || repairs.length > 0 || related.length > 0) && (
+            <div className="card" style={{ marginBottom: 14 }}>
+              <div className="card-title" style={{ marginBottom: 10 }}>Faulty, FOB and repairs</div>
+              {faulty.map(r => (
+                <Line key={r.id} color="#DC2626" title={`Faulty at ${procs[r.process_code] || r.process_code} — ${r.faulty_type || 'faulty'} · ${r.faulty_kg ?? '?'} Kg`}
+                  sub={`${fmtDT(r.created_at)} · status: ${r.status}${r.notes ? ' · ' + r.notes : ''}`} href="/faulty" />
+              ))}
+              {fob.map(r => (
+                <Line key={r.id} color="#7C3AED" title={`FOB at ${procs[r.process_code] || r.process_code} — ${r.fob_type || ''} · ${r.fob_kg ?? '?'} Kg`}
+                  sub={`${fmtDT(r.created_at)} · status: ${r.status}${r.sent_at ? ' · sent ' + fmtD(r.sent_at) : ''}${r.approved_at ? ' · approved ' + fmtD(r.approved_at) : ''}`} href="/fob" />
+              ))}
+              {repairs.map(r => (
+                <Line key={r.id} color="#D97706" title={`Repair order — ${r.repair_kg ?? '?'} Kg (${r.reprocess_type || 'full'}, from ${r.source_type || 'faulty'})`}
+                  sub={`${fmtDT(r.created_at)} · status: ${r.status}`} href="/repairing-order" />
+              ))}
+              {related.map(x => (
+                <Line key={x.id} color="var(--accent)" title={`${x.batch_id} — ${x.kg} Kg · ${x.status}`}
+                  sub={x.batch_id.startsWith(batch.batch_id) ? 'Repair batch made from this batch' : 'Original batch this was repaired from'}
+                  href={`/batches/${encodeURIComponent(x.batch_id)}`} />
+              ))}
             </div>
+          )}
 
-            <div style={{ position: 'relative' }}>
-              {/* Vertical line */}
-              <div style={{ position: 'absolute', left: 18, top: 0, bottom: 0, width: 2, background: 'var(--border-light)' }} />
-
-              {trace.stages.map((stage, i) => (
-                <div key={stage.code} style={{ display: 'flex', gap: 16, marginBottom: 20, position: 'relative' }}>
-                  {/* Circle */}
-                  <div style={{
-                    width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                    background: stage.isFaulty ? '#FEE2E2' : STATUS_BG[stage.status],
-                    border: `3px solid ${stage.isFaulty ? '#DC2626' : STATUS_COLOR[stage.status]}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 13, fontWeight: 700,
-                    color: stage.isFaulty ? '#DC2626' : STATUS_COLOR[stage.status],
-                    zIndex: 1, position: 'relative',
-                  }}>
-                    {stage.status === 'done' ? '✓' : stage.status === 'active' ? '●' : `${i + 1}`}
-                  </div>
-
-                  {/* Content */}
-                  <div style={{ flex: 1, paddingTop: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{stage.name}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: STATUS_BG[stage.status], color: STATUS_COLOR[stage.status] }}>
-                        {stage.status.toUpperCase()}
-                      </span>
-                      <span style={{ background: 'var(--bg-secondary)', color: 'var(--text-tertiary)', padding: '1px 6px', borderRadius: 6, fontSize: 10, fontWeight: 700 }}>{stage.code}</span>
-                      {stage.isFaulty && (
-                        <span style={{ background: '#FEE2E2', color: '#DC2626', padding: '1px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700 }}>⚠ FAULTY</span>
+          {/* History */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: 10 }}>History</div>
+            {!history.length ? (
+              <div className="empty-state">No recorded actions yet for this batch.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                {history.map(h => (
+                  <div key={h.id} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border-light)', fontSize: 12 }}>
+                    <div style={{ width: 120, flexShrink: 0, color: 'var(--text-tertiary)' }}>{fmtDT(h.created_at)}</div>
+                    <div style={{ flex: 1 }}>
+                      <strong>{ACTION_LABEL[h.action] || h.action}</strong>
+                      {(h.old_value || h.new_value) && (
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          {' '}{h.old_value ? `${procs[h.old_value] || h.old_value} → ` : ''}{h.new_value ? (procs[h.new_value] || h.new_value) : ''}
+                        </span>
                       )}
+                      {h.note && <span style={{ color: 'var(--text-tertiary)' }}> · {h.note}</span>}
                     </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px 12px', marginTop: 8, fontSize: 11 }}>
-                      <div>
-                        <div style={{ color: 'var(--text-tertiary)', fontSize: 10, textTransform: 'uppercase' }}>Entered</div>
-                        <div style={{ fontWeight: 600 }}>{fmtDate(stage.enteredAt)}</div>
-                      </div>
-                      <div>
-                        <div style={{ color: 'var(--text-tertiary)', fontSize: 10, textTransform: 'uppercase' }}>Completed</div>
-                        <div style={{ fontWeight: 600, color: stage.completedAt ? 'var(--success)' : 'var(--text-tertiary)' }}>
-                          {stage.completedAt ? fmtDate(stage.completedAt) : stage.status === 'active' ? 'In progress…' : '—'}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: 'var(--text-tertiary)', fontSize: 10, textTransform: 'uppercase' }}>Time Spent</div>
-                        <div style={{ fontWeight: 700, color: stage.daysSpent !== null && stage.daysSpent > 2 ? 'var(--danger)' : 'var(--text-primary)' }}>
-                          {stage.daysSpent !== null ? `${stage.daysSpent}d` : stage.status === 'active' ? '(ongoing)' : '—'}
-                        </div>
-                      </div>
-                    </div>
+                    <div style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{h.username || ''}</div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
-
-          {/* Faulty History */}
-          {trace.faultyHistory.length > 0 && (
-            <div style={{ background: 'var(--bg-primary)', border: '1px solid #FCA5A5', borderLeft: '4px solid #DC2626', borderRadius: 12, padding: '16px 20px', marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', marginBottom: 12 }}>⚠ Faulty Events</div>
-              {trace.faultyHistory.map((f, i) => (
-                <div key={i} style={{ padding: '8px 0', borderBottom: i < trace.faultyHistory.length - 1 ? '1px solid var(--border-light)' : 'none' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Process: {f.processCode} · {fmtDate(f.flaggedAt)}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{f.note || '—'}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Repairing Orders */}
-          {trace.repairingOrders.length > 0 && (
-            <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderLeft: '4px solid #7C3AED', borderRadius: 12, padding: '16px 20px', marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#7C3AED', marginBottom: 12 }}>🔧 Repairing Orders</div>
-              {trace.repairingOrders.map((r: any, i: number) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: i < trace.repairingOrders.length - 1 ? '1px solid var(--border-light)' : 'none', fontSize: 12 }}>
-                  <span style={{ fontWeight: 700, color: '#7C3AED' }}>{r.id}</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>{r.issueType}</span>
-                  <span style={{ marginLeft: 'auto', background: r.status === 'Completed' ? 'var(--success-light)' : 'var(--warning-light)', color: r.status === 'Completed' ? 'var(--success)' : 'var(--warning)', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>
-                    {r.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
         </>
       )}
     </div>
+  )
+}
+
+const td: React.CSSProperties = { padding: '8px 10px', verticalAlign: 'middle' }
+
+const BADGE: Record<string, [string, string, string]> = {
+  done:         ['var(--success-light)', 'var(--success)', 'Done'],
+  here:         ['#DBEAFE', '#1D4ED8', 'Here now'],
+  'in-process': ['#DBEAFE', '#1D4ED8', 'In process'],
+  pending:      ['var(--bg-secondary)', 'var(--text-tertiary)', 'Pending'],
+  faulty:       ['#FEE2E2', '#991B1B', 'Faulty'],
+  fob:          ['#EDE9FE', '#5B21B6', 'FOB'],
+  repairing:    ['#FEF3C7', '#92400E', 'Repairing'],
+  hold:         ['#FEE2E2', '#991B1B', 'Hold'],
+}
+function StatusBadge({ status }: { status: string }) {
+  const [bg, fg, label] = BADGE[status] || ['var(--bg-secondary)', 'var(--text-secondary)', status || '—']
+  return <span style={{ padding: '3px 9px', borderRadius: 10, background: bg, color: fg, fontSize: 11, fontWeight: 700 }}>{label}</span>
+}
+
+function Line({ color, title, sub, href }: { color: string; title: string; sub: string; href: string }) {
+  return (
+    <Link href={href} style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}>
+      <div style={{ borderLeft: `3px solid ${color}`, padding: '6px 12px', marginBottom: 8, background: 'var(--bg-secondary)', borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{sub}</div>
+      </div>
+    </Link>
   )
 }

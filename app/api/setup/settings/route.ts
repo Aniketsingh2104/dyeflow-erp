@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
   const { error } = await dbUpsert('settings', {
     key, value, updated_at: new Date().toISOString(),
-  })
+  }, 'key')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

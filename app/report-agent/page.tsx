@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { QUERY_LIBRARY, QUERY_CATALOG, ReportResult, DbSnapshot } from '@/lib/reportQueries'
+import { isFaultyOpen, isFaultyRepairing, isFaultyClosed, isFobOpen, isFobRepairing, isFobClosed } from '@/lib/recordStatus'
 
 interface Message {
   id: string
@@ -53,8 +54,8 @@ FACTORY STATS (from Supabase):
 - Total orders: ${orders.length} | Status: ${Object.entries(statusMap).map(([s, n]) => `${s}:${n}`).join(', ')}
 - Machines: ${(db.machines || []).map((m: any) => m.name).join(', ')}
 - Supervisors: ${(db.supervisors || []).map((s: any) => s.name).join(', ')}
-- FOB Records: ${(db.fobRecords || []).length} total | Open: ${(db.fobRecords || []).filter((r: any) => r.status === 'open').length}
-- Faulty Records: ${(db.faultyRecords || []).length} total | Open: ${(db.faultyRecords || []).filter((r: any) => r.status === 'open').length}
+- FOB Records: ${(db.fobRecords || []).length} total | Open/Sent: ${(db.fobRecords || []).filter(isFobOpen).length} | In repair: ${(db.fobRecords || []).filter(isFobRepairing).length} | Approved: ${(db.fobRecords || []).filter(isFobClosed).length}
+- Faulty Records: ${(db.faultyRecords || []).length} total | Open: ${(db.faultyRecords || []).filter(isFaultyOpen).length} | In repair: ${(db.faultyRecords || []).filter(isFaultyRepairing).length} | Resolved: ${(db.faultyRecords || []).filter(isFaultyClosed).length}
 
 PROCESS CODES (code=name): ${processCodeList || 'C=CBR, H=Heat-Set, D=Dyeing, F=Finish'}
 
@@ -306,8 +307,11 @@ export default function ReportAgentPage() {
     } finally { setLoading(false) }
   }
 
+  // Escape first, so text from the AI or the database can't inject HTML
   const renderMd = (text: string) =>
-    text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br/>')
+    String(text ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br/>')
 
   return (
     <div className="content" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 44px)' }}>

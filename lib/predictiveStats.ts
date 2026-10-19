@@ -13,9 +13,9 @@
  *
  * Data sources:
  *   - audit_log (action='process_done') — the only place batch/process
- *     transition timestamps are actually recorded live. batch_processes.
- *     sent_at/received_at and batches.fms_enter_at are NOT populated by the
- *     current FMS pages — do not use them here.
+ *     transition timestamps were recorded before October 2026. Since then
+ *     batches.fms_enter_at and batch_processes.sent_at are also filled
+ *     (lib/processTimes.ts); older rows only have the backfilled values.
  *   - faulty_records / fob_records — structured live exception events.
  *   - batches / orders / process_list — article, machine, and default
  *     fallback duration lookups.

@@ -3,6 +3,17 @@ import ReprocessModal from '@/components/ReprocessModal'
 
 import { useEffect, useState, useCallback } from 'react'
 
+// fob_records.status values (see lib/recordStatus.ts)
+const FOB_STATUS_LABEL: Record<string, string> = {
+  all: 'All Status', open: 'Open', sent: 'Sample Sent', repairing: 'In Repair', approved: 'Approved',
+}
+const FOB_BADGE: Record<string, { bg: string; color: string }> = {
+  open:      { bg: 'var(--danger-light)',  color: 'var(--danger)'  },
+  sent:      { bg: '#DBEAFE',              color: '#2563EB'        },
+  repairing: { bg: '#FEF3C7',              color: '#D97706'        },
+  approved:  { bg: 'var(--success-light)', color: 'var(--success)' },
+}
+
 function fmtDateTime(d: any) {
   if (!d) return '-'
   try {
@@ -66,7 +77,7 @@ export default function FobPage() {
   useEffect(() => { load() }, [load])
 
   const filtered = records.filter(r => {
-    if (statusFilter !== 'all' && r.status !== statusFilter) return false
+    if (statusFilter !== 'all' && (r.status || 'open') !== statusFilter) return false
     if (search.trim()) {
       const q = search.toLowerCase()
       return [r.order_number, r.party, r.batch_id_str, r.color, r.fob_type, r.article]
@@ -158,7 +169,10 @@ export default function FobPage() {
     total:   records.length,
     dyeing:  records.filter(r => r.fob_type === 'dyeing').length,
     rolling: records.filter(r => r.fob_type === 'rolling').length,
-    open:    records.filter(r => r.status === 'open').length,
+    open:      records.filter(r => r.status === 'open' || !r.status).length,
+    sent:      records.filter(r => r.status === 'sent').length,
+    repairing: records.filter(r => r.status === 'repairing').length,
+    approved:  records.filter(r => r.status === 'approved').length,
   }
 
   const visibleCols = COLUMNS.filter(c => !hiddenCols.has(c.key))
@@ -175,12 +189,15 @@ export default function FobPage() {
       height:'calc(100vh - 42px)', padding:'12px 16px 0', gap:0 }}>
 
       {/* Stats */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12, flexShrink:0 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))', gap:10, marginBottom:12, flexShrink:0 }}>
         {[
-          { label:'Total',   value:stats.total,   color:'var(--text-primary)' },
-          { label:'Dyeing',  value:stats.dyeing,  color:'var(--accent)'  },
-          { label:'Rolling', value:stats.rolling, color:'var(--purple)'  },
-          { label:'Open',    value:stats.open,    color:'var(--danger)'  },
+          { label:'Total',     value:stats.total,     color:'var(--text-primary)' },
+          { label:'Dyeing',    value:stats.dyeing,    color:'var(--accent)'  },
+          { label:'Rolling',   value:stats.rolling,   color:'var(--purple)'  },
+          { label:'Open',      value:stats.open,      color:'var(--danger)'  },
+          { label:'Sent',      value:stats.sent,      color:'#2563EB'        },
+          { label:'In Repair', value:stats.repairing, color:'#D97706'        },
+          { label:'Approved',  value:stats.approved,  color:'var(--success)' },
         ].map(s => (
           <div key={s.label} style={{ background:'var(--bg-secondary)',
             border:'1px solid var(--border-light)', borderRadius:8, padding:'10px 14px' }}>
@@ -207,13 +224,13 @@ export default function FobPage() {
             {f === 'all' ? 'All Types' : f.charAt(0).toUpperCase()+f.slice(1)}
           </button>
         ))}
-        {(['all','open','resolved'] as const).map(f => (
+        {(['all','open','sent','repairing','approved'] as const).map(f => (
           <button key={f} onClick={() => setStatusFilter(f)}
             style={{ fontSize:11, padding:'5px 12px', borderRadius:6, cursor:'pointer', border:'none',
               fontWeight: statusFilter===f ? 700 : 400,
               background: statusFilter===f ? 'var(--danger)' : 'var(--bg-secondary)',
               color: statusFilter===f ? '#fff' : 'var(--text-secondary)' }}>
-            {f === 'all' ? 'All Status' : f.charAt(0).toUpperCase()+f.slice(1)}
+            {FOB_STATUS_LABEL[f]}
           </button>
         ))}
         <div style={{ position:'relative', marginLeft:'auto' }}>
@@ -359,9 +376,9 @@ export default function FobPage() {
                           <td key={col.key} style={s}>
                             <span style={{ padding:'3px 8px', borderRadius:4, fontSize:11,
                               fontWeight:600,
-                              background: r.status==='open' ? 'var(--danger-light)' : 'var(--success-light)',
-                              color: r.status==='open' ? 'var(--danger)' : 'var(--success)' }}>
-                              {r.status}
+                              background: (FOB_BADGE[r.status || 'open'] || FOB_BADGE.open).bg,
+                              color: (FOB_BADGE[r.status || 'open'] || FOB_BADGE.open).color }}>
+                              {FOB_STATUS_LABEL[r.status || 'open'] || r.status}
                             </span>
                           </td>
                         )
@@ -409,7 +426,7 @@ export default function FobPage() {
                                 </span>
                               )}
                               <button className="xs"
-                                onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'' }) }}>
+                                onClick={() => { setEditModal(r); setEditData({ notes:r.notes||'' }) }}>
                                 Edit
                               </button>
                               <button className="xs danger" onClick={() => handleDelete(r.id)}>Del</button>
@@ -442,13 +459,9 @@ export default function FobPage() {
                 {editModal.party} · {editModal.color} · {editModal.fob_kg} Kg · {editModal.process_code}
               </span>
             </div>
-            <div className="form-group" style={{ marginBottom:12 }}>
-              <label>Status</label>
-              <select value={editData.status}
-                onChange={e => setEditData((p: any) => ({ ...p, status:e.target.value }))}>
-                <option value="open">Open</option>
-                <option value="resolved">Resolved</option>
-              </select>
+            <div style={{ fontSize:12, color:'var(--text-secondary)', marginBottom:12 }}>
+              Status: <strong>{FOB_STATUS_LABEL[editModal.status || 'open'] || editModal.status}</strong> — change it with
+              the Mark Sent / Approved / Reprocess buttons, so the batch moves with it.
             </div>
             <div className="form-group" style={{ marginBottom:14 }}>
               <label>Notes / Resolution</label>

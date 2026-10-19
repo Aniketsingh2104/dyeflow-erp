@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbSelectAll, sb } from '@/lib/supabase'
+import { lastByKey } from '@/lib/dedupe'
 
 // ── app/api/colour-store ── Colour Store IMS ─────────────────────────────
 // GET  -> { chemicals: colour_chemicals[], stock: colour_store_stock[] }
@@ -68,9 +69,9 @@ export async function POST(req: NextRequest) {
       stock_date: stockDate,
     }))
 
-    const { error } = await sb('/colour_store_stock', {
+    const { error } = await sb('/colour_store_stock?on_conflict=name,stock_date', {
       method: 'POST',
-      body: JSON.stringify(upsertRows),
+      body: JSON.stringify(lastByKey(upsertRows, 'name', 'stock_date')),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

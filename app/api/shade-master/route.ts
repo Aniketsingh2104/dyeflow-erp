@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
+import { lastByKey } from '@/lib/dedupe'
 
 export async function GET() {
   const { data, error } = await dbSelect('shade_master',
@@ -53,8 +54,8 @@ export async function POST(req: NextRequest) {
       .filter(r => r.shade_name?.trim() && r.shade_group?.trim())
       .map(r => ({ shade_name: r.shade_name.trim(), shade_group: r.shade_group.trim() }))
     if (!rows.length) return NextResponse.json({ ok: false, error: 'No valid rows' }, { status: 400 })
-    const { error } = await sb('/shade_master', {
-      method: 'POST', body: JSON.stringify(rows),
+    const { error } = await sb('/shade_master?on_conflict=shade_name', {
+      method: 'POST', body: JSON.stringify(lastByKey(rows, 'shade_name')),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

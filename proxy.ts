@@ -10,7 +10,7 @@
  *    those headers sent by the browser are always removed first, so they
  *    can't be faked.
  *
- * Public: /login, /api/auth (sign in / out / who-am-I) and the Ollama relay
+ * Public: /login, /api/auth (sign in / out / who-am-I), /api/keep-alive and the Ollama relay
  * (it checks its own shared secret).
  */
 import { NextResponse } from 'next/server'
@@ -23,6 +23,7 @@ function isPublic(pathname: string): boolean {
   return pathname === '/login'
       || pathname === '/api/auth'
       || pathname.startsWith('/api/ollama-relay/')
+      || pathname === '/api/keep-alive'          // Vercel cron; checks CRON_SECRET itself
 }
 
 export function proxy(req: NextRequest) {

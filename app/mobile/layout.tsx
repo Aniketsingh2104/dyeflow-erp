@@ -46,7 +46,7 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
           { href: '/mobile/fms', icon: '⚙', label: 'FMS' },
           { href: '/mobile/batches', icon: '📦', label: 'Batches' },
           { href: '/mobile/orders', icon: '📋', label: 'Orders' },
-          { href: '/mobile/supervisor', icon: '👷', label: 'Supervisor' },
+
         ].map(tab => (
           <a
             key={tab.href}

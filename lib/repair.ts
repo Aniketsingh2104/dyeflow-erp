@@ -14,6 +14,7 @@
  *                     when the repair is later split or rolled back.
  */
 import { dbSelect, dbUpdate, dbInsert, sb } from '@/lib/supabase'
+import { markProcessEntered } from '@/lib/processTimes'
 
 // B2 → B2-R → B2-RR (repair of a repair)
 export function getRepairingBatchId(currentBatchId: string): string {
@@ -153,6 +154,7 @@ export async function startReprocess(p: ReprocessInput) {
     updated_at:      now,
   })
   if (upErr) return { ok: false, error: upErr, status: 500 }
+  if (nextProcess) await markProcessEntered(batch.id, nextProcess, now)
 
   const { error: roErr } = await dbInsert('repairing_orders', {
     batch_id: repairRow.id,

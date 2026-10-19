@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     const rows = [...new Set(names.map((n: string) => n.trim()).filter(Boolean))]
       .map(name => ({ name }))
 
-    const { error } = await sb('/colour_chemicals', {
+    const { error } = await sb('/colour_chemicals?on_conflict=name', {
       method:  'POST',
       body:    JSON.stringify(rows),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },

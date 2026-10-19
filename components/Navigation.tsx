@@ -157,12 +157,12 @@ export default function Navigation() {
         { name: 'Orders', path: '/orders' },
         { name: 'Order Sheets', path: '/order-sheets', adminOnly: true },
         { name: 'Pending Approvals', path: '/pending-approvals', adminOnly: true },
-        { name: 'Edited Orders', path: '/edited-orders', adminOnly: true },
         { name: 'Splitted Orders', path: '/splitted-orders' },
         { name: 'Date Calculator', path: '/date-calculator' },
         { name: 'Supervisors Overview', path: '/supervisor' },
         { name: 'Batch Tracking', path: '/batches' },
         { name: '🔍 Batch Trace', path: '/batches/search' },
+        { name: '🚚 Delivery Tracker', path: '/delivery' },
         { name: 'Import Orders (Excel)', path: '/import' },
         { name: 'Repairing Order', path: '/repairing-order' },
       ]
@@ -190,7 +190,7 @@ export default function Navigation() {
     },
     {
       label: 'FMS',
-      items: fmsItems.length > 0 ? fmsItems : [{ name: 'No processes yet', path: '/setup/process-master' }]
+      items: fmsItems.length > 0 ? [{ name: '📊 FMS Overview', path: '/fms' }, ...fmsItems] : [{ name: 'No processes yet', path: '/setup/process-master' }]
     },
     { label: 'Supervisors', items: supervisorItems },
     {
@@ -249,7 +249,6 @@ export default function Navigation() {
     {
       label: 'Setup',
       items: [
-        { name: 'ℹ System Information', path: '/setup/information' },
         { name: '⚙ Setup Overview', path: '/setup' },
         { name: '🏤 Factory Settings', path: '/setup/factory-settings' },
         { name: 'Supervisor Master', path: '/setup/supervisor-master' },

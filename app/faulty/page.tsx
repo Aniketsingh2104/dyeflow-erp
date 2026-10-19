@@ -438,10 +438,9 @@ export default function FaultyPage() {
               <label>Status</label>
               <select value={editData.status}
                 onChange={e => setEditData((p: any) => ({ ...p, status:e.target.value }))}>
-                <option value="open">Open</option>
-                <option value="repairing">Repairing</option>
-                <option value="resolved">Resolved</option>
-                <option value="written-off">Written Off</option>
+                {/* Only Written Off can be set by hand — Mark OK / Reprocess move the batch too */}
+                <option value={editModal.status}>{(editModal.status || 'open').replace(/^./, (c: string) => c.toUpperCase())} (current)</option>
+                {editModal.status !== 'written-off' && <option value="written-off">Written Off</option>}
               </select>
             </div>
             <div className="form-group" style={{ marginBottom:12 }}>

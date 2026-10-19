@@ -12,11 +12,12 @@ export default function MobileHome() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [oRes, bRes, mRes, pRes] = await Promise.all([
+      const [oRes, bRes, mRes, pRes, fRes] = await Promise.all([
         fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/machines',           { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes',          { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/faulty',             { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
 
       const orders:  any[] = oRes.data || []
@@ -51,7 +52,7 @@ export default function MobileHome() {
         done:      orders.filter(o => o.status === 'done').length,
         hold:      orders.filter(o => o.status === 'hold').length,
         machines:  (mRes.data || []).length,
-        faulty:    0, // would need /api/faulty endpoint
+        faulty:    (fRes.data || []).filter((r: any) => (r.status || 'open') === 'open').length,
         overdue,
       })
       setProcesses(activeProcs.slice(0, 6))
@@ -130,7 +131,7 @@ export default function MobileHome() {
             { href: '/mobile/fms',        icon: '⚙', label: 'FMS Processes',  color: '#185FA5', sub: 'Mark batches done' },
             { href: '/mobile/batches',    icon: '📦', label: 'Batch Tracker',  color: '#7C3AED', sub: 'Find any batch'   },
             { href: '/mobile/orders',     icon: '📋', label: 'Orders',         color: '#059669', sub: 'View all orders'  },
-            { href: '/mobile/supervisor', icon: '👷', label: 'Supervisor View', color: '#D97706', sub: 'Inbox & assignments' },
+            { href: '/delivery',          icon: '🚚', label: 'Delivery',       color: '#D97706', sub: 'Dispatch dates & late orders' },
           ].map(a => (
             <Link key={a.href} href={a.href} style={{ textDecoration: 'none' }}>
               <div style={{ background: '#fff', borderRadius: 14, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', borderLeft: `4px solid ${a.color}` }}>

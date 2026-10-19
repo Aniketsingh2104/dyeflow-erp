@@ -150,7 +150,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
   // ── 3. FOB pending approval ───────────────────────────────────────────────
   fobPendingApproval: ({ minDays = 0 }, db = getLocalDb()) => {
     const records = (db.fobRecords || [])
-      .filter((r: any) => !r.fobApproved && (minDays <= 0 || daysSince(r.fobSentAt || r.createdAt) >= minDays))
+      .filter((r: any) => !r.fobApproved && !r.fobReprocess && (minDays <= 0 || daysSince(r.fobSentAt || r.createdAt) >= minDays))
       .sort((a: any, b: any) => daysSince(b.fobSentAt || b.createdAt) - daysSince(a.fobSentAt || a.createdAt))
     const rows = records.map((r: any) => [
       r.batchId || '-', r.orderNo || '-', r.party || '-', r.article || '-',
@@ -187,7 +187,8 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
 
   // ── 5. FOB all open ───────────────────────────────────────────────────────
   fobAllOpen: ({ type }, db = getLocalDb()) => {
-    let records = (db.fobRecords || []).filter((r: any) => r.status === 'open' || !r.fobApproved)
+    // not approved yet (open, sample sent, or in reprocess)
+    let records = (db.fobRecords || []).filter((r: any) => !r.fobApproved)
     if (type) records = records.filter((r: any) => r.type === type)
     records.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     const rows = records.map((r: any) => [

@@ -24,3 +24,6 @@ Thumbs.db
 .trash/
 
 VERCEL-ENV-VARS.txt
+
+# old one-off fix / push scripts (kept locally, not in git)
+_old-scripts/

@@ -86,30 +86,47 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'entryId and a non-empty lots array are required' }, { status: 400 })
     }
 
-    const { error: delError } = await sb('/greige_lots', {
-      method: 'DELETE',
-      params: { entry_id: `eq.${entryId}` },
-      headers: { 'Prefer': 'return=minimal' },
-    })
-    if (delError) return NextResponse.json({ ok: false, error: delError }, { status: 500 })
+    // Lots already saved for this entry — re-saving keeps each lot's status and
+    // notes, and the original "lot done" time (it's only stamped the first time).
+    const [{ data: oldLots }, { data: entryRows }] = await Promise.all([
+      dbSelect('greige_lots', { entry_id: `eq.${entryId}` }, 'id,lot_number,status,notes'),
+      dbSelect('greige_entries', { id: `eq.${entryId}`, limit: '1' }, 'id,lot_done_at'),
+    ])
+    const byNumber: Record<string, any> = {}
+    for (const l of oldLots || []) byNumber[String(l.lot_number)] = l
 
-    const rows = lots.map((l: any) => ({
-      entry_id:   entryId,
-      lot_number: l.lotNumber,
-      taka:       l.taka != null ? parseInt(l.taka) : null,
-      kg:         l.kg   != null ? parseFloat(l.kg)  : null,
-      qty:        l.qty  != null ? parseFloat(l.qty) : null,
-      status:     'active',
-    }))
+    const rows = lots.map((l: any) => {
+      const prev = byNumber[String(l.lotNumber)]
+      return {
+        entry_id:   entryId,
+        lot_number: l.lotNumber,
+        taka:       l.taka != null && l.taka !== '' ? parseInt(l.taka) : null,
+        kg:         l.kg   != null && l.kg   !== '' ? parseFloat(l.kg)  : null,
+        qty:        l.qty  != null && l.qty  !== '' ? parseFloat(l.qty) : null,
+        status:     prev?.status || 'active',
+        notes:      prev?.notes  ?? null,
+      }
+    })
+    // Add the new set first, then remove the old rows — if the insert fails
+    // nothing is lost.
     const { data, error } = await sb('/greige_lots', {
       method: 'POST', body: JSON.stringify(rows),
       headers: { 'Prefer': 'return=representation' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    const oldIds = (oldLots || []).map((l: any) => l.id)
+    if (oldIds.length) {
+      const { error: delError } = await sb('/greige_lots', {
+        method: 'DELETE',
+        params: { id: `in.(${oldIds.join(',')})` },
+        headers: { 'Prefer': 'return=minimal' },
+      })
+      if (delError) return NextResponse.json({ ok: false, error: 'Lots saved, but old lots could not be removed: ' + delError }, { status: 500 })
+    }
 
-    await dbUpdate('greige_entries', { id: entryId }, {
-      lot_done_at: new Date().toISOString()
-    })
+    if (!entryRows?.[0]?.lot_done_at) {
+      await dbUpdate('greige_entries', { id: entryId }, { lot_done_at: new Date().toISOString() })
+    }
 
     return NextResponse.json({ ok: true, data })
   }

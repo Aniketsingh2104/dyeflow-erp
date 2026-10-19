@@ -255,27 +255,28 @@ export default function OrdersPage() {
 
   // ── Bulk action ─────────────────────────────────────────────────────────────
 
-  const applyBulk = async () => {
-    if (!bulkAction || selectedIds.size === 0) return
+  const applyBulk = async (actionNow?: string) => {
+    const act = actionNow || bulkAction
+    if (!act || selectedIds.size === 0) return
     setSaving(true)
     const ids = Array.from(selectedIds)
     try {
-      if (bulkAction === 'delete') {
+      if (act === 'delete') {
         await Promise.all(ids.map(id => deleteOrder(id)))
         showToast(`✓ ${ids.length} order${ids.length !== 1 ? 's' : ''} deleted`)
-      } else if (bulkAction === 'assign' && bulkSupervisor) {
+      } else if (act === 'assign' && bulkSupervisor) {
         const sup = supervisors.find(s => s.name === bulkSupervisor)
         if (sup) {
           await Promise.all(ids.map(id => apiAssignSupervisor(id, sup.id)))
           showToast(`✓ ${ids.length} orders assigned to ${bulkSupervisor}`)
         }
-      } else if (bulkAction === 'status' && bulkStatus) {
+      } else if (act === 'status' && bulkStatus) {
         await bulkUpdateOrders(ids, { status: bulkStatus })
         showToast(`✓ Status updated to ${bulkStatus}`)
-      } else if (bulkAction === 'hold') {
-        await bulkUpdateOrders(ids, { status: 'hold', hold_reason: bulkHoldReason || null })
+      } else if (act === 'hold') {
+        await bulkUpdateOrders(ids, { status: 'hold', hold_approval: 'Hold', hold_reason: bulkHoldReason || null })
         showToast(`✓ ${ids.length} orders put on hold`)
-      } else if (bulkAction === 'unhold') {
+      } else if (act === 'unhold') {
         await Promise.all(
           ids
             .filter(id => orders.find(o => o.id === id)?.status === 'hold')
@@ -386,14 +387,23 @@ export default function OrdersPage() {
         ...cleanData
       } = formData
 
+      // Hold is released only when this order WAS marked "Hold" and the
+      // dropdown was changed away from it — editing anything else on a held
+      // order keeps it on hold.
+      const releasingHold = modal === 'edit' && selectedOrder?.status === 'hold'
+        && selectedOrder?.hold_approval === 'Hold' && cleanData.hold_approval !== 'Hold'
       const payload = {
         ...cleanData,
         qty_kg:     parseFloat(cleanData.qty_kg)   || 0,
         qty_mtr:    parseFloat(cleanData.qty_mtr)  || 0,
         no_of_taka: parseInt(cleanData.no_of_taka) || 0,
+        // Hold chosen → 'hold'; Hold removed → back to assigned/new
+        // (the server then moves it on to where its batches really are)
         status: cleanData.hold_approval === 'Hold' ? 'hold'
                : modal === 'new' ? 'new'
+               : releasingHold ? (cleanData.supervisor_id ? 'assigned' : 'new')
                : cleanData.status,
+        ...(releasingHold ? { hold_reason: null } : {}),
         process_route: cleanData.process_route || [],
       }
       if (modal === 'new') {
@@ -656,7 +666,7 @@ export default function OrdersPage() {
             ⏸ Put on Hold
           </button>
           <button className="small success"
-            onClick={() => { setBulkAction('unhold'); applyBulk() }}>
+            onClick={() => applyBulk('unhold')}>
             ✅ Release Hold
           </button>
           <button
@@ -1137,7 +1147,7 @@ export default function OrdersPage() {
                 disabled={saving
                   || (bulkAction === 'assign' && !bulkSupervisor)
                   || (bulkAction === 'status' && !bulkStatus)}
-                onClick={applyBulk}>
+                onClick={() => applyBulk()}>
                 {saving ? 'Working…'
                   : bulkAction === 'delete' ? `🗑 Delete ${selectedIds.size}`
                   : `Apply to ${selectedIds.size}`}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect } from '@/lib/supabase'
+import { FAULTY_PENDING_FILTER, FOB_PENDING_FILTER } from '@/lib/recordStatus'
 
 // Builds a compact AI context string from live Supabase data.
 // Equivalent to the old buildDbContext() but server-side, no localStorage.
@@ -22,22 +23,24 @@ function daysUntil(d: string): number {
 
 export async function GET(req: NextRequest) {
   try {
-    const [ordersRes, batchesRes, machinesRes, supervisorsRes, faultyRes, fobRes, processesRes] =
+    const [ordersRes, batchesRes, machinesRes, supervisorsRes, faultyRes, fobRes, processesRes, plansRes] =
       await Promise.all([
         dbSelect('orders', { order: 'created_at.desc', limit: '200' },
-          'id,order_number,party,article,color,qty_kg,qty_mtr,status,process_route,created_at,supervisors(name),machines(id,name)'),
+          'id,order_number,party,article,color,qty_kg,qty_mtr,status,process_route,delivery_date,created_at,supervisors(name),machines(id,name)'),
         dbSelect('batches', { order: 'created_at.desc', limit: '500' },
           'id,batch_id,order_id,kg,status,current_process,is_faulty,created_at,machines(name)'),
         dbSelect('machines', { order: 'name.asc' },
           'id,name,capacity,status'),
         dbSelect('supervisors', { order: 'name.asc' },
           'id,name'),
-        dbSelect('faulty_records', { status: 'eq.open', order: 'created_at.desc', limit: '50' },
-          'id,batch_id,order_number,party,faulty_type,faulty_kg,process_code,created_at'),
-        dbSelect('fob_records', { status: 'eq.open', order: 'created_at.desc', limit: '50' },
-          'id,batch_id,order_number,party,fob_type,fob_kg,process_code,created_at'),
+        // Not closed yet = open or in repair (lib/recordStatus.ts)
+        dbSelect('faulty_records', { status: FAULTY_PENDING_FILTER, order: 'created_at.desc', limit: '50' },
+          'id,batch_id,order_number,party,faulty_type,faulty_kg,process_code,status,created_at'),
+        dbSelect('fob_records', { status: FOB_PENDING_FILTER, order: 'created_at.desc', limit: '50' },
+          'id,batch_id,order_number,party,fob_type,fob_kg,process_code,status,created_at'),
         dbSelect('process_list', { order: 'display_order.asc' },
           'id,code,name'),
+        dbSelect('batch_date_plans', {}, 'batch_id,d_dispatch'),
       ])
 
     const orders     = ordersRes.data     || []
@@ -59,12 +62,16 @@ export async function GET(req: NextRequest) {
     const statusGroups: Record<string, number> = {}
     orders.forEach(o => { statusGroups[o.status || 'new'] = (statusGroups[o.status || 'new'] || 0) + 1 })
 
-    // Overdue
+    // Overdue = a batch that isn't done is past its planned dispatch date
+    // (batch_date_plans.d_dispatch), or the order's own delivery date has passed
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const dispatchOf: Record<string, string> = {}
+    for (const p of plansRes.data || []) if (p.d_dispatch) dispatchOf[p.batch_id] = String(p.d_dispatch).slice(0, 10)
     const overdue = orders.filter(o => {
-      if (['done','new'].includes(o.status)) return false
-      const route: string[] = o.process_route || []
-      // Use last process in route as proxy for dispatch
-      return false // no planned dates in new schema — skip for now
+      if (['done', 'new'].includes(o.status)) return false
+      const d = String(o.delivery_date || '').slice(0, 10)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < todayStr) return true
+      return (batchMap[o.id] || []).some((b: any) => b.status !== 'done' && dispatchOf[b.id] && dispatchOf[b.id] < todayStr)
     })
 
     // Active orders
@@ -116,8 +123,9 @@ export async function GET(req: NextRequest) {
 
     const full = `TODAY: ${today()}
 === DYEFLOW FACTORY ERP ===
-STATS: orders:${orders.length}(done:${statusGroups['done'] || 0} active:${orders.filter(o => o.status !== 'done').length}) batches:${batches.length} faulty:${faultyOpen.length}open fob:${fobOpen.length}open
+STATS: orders:${orders.length}(done:${statusGroups['done'] || 0} active:${orders.filter(o => o.status !== 'done').length}) batches:${batches.length} faulty:${faultyOpen.length}not-closed fob:${fobOpen.length}not-closed
 STATUS: ${Object.entries(statusGroups).map(([s, n]) => `${s}:${n}`).join(' ')}
+OVERDUE(${overdue.length}): ${overdue.slice(0, 15).map(o => o.order_number).join(' ') || 'none'}
 PROCESSES: ${processLine || 'none'}
 
 MACHINES(${machines.length}):
@@ -127,10 +135,10 @@ SUPERVISORS(${supervisors.length}):
 ${supLines.join('\n') || '  none'}
 
 OPEN FAULTY(${faultyOpen.length}):
-${faultyOpen.slice(0, 10).map(r => `  ${r.batch_id}|${r.order_number}|${r.party}|${r.faulty_type || '?'}`).join('\n') || '  none'}
+${faultyOpen.slice(0, 10).map(r => `  ${r.batch_id}|${r.order_number}|${r.party}|${r.faulty_type || '?'}|${r.status}`).join('\n') || '  none'}
 
 OPEN FOB(${fobOpen.length}):
-${fobOpen.slice(0, 10).map(r => `  ${r.batch_id}|${r.order_number}|${r.party}|${r.fob_type || '?'}`).join('\n') || '  none'}
+${fobOpen.slice(0, 10).map(r => `  ${r.batch_id}|${r.order_number}|${r.party}|${r.fob_type || '?'}|${r.status}`).join('\n') || '  none'}
 
 ACTIVE ORDERS(${orders.filter(o => o.status !== 'done').length} total, showing ${activeOrders.length} most recent):
 ${orderLines.join('\n') || '  none'}`.trim()

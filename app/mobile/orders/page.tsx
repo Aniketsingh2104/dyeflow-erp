@@ -8,16 +8,38 @@ export default function MobileOrdersPage() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [expanded, setExpanded] = useState<string | null>(null)
 
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
   useEffect(() => { load() }, [])
 
-  const load = () => {
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return
-    const db = JSON.parse(raw)
-    setOrders([...(db.orders || [])].reverse())
+  // Orders and their batches from the database (this page used to read only
+  // the phone's own browser storage, so it was always empty)
+  const load = async () => {
+    setLoading(true); setError('')
+    try {
+      const [oRes, bRes] = await Promise.all([
+        fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+      ])
+      if (!oRes.ok) throw new Error(oRes.error || 'Could not load orders')
+      const byOrder: Record<string, any[]> = {}
+      for (const b of bRes.data || []) (byOrder[b.order_id] ||= []).push({
+        batchId: b.batch_id, kg: b.kg, status: b.is_faulty ? 'faulty' : b.status, fmsCurrentProcess: b.current_process,
+      })
+      const rows = (oRes.data || []).map((o: any) => ({
+        id: o.id, orderNumber: o.order_number, party: o.party, article: o.article, color: o.color,
+        qtyKg: o.qty_kg, status: o.status, supervisor: o.supervisors?.name || '', blend: o.blend,
+        width: o.width, gsm: o.gsm, machine: o.machines?.name || '', labNo: o.lab_no, lotNo: o.lot_no,
+        processRoute: o.process_route || [], splits: byOrder[o.id] || [], createdAt: o.created_at,
+      }))
+      rows.sort((a: any, b: any) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      setOrders(rows)
+    } catch (e: any) { setError(e?.message || String(e)) }
+    finally { setLoading(false) }
   }
 
-  const statuses = ['all', 'new', 'assigned', 'in-process', 'done', 'hold']
+  const statuses = ['all', 'new', 'assigned', 'splitting', 'in-process', 'done', 'hold']
   const statusCfg: Record<string, { bg: string; color: string; border: string }> = {
     new:          { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' },
     assigned:     { bg: '#DBEAFE', color: '#1E40AF', border: '#BFDBFE' },
@@ -67,14 +89,21 @@ export default function MobileOrdersPage() {
       </div>
 
       {/* List */}
-      {filtered.length === 0 ? (
+      {loading && !orders.length ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>Loading orders…</div>
+      ) : error ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#DC2626' }}>⚠ {error}</div>
+      ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
           <div>No orders found</div>
         </div>
       ) : (
         <div style={{ padding: '4px 12px 8px' }}>
-          {filtered.map(o => {
+          {filtered.length > 150 && (
+            <div style={{ fontSize: 12, color: '#94A3B8', padding: '0 4px 8px' }}>Showing the newest 150 of {filtered.length} — search to find others.</div>
+          )}
+          {filtered.slice(0, 150).map(o => {
             const cfg = statusCfg[o.status] || statusCfg.new
             const isExpanded = expanded === o.id
             const batches = o.splits || []
@@ -128,7 +157,7 @@ export default function MobileOrdersPage() {
                         <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 4 }}>BATCHES ({batches.length})</div>
                         {batches.map((b: any) => (
                           <div key={b.batchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>{b.batchId}</span>
+                            <a href={`/batches/${encodeURIComponent(b.batchId)}`} onClick={e => e.stopPropagation()} style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>{b.batchId}</a>
                             <span style={{ fontSize: 12, color: '#64748B' }}>{b.kg} Kg</span>
                             <span style={{ fontSize: 11, color: '#94A3B8' }}>{b.fmsCurrentProcess || b.status || '—'}</span>
                           </div>

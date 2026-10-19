@@ -10,6 +10,24 @@ import {
 
 interface CellRange { startRow: number; startCol: number; endRow: number; endCol: number }
 
+// Every row carries a client key (_k) that never changes, so saves stay tied
+// to the right row even after rows above it are deleted.
+let keySeq = 0
+const newKey = () => `n${Date.now().toString(36)}${(keySeq++).toString(36)}`
+const keyOf  = (row: any): string => row?._k || row?.id || ''
+const blankRow = () => ({ ...createBlankRow(), _k: newKey() })
+
+// Status fields the party never changes by typing / undo
+const STATUS_KEYS = ['id', '_k', 'approvalStatus', 'submitForApproval', 'requestEdit', 'editRequestedOn',
+  'submittedOn', 'receivedAt', 'orderNumber', 'rejectionReason', 'holdReason', 'process', 'deliveryDate', 'currentStage']
+
+// Put back the original values of an edited approved row
+function restoreOriginals(row: any): any {
+  let out = { ...row }
+  for (const [ci, oldVal] of Object.entries(row.editHistory || {})) out = setCellValueInRow(out, Number(ci), oldVal)
+  return out
+}
+
 export default function SheetPageContent() {
   const searchParams = useSearchParams()
   const sheetId = searchParams.get('id')
@@ -37,7 +55,13 @@ export default function SheetPageContent() {
 
   const inputRef     = useRef<HTMLInputElement>(null)
   const tbodyRef     = useRef<HTMLTableSectionElement>(null)
-  const saveTimerRef = useRef<Record<number, NodeJS.Timeout>>({})
+  const saveTimerRef = useRef<Record<string, NodeJS.Timeout>>({})
+  const idsRef       = useRef<Record<string, string>>({})          // _k → database id once inserted
+  const latestRef    = useRef<Record<string, any>>({})             // _k → newest row data to save
+  const inflightRef  = useRef<Record<string, Promise<void> | undefined>>({})   // _k → save in progress
+  const deletedRef   = useRef<Set<string>>(new Set())
+  const insertChainRef = useRef<Promise<void>>(Promise.resolve())
+  const conflictShown = useRef(false)
   const gridRef      = useRef<HTMLDivElement>(null)
 
   // ── Load from order_sheet_rows table ─────────────────────────────────────
@@ -71,32 +95,57 @@ export default function SheetPageContent() {
           clientRows = fresh.ok ? (fresh.data || []) : clientRows
         }
 
-        setRows(clientRows.length ? clientRows : [createBlankRow()])
+        setRows(clientRows.length ? clientRows.map((r: any) => ({ ...r, _k: r.id || newKey() })) : [blankRow()])
       } catch { setNotFound(true) }
     }
     load()
   }, [sheetId])
 
-  // ── Save ONE row — debounced per rowIndex ─────────────────────────────────
-  // Passes the row's `id` so PostgREST can match by PK, not just (sheet_id, row_index)
-  const saveRow = useCallback((rowIndex: number, rowData: any) => {
-    if (!sheetId) return
-    if (saveTimerRef.current[rowIndex]) clearTimeout(saveTimerRef.current[rowIndex])
-    setSaveStatus('Saving…')
-    saveTimerRef.current[rowIndex] = setTimeout(async () => {
+  // ── Save ONE row — debounced per row key ──────────────────────────────────
+  // New rows are inserted by the server at the end of the sheet and their id
+  // comes back here, so every later save of that row patches it by id.
+  const flushRow = useCallback(async (k: string) => {
+    delete saveTimerRef.current[k]
+    if (inflightRef.current[k]) { try { await inflightRef.current[k] } catch {} }
+    const row = latestRef.current[k]
+    if (!row || deletedRef.current.has(k) || !sheetId) return
+    const id = idsRef.current[k] || row.id
+    // New rows are added one after another so they keep the order they have on screen
+    const after = id ? Promise.resolve() : insertChainRef.current
+    const job = (async () => {
+      try { await after } catch {}
       try {
         const res  = await fetch('/api/sheet-rows', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          // BUG FIX: pass the full rowData including `id` so the API can upsert by PK
-          body:    JSON.stringify({ action: 'upsert_row', sheet_id: sheetId, row: { ...rowData, rowIndex } }),
+          body:    JSON.stringify({ action: 'upsert_row', from: 'sheet', sheet_id: sheetId, row: { ...row, id } }),
         })
         const data = await res.json()
-        setSaveStatus(data.ok ? 'Saved' : 'Save failed ⚠')
+        if (data.ok && data.id && data.id !== id) {
+          idsRef.current[k] = data.id
+          setRows(prev => prev.map(r => keyOf(r) === k ? { ...r, id: data.id } : r))
+        }
+        if (!data.ok && res.status === 409 && !conflictShown.current) {
+          conflictShown.current = true
+          alert(data.error || 'This sheet was changed by the office — please reload.')
+        }
+        setSaveStatus(data.ok ? 'Saved' : res.status === 409 ? 'Reload needed ⚠' : 'Save failed ⚠')
       } catch { setSaveStatus('Save failed ⚠') }
-      delete saveTimerRef.current[rowIndex]
-    }, 600)
+    })()
+    inflightRef.current[k] = job
+    if (!id) insertChainRef.current = job
+    try { await job } finally { if (inflightRef.current[k] === job) delete inflightRef.current[k] }
   }, [sheetId])
+
+  const saveRow = useCallback((_rowIndex: number, rowData: any) => {
+    if (!sheetId || !rowData) return
+    const k = keyOf(rowData)
+    if (!k) return
+    latestRef.current[k] = rowData
+    if (saveTimerRef.current[k]) clearTimeout(saveTimerRef.current[k])
+    setSaveStatus('Saving…')
+    saveTimerRef.current[k] = setTimeout(() => { flushRow(k) }, 600)
+  }, [sheetId, flushRow])
 
   // ── Checkbox handler ──────────────────────────────────────────────────────
   // BUG FIX: Submit on approved/rejected row → 'edit-request' not 'pending'
@@ -104,39 +153,52 @@ export default function SheetPageContent() {
   const handleCheckbox = useCallback((ri: number, ci: number, checked: boolean) => {
     const row = rows[ri]
     const nr  = [...rows]
+    const st  = row.approvalStatus || 'draft'
 
     if (ci === 0) {
       // SUBMIT FOR APPROVAL
       if (checked) {
-        const wasFinalized =
-          row.approvalStatus === 'approved' ||
-          row.approvalStatus === 'rejected' ||
-          row.approvalStatus === 'edit-accepted'
-        // Already approved/rejected + requestEdit ticked → edit request submission
-        // Fresh draft row → new order submission
-        const newStatus = wasFinalized ? 'edit-request' : 'pending'
-        nr[ri] = {
-          ...row,
-          submitForApproval: true,
-          requestEdit:       false,       // clear requestEdit — submission locks it
-          approvalStatus:    newStatus,
-          submittedOn:       new Date().toISOString(),
-          receivedAt:        new Date().toISOString(),
+        if (st === 'pending' || st === 'edit-request') return
+        if (st === 'approved' || st === 'edit-accepted') {
+          // Already an order → this is an EDIT request, only if something was changed
+          if (!row.requestEdit || !Object.keys(row.editHistory || {}).length) {
+            alert('This row is already an order. Tick "Request Edit", change the cells, then tick Submit.')
+            return
+          }
+          nr[ri] = { ...row, submitForApproval: true, requestEdit: false, approvalStatus: 'edit-request',
+            submittedOn: new Date().toISOString(), receivedAt: new Date().toISOString() }
+        } else {
+          // draft, or rejected and fixed → a NEW order request
+          if (!String(row.party || '').trim() || !String(row.article || '').trim()) {
+            alert('Fill in at least Party and Article before submitting.')
+            return
+          }
+          nr[ri] = { ...row, submitForApproval: true, requestEdit: false, approvalStatus: 'pending',
+            rejectionReason: '', submittedOn: new Date().toISOString(), receivedAt: new Date().toISOString() }
         }
       } else {
         // Unsubmit
-        const revertTo =
-          row.approvalStatus === 'edit-request' ? 'approved'
-          : row.approvalStatus === 'pending'    ? 'draft'
-          : row.approvalStatus
-        nr[ri] = { ...row, submitForApproval: false, approvalStatus: revertTo, submittedOn: '', receivedAt: '' }
+        if (st === 'edit-request') {
+          // Withdraw the edit → cells go back to what the order has
+          nr[ri] = { ...restoreOriginals(row), submitForApproval: false, requestEdit: false, approvalStatus: 'approved',
+            editHistory: {}, editRequestedOn: '', submittedOn: '', receivedAt: '' }
+        } else if (st === 'pending') {
+          nr[ri] = { ...row, submitForApproval: false, approvalStatus: 'draft', submittedOn: '', receivedAt: '' }
+        } else return
       }
 
     } else if (ci === 1) {
-      // REQUEST EDIT — unlock the row
+      // REQUEST EDIT — only for rows that are already orders
+      if (st !== 'approved' && st !== 'edit-accepted') {
+        alert(st === 'pending' || st === 'edit-request'
+          ? 'This row is waiting for the office. Untick "Submit" first if you need to change it.'
+          : 'This row is not an order yet — you can edit it directly.')
+        return
+      }
       nr[ri] = checked
         ? { ...row, requestEdit: true,  editHistory: row.editHistory || {}, editRequestedOn: row.editRequestedOn || new Date().toISOString() }
-        : { ...row, requestEdit: false, editHistory: {}, editRequestedOn: '' }
+        // Cancel the edit → put the original values back so the sheet matches the order
+        : { ...restoreOriginals(row), requestEdit: false, editHistory: {}, editRequestedOn: '' }
 
     } else {
       nr[ri] = setCellValueInRow(row, ci, checked)
@@ -188,8 +250,41 @@ export default function SheetPageContent() {
     if (changedIdx !== undefined) saveRow(changedIdx, newRows[changedIdx])
   }, [addUndo, saveRow])
 
-  const handleUndo = () => { if(!undoStack.length)return;setRedoStack(p=>[...p,rows]);setUndoStack(p=>p.slice(0,-1));setRows(undoStack[undoStack.length-1]) }
-  const handleRedo = () => { if(!redoStack.length)return;setUndoStack(p=>[...p,rows]);setRedoStack(p=>p.slice(0,-1));setRows(redoStack[redoStack.length-1]) }
+  // Undo / redo change cell values only — never a row's status, and never a
+  // locked row — and every row that changes is saved, so the screen and the
+  // database stay the same. Rows deleted since then stay deleted.
+  const applySnapshot = (snap: any[]) => {
+    const cur: Record<string, any> = {}
+    rows.forEach(r => { cur[keyOf(r)] = r })
+    const next: any[] = []
+    const changed: number[] = []
+    for (const old of snap) {
+      const k = keyOf(old)
+      const now = cur[k]
+      if (!now) continue                          // deleted since → keep deleted
+      if (old === now || isRowLocked(now)) { next.push(now); continue }
+      const merged: any = { ...old }
+      for (const key of STATUS_KEYS) merged[key] = now[key]
+      merged.id = idsRef.current[k] || now.id
+      merged.editHistory = now.requestEdit ? { ...(old.editHistory || {}), ...(now.editHistory || {}) } : (now.editHistory || {})
+      next.push(merged); changed.push(next.length - 1)
+    }
+    // rows added after the snapshot stay (they may already hold data)
+    const inSnap = new Set(snap.map(keyOf))
+    rows.forEach(r => { if (!inSnap.has(keyOf(r))) next.push(r) })
+    setRows(next)
+    changed.forEach(i => saveRow(i, next[i]))
+  }
+  const handleUndo = () => { if(!undoStack.length)return;setRedoStack(p=>[...p,rows]);setUndoStack(p=>p.slice(0,-1));applySnapshot(undoStack[undoStack.length-1]) }
+  const handleRedo = () => { if(!redoStack.length)return;setUndoStack(p=>[...p,rows]);setRedoStack(p=>p.slice(0,-1));applySnapshot(redoStack[redoStack.length-1]) }
+
+  // Write one cell the way a typed edit would (keeps the edit history)
+  const writeCell = (row: any, ci: number, value: any) => {
+    const oldVal = getCellValue(row, ci)
+    if (String(oldVal ?? '') === String(value ?? '')) return row
+    return { ...setCellValueInRow(row, ci, value), editHistory: trackEdit(row, ci, oldVal) }
+  }
+  const canWrite = (row: any, ci: number) => !!row && !isReadonlyColumn(ci) && !isCheckboxColumn(ci) && !isRowLocked(row)
 
   const handleCopy = () => {
     if(!selectedCell&&!selectedRange)return
@@ -202,30 +297,43 @@ export default function SheetPageContent() {
   const handleCut = () => {
     handleCopy()
     const nr=[...rows];const ch=new Set<number>()
-    if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++)if(!isReadonlyColumn(c)&&!isRowLocked(nr[r])){nr[r]=setCellValueInRow(nr[r],c,'');ch.add(r)}}
-    else if(selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isRowLocked(rows[selectedCell.row])){nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,'');ch.add(selectedCell.row)}
+    if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++)if(canWrite(nr[r],c)){nr[r]=writeCell(nr[r],c,'');ch.add(r)}}
+    else if(selectedCell&&canWrite(rows[selectedCell.row],selectedCell.col)){nr[selectedCell.row]=writeCell(nr[selectedCell.row],selectedCell.col,'');ch.add(selectedCell.row)}
     if(ch.size){addUndo();setRows(nr);ch.forEach(i=>saveRow(i,nr[i]))}
   }
 
   const handlePaste = async () => {
     if(!selectedCell)return
-    const pasteData = async()=>{try{const t=await navigator.clipboard.readText();const d=t.split('\n').map(r=>r.split('\t'));return d.length&&d[0].length?d:copiedData}catch{return copiedData}}
+    const pasteData = async()=>{try{const t=(await navigator.clipboard.readText()).replace(/\r/g,'').replace(/\n+$/,'');const d=t.split('\n').map(r=>r.split('\t'));return t&&d.length&&d[0].length?d:copiedData}catch{return copiedData}}
     const data=await pasteData();if(!data.length)return
-    const nr=[...rows];let cr=selectedCell.row;const ch=new Set<number>()
-    for(const rd of data){if(cr>=rows.length)nr.push(createBlankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length&&!isReadonlyColumn(cc))nr[cr]=setCellValueInRow(nr[cr],cc,cv);cc++};ch.add(cr);cr++}
-    addUndo();setRows(nr);ch.forEach(i=>saveRow(i,nr[i]))
+    // Locked rows (waiting for / already approved) and the checkbox / office
+    // columns are skipped, exactly like typing.
+    const nr=[...rows];let cr=selectedCell.row;const ch=new Set<number>();let skipped=0
+    for(const rd of data){if(cr>=nr.length)nr.push(blankRow());let cc=selectedCell.col;for(const cv of rd){if(cc<SHEET_COL_HEADERS.length){if(canWrite(nr[cr],cc)){const before=nr[cr];nr[cr]=writeCell(nr[cr],cc,cv);if(nr[cr]!==before)ch.add(cr)}else if(!isCheckboxColumn(cc)&&!isReadonlyColumn(cc))skipped++};cc++};cr++}
+    // brand-new rows that got nothing stay out
+    while(nr.length>rows.length&&!ch.has(nr.length-1))nr.pop()
+    if(ch.size){addUndo();setRows(nr);ch.forEach(i=>saveRow(i,nr[i]))}
+    if(skipped)alert(`${skipped} cell(s) were not pasted because their rows are locked. Tick "Request Edit" on an approved row to change it.`)
   }
 
   const handleDeleteCells = () => {
     const nr=[...rows];const ch=new Set<number>()
-    if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++)if(!isReadonlyColumn(c)&&!isCheckboxColumn(c)&&!isRowLocked(nr[r])){nr[r]=setCellValueInRow(nr[r],c,'');ch.add(r)}}
-    else if(selectedCell&&!isReadonlyColumn(selectedCell.col)&&!isCheckboxColumn(selectedCell.col)&&!isRowLocked(nr[selectedCell.row])){nr[selectedCell.row]=setCellValueInRow(nr[selectedCell.row],selectedCell.col,'');ch.add(selectedCell.row)}
+    if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++)if(canWrite(nr[r],c)){nr[r]=writeCell(nr[r],c,'');ch.add(r)}}
+    else if(selectedCell&&canWrite(nr[selectedCell.row],selectedCell.col)){nr[selectedCell.row]=writeCell(nr[selectedCell.row],selectedCell.col,'');ch.add(selectedCell.row)}
     if(ch.size){addUndo();setRows(nr);ch.forEach(i=>saveRow(i,nr[i]))}
   }
 
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keyHandlerRef.current(e)
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+  }, [])
   useEffect(()=>{
-    const h=(e:KeyboardEvent)=>{
+    keyHandlerRef.current=(e:KeyboardEvent)=>{
       if(editingCell)return
+      // typing in the Find box (or any other field) must work normally
+      const t=e.target as HTMLElement|null
+      if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return
       if(e.ctrlKey&&e.key==='z'&&!e.shiftKey){e.preventDefault();handleUndo()}
       if(e.ctrlKey&&(e.key==='y'||(e.key==='z'&&e.shiftKey))){e.preventDefault();handleRedo()}
       if(e.ctrlKey&&e.key==='c'){e.preventDefault();handleCopy()}
@@ -241,8 +349,7 @@ export default function SheetPageContent() {
         if(e.key==='ArrowRight'&&selectedCell.col<SHEET_COL_HEADERS.length-1){e.preventDefault();const c=selectedCell.col+1;if(e.shiftKey)extendSel(selectedCell.row,c);else{setSelectedCell({row:selectedCell.row,col:c});setSelectedRange(null);setAnchorCell(null)};scrollCellIntoView(selectedCell.row,c)}
       }
     }
-    window.addEventListener('keydown',h);return ()=>window.removeEventListener('keydown',h)
-  },[editingCell,selectedCell,rows.length,undoStack,redoStack,selectedRange,scrollCellIntoView])
+  })
 
   useEffect(()=>{if(editingCell&&inputRef.current){inputRef.current.focus();inputRef.current.select()}},[editingCell])
 
@@ -252,31 +359,47 @@ export default function SheetPageContent() {
   const onClick=(r:number,c:number)=>{if(editingCell?.row===r&&editingCell?.col===c)return;if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setSelectedCell({row:r,col:c});setSelectedRange(null);setAnchorCell(null)}
   const onDblClick=(r:number,c:number)=>{if(isCheckboxColumn(c)||isReadonlyColumn(c))return;if(isRowLocked(rows[r])){alert('Row is locked — tick Request Edit to unlock.');return};setEditingCell({row:r,col:c});setEditValue(String(getCellValue(rows[r],c)||''))}
 
-  const handleCellBlur=()=>{
-    if(!editingCell)return
+  // Returns the rows after the edit, so Enter-on-last-row can add a new row
+  // on top of them (it used to start from the old rows and wipe the value
+  // just typed off the screen — a later save of that row then erased it).
+  const handleCellBlur=():any[]=>{
+    if(!editingCell)return rows
     const row=rows[editingCell.row];const oldVal=getCellValue(row,editingCell.col)
-    if(String(oldVal)===editValue){setEditingCell(null);return}
+    if(String(oldVal??'')===editValue){setEditingCell(null);return rows}
     const nr=[...rows]
     // BUG FIX: track edit history before overwriting
     const editHistory = trackEdit(row, editingCell.col, oldVal)
     nr[editingCell.row]={...setCellValueInRow(row,editingCell.col,editValue), editHistory}
     addUndo();setRows(nr);saveRow(editingCell.row,nr[editingCell.row]);setEditingCell(null)
+    return nr
   }
 
   const handleKeyDown=(e:React.KeyboardEvent)=>{
     if(!editingCell)return
-    if(e.key==='Enter'){e.preventDefault();handleCellBlur();const nr=editingCell.row+1;if(nr<rows.length){setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});if(!isRowLocked(rows[nr])&&!isReadonlyColumn(editingCell.col)){setEditingCell({row:nr,col:editingCell.col});setEditValue(String(getCellValue(rows[nr],editingCell.col)||''))}},50)}else{const nrs=[...rows,createBlankRow()];addUndo();setRows(nrs);saveRow(nr,nrs[nr]);setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});setEditingCell({row:nr,col:editingCell.col});setEditValue('')},100)}}
+    if(e.key==='Enter'){e.preventDefault();const cur=handleCellBlur();const nr=editingCell.row+1;if(nr<cur.length){setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});if(!isRowLocked(rows[nr])&&!isReadonlyColumn(editingCell.col)){setEditingCell({row:nr,col:editingCell.col});setEditValue(String(getCellValue(rows[nr],editingCell.col)||''))}},50)}else{const nrs=[...cur,blankRow()];setRows(nrs);   /* saved once something is typed in it */setTimeout(()=>{setSelectedCell({row:nr,col:editingCell.col});setEditingCell({row:nr,col:editingCell.col});setEditValue('')},100)}}
     else if(e.key==='Escape'){setEditingCell(null);setEditValue('')}
     else if(e.key==='Tab'){e.preventDefault();handleCellBlur();const nc=editingCell.col+1;if(nc<SHEET_COL_HEADERS.length){setTimeout(()=>{setSelectedCell({row:editingCell.row,col:nc});if(!isReadonlyColumn(nc)&&!isCheckboxColumn(nc)){setEditingCell({row:editingCell.row,col:nc});setEditValue(String(getCellValue(rows[editingCell.row],nc)||''))}},50)}}
   }
 
-  const addRow=()=>{const nr=[...rows,createBlankRow()];const i=nr.length-1;addUndo();setRows(nr);saveRow(i,nr[i])}
-  const deleteRow=()=>{
+  const addRow=()=>{const nr=[...rows,blankRow()];const i=nr.length-1;addUndo();setRows(nr);saveRow(i,nr[i])}
+  const deleteRow=async()=>{
     if(!selectedCell||rows.length===1)return
-    if(!confirm('Delete this row?'))return
     const row=rows[selectedCell.row]
-    if(row.id)fetch('/api/sheet-rows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete_row',id:row.id})}).catch(()=>{})
-    addUndo();setRows(rows.filter((_,i)=>i!==selectedCell.row));setSelectedCell(null)
+    const st=row.approvalStatus||'draft'
+    if(row.orderNumber||(st!=='draft'&&st!=='rejected')){alert(`This row is "${st}"${row.orderNumber?` (order ${row.orderNumber})`:''} and can't be deleted here — ask the office.`);return}
+    if(!confirm('Delete this row?'))return
+    const k=keyOf(row)
+    // stop any pending save of this row, wait for one already running
+    if(saveTimerRef.current[k]){clearTimeout(saveTimerRef.current[k]);delete saveTimerRef.current[k]}
+    deletedRef.current.add(k)
+    if(inflightRef.current[k]){try{await inflightRef.current[k]}catch{}}
+    const id=idsRef.current[k]||row.id
+    if(id){
+      const res=await fetch('/api/sheet-rows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete_row',id})}).then(r=>r.json()).catch(()=>({ok:false,error:'Network error'}))
+      if(!res.ok){deletedRef.current.delete(k);alert(res.error||'Could not delete the row');return}
+    }
+    setUndoStack([]);setRedoStack([])   // a deleted row can't be brought back by Undo
+    setRows(prev=>prev.filter(r=>keyOf(r)!==k));setSelectedCell(null)
   }
 
   const stats=()=>{const vals:number[]=[];if(selectedRange){for(let r=selectedRange.startRow;r<=selectedRange.endRow;r++)for(let c=selectedRange.startCol;c<=selectedRange.endCol;c++){const n=parseFloat(String(getCellValue(rows[r],c)));if(!isNaN(n))vals.push(n)}}else if(selectedCell){const n=parseFloat(String(getCellValue(rows[selectedCell.row],selectedCell.col)));if(!isNaN(n))vals.push(n)};const s=vals.reduce((a,b)=>a+b,0);return{sum:s,avg:vals.length?s/vals.length:0,count:vals.length}}
@@ -353,7 +476,7 @@ export default function SheetPageContent() {
             </thead>
             <tbody ref={tbodyRef}>
               {rows.map((row,ri)=>(
-                <tr key={row.id||ri} className={getRowClass(row)}>
+                <tr key={keyOf(row)||ri} className={getRowClass(row)}>
                   <th style={{position:'sticky',left:0,zIndex:2,width:46,textAlign:'center',background:'#f7f8fa',fontWeight:500,color:'#999',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',height:30}}>{ri+1}</th>
                   {SHEET_COL_HEADERS.map((_,ci)=>{
                     const val      = getCellValue(row,ci)

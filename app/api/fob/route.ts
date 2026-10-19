@@ -4,6 +4,7 @@ import { startReprocess } from '@/lib/repair'
 import { canonicalCode } from '@/lib/processCodes'
 import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 import { requireAdmin } from '@/lib/auth'
+import { markProcessEntered } from '@/lib/processTimes'
 
 
 export async function GET(req: NextRequest) {
@@ -97,7 +98,7 @@ export async function POST(req: NextRequest) {
     // Upsert batch_processes: mark this process as 'fob' with done_at timestamp
     // Use upsert because repair batches may not have batch_processes rows yet
     const now = new Date().toISOString()
-    await sb('/batch_processes', {
+    await sb('/batch_processes?on_conflict=batch_id,process_code', {
       method: 'POST',
       body: JSON.stringify({
         batch_id:     payload.batch_id,
@@ -114,6 +115,8 @@ export async function POST(req: NextRequest) {
     await dbUpdate('batches', { id: payload.batch_id }, {
       last_process: payload.process_code,
     })
+    await auditLog({ action:'fob_create', entity_type:'batch', entity_id: payload.batch_id,
+      new_value: `${payload.process_code} · ${payload.fob_type || ''} · ${payload.fob_kg ?? ''} Kg` })
 
     return NextResponse.json({ ok:true, data })
   }
@@ -145,6 +148,7 @@ export async function POST(req: NextRequest) {
       current_process: nextProcess || null,
       sent_at: now,
     })
+    if (nextProcess) await markProcessEntered(batch_id, nextProcess, now)
     await auditLog({ action:'fob_approved', entity_type:'fob_record', entity_id:id, new_value: nextProcess||'completed' })
     await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
     return NextResponse.json({ ok:true, next_process:nextProcess })
@@ -175,9 +179,12 @@ export async function POST(req: NextRequest) {
 
   // ── Standard update ───────────────────────────────────────────────────────
   if (action === 'update') {
+    // Only notes can be edited here. Status changes go through Mark Sent /
+    // Approved / Reprocess, which also move the batch — changing the status
+    // alone would leave the batch stuck.
     const patch:Record<string,any> = {}
-    if (payload.status !== undefined) patch.status = payload.status
     if (payload.notes  !== undefined) patch.notes  = payload.notes
+    if (!Object.keys(patch).length) return NextResponse.json({ ok:false, error:'Nothing to update' }, { status:400 })
     const { error } = await dbUpdate('fob_records', { id }, patch)
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
     return NextResponse.json({ ok:true })

@@ -202,8 +202,12 @@ export default function FmsProcessPage() {
         // Either via fob_records OR via batch_processes.status='fob'
         const fobKey  = `${b.id}__${processCode}`
         const hasFob  = !!fobMap[fobKey] || bpStatus === 'fob'
-        // Timestamp = sent_at on batch (when it arrived at this process)
-        const sentAt  = b.sent_at || b.updated_at || b.created_at || ''
+        // Timestamp = when the batch arrived at THIS process (fms_enter_at,
+        // filled by lib/processTimes.ts). Older batches fall back to sent_at.
+        const enterAt = (b.fms_enter_at && typeof b.fms_enter_at === 'object')
+          ? (b.fms_enter_at[processCode] || Object.entries(b.fms_enter_at).find(([k]) => k.toUpperCase() === processCode.toUpperCase())?.[1])
+          : null
+        const sentAt  = (enterAt as string) || b.sent_at || b.updated_at || b.created_at || ''
 
         return {
           ...b,

@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
+import { lastByKey } from '@/lib/dedupe'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -76,9 +77,9 @@ export async function POST(req: NextRequest) {
     if (!rows.length) return NextResponse.json({ ok: false, error: 'No valid rules found' }, { status: 400 })
 
     // Batch upsert via PostgREST
-    const { error } = await sb('/article_process_routes', {
+    const { error } = await sb('/article_process_routes?on_conflict=article', {
       method: 'POST',
-      body: JSON.stringify(rows),
+      body: JSON.stringify(lastByKey(rows, 'article')),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
-import { canonicalCode } from '@/lib/processCodes'
+import { canonicalCode, sameCode } from '@/lib/processCodes'
+import { markProcessEntered } from '@/lib/processTimes'
 import { deriveMachineMap, primaryMachine } from '@/lib/machineMap'
 import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 
@@ -150,8 +151,23 @@ export async function POST(req: NextRequest) {
     if (action === 'update') {
       const { id, ...patch } = payload
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+      // Moving to a new process? remember when it arrived (lib/processTimes.ts)
+      let movedTo: string | null = null
+      let movedFrom: string | null = null
+      const moving = 'current_process' in patch
+      if (moving) {
+        const { data: prev } = await dbSelect('batches', { id: `eq.${id}`, limit: '1' }, 'current_process')
+        movedFrom = prev?.[0]?.current_process || null
+        if (patch.current_process && !sameCode(movedFrom, patch.current_process)) movedTo = patch.current_process
+      }
       const { error } = await dbUpdate('batches', { id }, { ...patch, updated_at: new Date().toISOString() })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      if (movedTo) await markProcessEntered(id, movedTo, patch.sent_at)
+      if (moving && (movedFrom || null) !== (patch.current_process || null)) {
+        // Sent to first process / rolled back — recorded so Batch Trace can show it
+        await auditLog({ username: _user, action: 'batch_move', entity_type: 'batch', entity_id: id,
+          old_value: movedFrom || 'not started', new_value: patch.current_process || (patch.status || 'not started') })
+      }
       await refreshOrderStatusForBatch(id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true })
     }
@@ -170,6 +186,7 @@ export async function POST(req: NextRequest) {
       const batchPatch: Record<string, any> = { current_process: next_process || null }
       if (!next_process) { batchPatch.is_done = true; batchPatch.status = 'done' }
       await dbUpdate('batches', { id: batch_id }, batchPatch)
+      if (next_process) await markProcessEntered(batch_id, next_process)
       await auditLog({ username: _user, action: 'process_done', entity_type: 'batch',
         entity_id: batch_id, old_value: process_code, new_value: next_process || 'completed' })
       await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
+import { lastByKey } from '@/lib/dedupe'
 
 export async function GET() {
   const { data, error } = await dbSelect('customers',
@@ -73,9 +74,9 @@ export async function POST(req: NextRequest) {
       }))
     if (!rows.length) return NextResponse.json({ ok: false, error: 'No valid rows' }, { status: 400 })
 
-    const { error } = await sb('/customers', {
+    const { error } = await sb('/customers?on_conflict=name', {
       method:  'POST',
-      body:    JSON.stringify(rows),
+      body: JSON.stringify(lastByKey(rows, 'name')),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

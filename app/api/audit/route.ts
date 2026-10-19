@@ -7,6 +7,7 @@ export async function GET(req: NextRequest) {
   const limit  = parseInt(searchParams.get('limit')  || '500')
   const action = searchParams.get('action')
   const entity = searchParams.get('entity')
+  const entityIds = (searchParams.get('entity_id') || '').split(',').map(s => s.trim()).filter(Boolean)
 
   const query: Record<string, string> = {
     order: 'created_at.desc',
@@ -14,6 +15,8 @@ export async function GET(req: NextRequest) {
   }
   if (action) query['action']      = `eq.${action}`
   if (entity) query['entity_type'] = `eq.${entity}`
+  // one or more ids, e.g. a batch's uuid and its text id
+  if (entityIds.length) query['entity_id'] = `in.(${entityIds.map(v => `"${v.replace(/"/g, '')}"`).join(',')})`
 
   const { data, error } = await dbSelect('audit_log', query)
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

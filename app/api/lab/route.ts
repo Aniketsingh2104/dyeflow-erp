@@ -193,7 +193,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'update_setting') {
     if (!payload.key) return NextResponse.json({ ok: false, error: 'key required' }, { status: 400 })
-    const { error } = await sb('/lab_settings', {
+    const { error } = await sb('/lab_settings?on_conflict=key', {
       method: 'POST',
       body: JSON.stringify({ key: payload.key, value: payload.value, updated_at: new Date().toISOString() }),
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },

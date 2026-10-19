@@ -4,6 +4,7 @@ import { ensureBatchProcesses } from '@/lib/repair'
 import { deriveMachineMap } from '@/lib/machineMap'
 import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 import { requireAdmin } from '@/lib/auth'
+import { markProcessEntered } from '@/lib/processTimes'
 
 // Revert batch ID: DYE26-0001-B1-R → DYE26-0001-B1, DYE26-0001-B1-RR → DYE26-0001-B1-R
 function revertBatchId(batchId: string): string {
@@ -289,6 +290,7 @@ export async function POST(req: NextRequest) {
     }
     const { error: bErr } = await dbUpdate('batches', { id: batch.id }, batchPatch)
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
+    if (isFob && srcProcess) await markProcessEntered(batch.id, srcProcess)
 
     // A partial repair batch is a new row — give it process rows so FMS works
     if (isPartial) {

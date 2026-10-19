@@ -7,32 +7,45 @@ export default function MobileBatchesPage() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'active' | 'done' | 'faulty'>('active')
 
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
   useEffect(() => { load() }, [])
 
-  const load = () => {
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return
-    const db = JSON.parse(raw)
-    const rows: any[] = []
-    ;(db.orders || []).forEach((o: any) => {
-      ;(o.splits || []).forEach((b: any) => {
-        rows.push({
-          batchId: b.batchId || '-',
-          orderId: o.id,
-          orderNo: o.orderNumber || '-',
+  // Batches from the database (this page used to read only the phone's own
+  // browser storage, so it was always empty)
+  const load = async () => {
+    setLoading(true); setError('')
+    try {
+      const [bRes, oRes] = await Promise.all([
+        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
+      ])
+      if (!bRes.ok) throw new Error(bRes.error || 'Could not load batches')
+      const om: Record<string, any> = {}
+      for (const o of oRes.data || []) om[o.id] = o
+      const rows = (bRes.data || []).map((b: any) => {
+        const o = om[b.order_id] || {}
+        return {
+          batchId: b.batch_id || '-',
+          orderId: b.order_id,
+          orderNo: o.order_number || '-',
           party: o.party || '-',
           article: o.article || '-',
           color: o.color || '-',
-          kg: b.kg || o.qtyKg || '-',
-          supervisor: o.supervisor || '-',
+          kg: b.kg ?? '-',
+          supervisor: o.supervisors?.name || '-',
           status: b.status || 'pending',
-          currentProcess: b.fmsCurrentProcess || '-',
-          isFaulty: !!(b.fmsFaulty?.active),
-          isDone: b.status === 'done' || b.fmsDone,
-        })
+          currentProcess: b.current_process || '-',
+          isFaulty: !!b.is_faulty || b.status === 'faulty',
+          isDone: b.status === 'done' || !!b.is_done,
+          updatedAt: b.updated_at || b.created_at || '',
+        }
       })
-    })
-    setBatches(rows.sort((a, b) => (a.isDone ? 1 : 0) - (b.isDone ? 1 : 0)))
+      rows.sort((a: any, b: any) => ((a.isDone ? 1 : 0) - (b.isDone ? 1 : 0)) || String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      setBatches(rows)
+    } catch (e: any) { setError(e?.message || String(e)) }
+    finally { setLoading(false) }
   }
 
   const filtered = batches.filter(b => {
@@ -55,6 +68,7 @@ export default function MobileBatchesPage() {
   const statusLabel = (b: any) => {
     if (b.isFaulty) return '⚠ Faulty'
     if (b.isDone) return '✓ Done'
+    if (b.status === 'repairing') return '🔄 Repairing'
     return b.currentProcess && b.currentProcess !== '-' ? `⚙ ${b.currentProcess}` : '● Pending'
   }
 
@@ -95,7 +109,11 @@ export default function MobileBatchesPage() {
       </div>
 
       {/* Batch list */}
-      {filtered.length === 0 ? (
+      {loading && !batches.length ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>Loading batches…</div>
+      ) : error ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#DC2626' }}>⚠ {error}</div>
+      ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
           <div>No batches found</div>
@@ -103,7 +121,8 @@ export default function MobileBatchesPage() {
       ) : (
         <div style={{ padding: '4px 12px 8px' }}>
           {filtered.map(b => (
-            <div key={b.batchId} style={{ background: b.isDone ? '#F0FDF4' : b.isFaulty ? '#FEF2F2' : '#fff', borderRadius: 12, marginBottom: 8, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', borderLeft: `4px solid ${statusColor(b)}` }}>
+            <a key={b.batchId} href={`/batches/${encodeURIComponent(b.batchId)}`} style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}>
+            <div style={{ background: b.isDone ? '#F0FDF4' : b.isFaulty ? '#FEF2F2' : '#fff', borderRadius: 12, marginBottom: 8, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', borderLeft: `4px solid ${statusColor(b)}` }}>
               <div style={{ padding: '14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                   <div>
@@ -122,6 +141,7 @@ export default function MobileBatchesPage() {
                 </div>
               </div>
             </div>
+            </a>
           ))}
         </div>
       )}

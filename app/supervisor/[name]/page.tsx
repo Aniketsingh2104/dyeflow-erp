@@ -116,6 +116,13 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
         timestamp:           o.created_at,
         supervisorConfirmed: o.supervisor_confirmed,
         processRoute:        o.process_route,
+        labRecheck:          !!o.lab_recheck,
+        labRecheckAt:        o.lab_recheck_at,
+        labReceive:          !!o.lab_receive,
+        labReceiveAt:        o.lab_receive_at,
+        greigeCheck:         !!o.greige_check,
+        greigeCheckAt:       o.greige_check_at,
+        greigeRecheckFailReason: o.greige_recheck_fail_reason,
       }))
 
       setOrders(mappedOrders)
@@ -177,10 +184,13 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     const patch: any = {}
     if (fieldMap[field]) patch[fieldMap[field]] = checked
     if (timeFieldMap[field]) patch[timeFieldMap[field]] = checked ? new Date().toISOString() : null
-    await fetch('/api/orders', {
+    // show the tick straight away, then save (saved in orders.lab_recheck / lab_receive / greige_check)
+    setOrders((prev: any[]) => prev.map(o => o.id === orderId ? { ...o, [field]: checked, [field + 'At']: patch[timeFieldMap[field]] } : o))
+    const res = await fetch('/api/orders', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', id: orderId, ...patch })
-    })
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    if (!res.ok) alert('Could not save the tick: ' + (res.error || 'unknown error'))
     loadData()
   }
 

@@ -4,6 +4,7 @@ import { startReprocess } from '@/lib/repair'
 import { canonicalCode } from '@/lib/processCodes'
 import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 import { requireAdmin } from '@/lib/auth'
+import { markProcessEntered } from '@/lib/processTimes'
 
 
 export async function GET() {
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
       current_process: nextProcess || null,
       sent_at: new Date().toISOString(),
     })
+    if (nextProcess) await markProcessEntered(batch_id, nextProcess)
     await auditLog({ action:'faulty_ok', entity_type:'faulty_record', entity_id:id, new_value: nextProcess || 'completed' })
     await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
     return NextResponse.json({ ok: true, next_process: nextProcess })
@@ -122,11 +124,23 @@ export async function POST(req: NextRequest) {
 
   // ── Standard update ───────────────────────────────────────────────────────
   if (action === 'update') {
+    // By hand a record can only be WRITTEN OFF. Open → Resolved goes through
+    // "Mark OK" and → Repairing through "Reprocess", which also move the batch;
+    // changing only the status would leave the batch stuck as faulty.
     const patch:Record<string,any> = {}
-    if (payload.status !== undefined) patch.status = payload.status
+    if (payload.status !== undefined) {
+      const { data: cur } = await dbSelect('faulty_records', { id: `eq.${id}`, limit: '1' }, 'status')
+      const was = cur?.[0]?.status
+      if (payload.status !== was) {
+        if (payload.status !== 'written-off') {
+          return NextResponse.json({ ok:false, error:`Use "Mark OK" or "Reprocess" to change the status — only "Written Off" can be set here.` }, { status:400 })
+        }
+        patch.status = 'written-off'
+        patch.resolved_at = new Date().toISOString()
+      }
+    }
     if (payload.notes  !== undefined) patch.notes  = payload.notes
-    if (payload.if_ok  !== undefined) patch.if_ok  = payload.if_ok
-    if (payload.status === 'resolved') patch.resolved_at = new Date().toISOString()
+    if (!Object.keys(patch).length) return NextResponse.json({ ok:true })
     const { error } = await dbUpdate('faulty_records', { id }, patch)
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
     return NextResponse.json({ ok:true })

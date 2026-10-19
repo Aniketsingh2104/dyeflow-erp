@@ -15,12 +15,33 @@ const DEFAULTS: FactorySettings = {
   orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '',
 }
 
+// Defined OUTSIDE the page component — a component defined inside render is a
+// new component on every keystroke, so the input lost focus after each letter.
+function Field({ label, value, onChange, placeholder, note }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; note?: string
+}) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{ width: '100%', maxWidth: 340, padding: '8px 12px', fontSize: 14,
+          border: '1px solid var(--border-medium)', borderRadius: 6,
+          background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+      />
+      {note && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{note}</div>}
+    </div>
+  )
+}
+
 export default function FactorySettingsPage() {
   const [form,    setForm]    = useState<FactorySettings>(DEFAULTS)
   const [saved,   setSaved]   = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving,  setSaving]  = useState(false)
-  const [preview, setPreview] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -30,28 +51,18 @@ export default function FactorySettingsPage() {
       if (data.ok && data.value) {
         const s = { ...DEFAULTS, ...data.value }
         setForm(s)
-        updatePreview(s.orderPrefix)
       }
     } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  const updatePreview = (prefix: string) => {
-    const year = new Date().getFullYear()
-    const n = String(Math.floor(Math.random() * 900) + 100)
-    setPreview(`${prefix || 'DYG'}-${year}-${n}`)
-  }
-
   const handleChange = (field: keyof FactorySettings, value: string) => {
-    const next = { ...form, [field]: value }
-    setForm(next)
-    if (field === 'orderPrefix') updatePreview(value)
+    setForm(prev => ({ ...prev, [field]: value }))
   }
 
   const handleSave = async () => {
-    if (!form.orderPrefix.trim()) { alert('Order number prefix is required.'); return }
-    const clean = { ...form, orderPrefix: form.orderPrefix.trim().toUpperCase() }
+    const clean = { ...form }
     setSaving(true)
     try {
       const res = await fetch('/api/setup/settings', {
@@ -62,39 +73,12 @@ export default function FactorySettingsPage() {
       const data = await res.json()
       if (!data.ok) throw new Error(data.error)
       setForm(clean)
-      // Also keep localStorage in sync for backward compat
-      if (typeof window !== 'undefined') {
-        try {
-          const raw = localStorage.getItem('dyeflow_db')
-          const db  = raw ? JSON.parse(raw) : {}
-          if (!db.settings) db.settings = {}
-          db.settings.factory = clean
-          localStorage.setItem('dyeflow_db', JSON.stringify(db))
-          window.dispatchEvent(new Event('dyeflow-db-updated'))
-        } catch {}
-      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       alert(`Save failed: ${err}`)
     } finally { setSaving(false) }
   }
-
-  const Field = ({ label, field, placeholder, note }: { label: string; field: keyof FactorySettings; placeholder?: string; note?: string }) => (
-    <div style={{ marginBottom: 18 }}>
-      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</label>
-      <input
-        type="text"
-        value={form[field] as string}
-        onChange={e => handleChange(field, e.target.value)}
-        placeholder={placeholder}
-        style={{ width: '100%', maxWidth: 340, padding: '8px 12px', fontSize: 14,
-          border: '1px solid var(--border-medium)', borderRadius: 6,
-          background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-      />
-      {note && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{note}</div>}
-    </div>
-  )
 
   if (loading) return (
     <div style={{ textAlign: 'center', padding: 80, color: 'var(--text-tertiary)', fontSize: 14 }}>
@@ -107,7 +91,7 @@ export default function FactorySettingsPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 800 }}>⚙ Factory Settings</div>
-          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>Configure factory-level settings including the order number format</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>Factory details used on reports and print-outs</div>
         </div>
         <Link href="/setup"><button className="small">← Setup</button></Link>
       </div>
@@ -115,7 +99,7 @@ export default function FactorySettingsPage() {
       {saved && (
         <div style={{ background: 'var(--success-light)', color: 'var(--success)', border: '1px solid #6EE7B7',
           borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 13, fontWeight: 600 }}>
-          ✓ Settings saved to Supabase
+          ✓ Settings saved
         </div>
       )}
 
@@ -123,22 +107,11 @@ export default function FactorySettingsPage() {
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
         borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Order Number Format</div>
-        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>
-          Order numbers are generated as <code style={{ background: 'var(--bg-secondary)', padding: '1px 5px', borderRadius: 4 }}>PREFIX-YYYY-N</code>. Set the prefix to match your factory's naming convention.
-        </div>
-        <Field label="Order Number Prefix *" field="orderPrefix" placeholder="e.g. DYG, FAB, TXT"
-          note="3–6 uppercase letters. Will be auto-uppercased on save." />
-        <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '12px 16px',
-          display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>PREVIEW</span>
-          <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)', fontFamily: 'monospace' }}>{preview}</span>
-          <button onClick={() => updatePreview(form.orderPrefix)}
-            style={{ fontSize: 11, border: 'none', background: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0 }}>
-            ↻ new sample
-          </button>
-        </div>
-        <div style={{ marginTop: 12, padding: '10px 14px', background: '#FEF3C7', borderRadius: 8, fontSize: 12, color: '#92400E' }}>
-          ⚠️ Changing the prefix only affects <strong>new orders</strong> created after saving.
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+          Order numbers are given by the database as{' '}
+          <code style={{ background: 'var(--bg-secondary)', padding: '1px 5px', borderRadius: 4 }}>DYE{String(new Date().getFullYear()).slice(2)}-0001</code>,
+          {' '}one after another and never repeated, even when two people save at the same time.
+          The year part changes by itself every January.
         </div>
       </div>
 
@@ -147,10 +120,10 @@ export default function FactorySettingsPage() {
         borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>Factory Information</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
-          <Field label="Factory Name" field="factoryName" placeholder="e.g. ABC Dyeing Industries" />
-          <Field label="City"         field="city"        placeholder="e.g. Surat" />
-          <Field label="GST Number"   field="gstNumber"   placeholder="e.g. 24AAAAA0000A1Z5" />
-          <Field label="Phone"        field="phone"       placeholder="e.g. +91 98765 43210" />
+          <Field label="Factory Name" value={form.factoryName} onChange={v => handleChange('factoryName', v)} placeholder="e.g. ABC Dyeing Industries" />
+          <Field label="City" value={form.city} onChange={v => handleChange('city', v)} placeholder="e.g. Surat" />
+          <Field label="GST Number" value={form.gstNumber} onChange={v => handleChange('gstNumber', v)} placeholder="e.g. 24AAAAA0000A1Z5" />
+          <Field label="Phone" value={form.phone} onChange={v => handleChange('phone', v)} placeholder="e.g. +91 98765 43210" />
         </div>
       </div>
 

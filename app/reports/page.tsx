@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import Link from 'next/link'
+import { isFaultyOpen, isFaultyRepairing, isFaultyClosed, isFobOpen, isFobRepairing, isFobClosed } from '@/lib/recordStatus'
 
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
   return (
@@ -120,7 +121,7 @@ export default function ReportsPage() {
       })
 
       // FOB by type
-      const fobOpen     = fob.filter((r: any) => r.status === 'open')
+      const fobOpen     = fob.filter(isFobOpen)          // open + sample sent (lib/recordStatus.ts)
       const fobDyeing   = fob.filter((r: any) => r.fob_type === 'dyeing').length
       const fobRolling  = fob.filter((r: any) => r.fob_type === 'rolling').length
 
@@ -134,7 +135,11 @@ export default function ReportsPage() {
         machines: machineStats,
         supervisors: supervisorStats,
         totalFaulty: faulty.length,
-        faultyOpen: faulty.filter((r: any) => r.status === 'open').length,
+        faultyOpen:      faulty.filter(isFaultyOpen).length,
+        faultyRepairing: faulty.filter(isFaultyRepairing).length,
+        faultyResolved:  faulty.filter(isFaultyClosed).length,
+        fobRepairing:    fob.filter(isFobRepairing).length,
+        fobApproved:     fob.filter(isFobClosed).length,
         faultyByProcess,
         totalFob: fob.length, fobOpen: fobOpen.length, fobDyeing, fobRolling,
         // Raw for export
@@ -169,8 +174,12 @@ export default function ReportsPage() {
       ['Kg Done', data.totalKgDone],
       ['Kg In Process', data.totalKgInProcess],
       ['Total Batches', data.totalBatches],
-      ['Open Faulty', data.faultyOpen],
-      ['Open FOB', data.fobOpen],
+      ['Open Faulty (waiting for decision)', data.faultyOpen],
+      ['Faulty in Repair', data.faultyRepairing],
+      ['Faulty Resolved', data.faultyResolved],
+      ['Open FOB (incl. sample sent)', data.fobOpen],
+      ['FOB in Repair', data.fobRepairing],
+      ['FOB Approved', data.fobApproved],
     ])
     XLSX.utils.book_append_sheet(wb, ws, 'Summary')
 
@@ -376,10 +385,11 @@ export default function ReportsPage() {
       {tab === 'faulty' && (
         <>
           <SectionTitle>Faulty Summary</SectionTitle>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
             <StatCard label="Total Faulty" value={data.totalFaulty} />
-            <StatCard label="Open"         value={data.faultyOpen}               color={data.faultyOpen > 0 ? 'var(--danger)' : undefined} />
-            <StatCard label="Resolved"     value={data.totalFaulty - data.faultyOpen} color="var(--success)" />
+            <StatCard label="Open"         value={data.faultyOpen}      color={data.faultyOpen > 0 ? 'var(--danger)' : undefined} />
+            <StatCard label="In Repair"    value={data.faultyRepairing} color={data.faultyRepairing > 0 ? 'var(--warning)' : undefined} />
+            <StatCard label="Resolved"     value={data.faultyResolved}  color="var(--success)" />
           </div>
           {Object.keys(data.faultyByProcess).length > 0 && (
             <>
@@ -425,9 +435,11 @@ export default function ReportsPage() {
       {tab === 'fob' && (
         <>
           <SectionTitle>FOB Summary</SectionTitle>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
             <StatCard label="Total FOB"    value={data.totalFob}  />
-            <StatCard label="Open"         value={data.fobOpen}   color={data.fobOpen > 0 ? 'var(--danger)' : undefined} />
+            <StatCard label="Open / Sent"  value={data.fobOpen}   color={data.fobOpen > 0 ? 'var(--danger)' : undefined} />
+            <StatCard label="In Repair"    value={data.fobRepairing} color={data.fobRepairing > 0 ? 'var(--warning)' : undefined} />
+            <StatCard label="Approved"     value={data.fobApproved}  color="var(--success)" />
             <StatCard label="Dyeing FOB"   value={data.fobDyeing}  color="var(--accent)" />
             <StatCard label="Rolling FOB"  value={data.fobRolling} color="var(--purple)" />
           </div>
