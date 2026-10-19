@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbDelete, dbUpdate } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'shifts', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
   const query: Record<string, string> = { order: 'shift_date.desc,shift.asc', limit: '200' }
@@ -15,6 +17,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'shifts', (body as any)?.action); if (g.deny) return g.deny }
   const { action } = body
 
   if (action === 'create') {

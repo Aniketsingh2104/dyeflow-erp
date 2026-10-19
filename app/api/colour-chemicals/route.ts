@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'colour-chemicals', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('colour_chemicals',
     { order: 'name.asc', limit: '5000' },
     'id,name,type,unit,notes,lead_time,safety_factor,avg_daily_consumption,created_at'
@@ -13,6 +15,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'colour-chemicals', (body as any)?.action); if (g.deny) return g.deny }
   const { action } = body
 
   // Master edits are admin only; 'update_planning' (lead time / safety /

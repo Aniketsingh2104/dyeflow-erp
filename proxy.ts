@@ -6,9 +6,10 @@
  *      pages: redirect to /login (then back to the page after signing in)
  *      /api:  401 JSON
  *  • Valid session → passes the user to API routes as request headers
- *    (x-dyeflow-user-id / x-dyeflow-username / x-dyeflow-role). Any copies of
- *    those headers sent by the browser are always removed first, so they
- *    can't be faked.
+ *    (x-dyeflow-user-id / x-dyeflow-username). Any copies of those headers
+ *    (and the old x-dyeflow-role) sent by the browser are always removed
+ *    first, so they can't be faked. Roles and permissions are NOT taken from
+ *    here — every API reads them from the database (lib/access.ts).
  *
  * Public: /login, /api/auth (sign in / out / who-am-I), /api/keep-alive and the Ollama relay
  * (it checks its own shared secret).
@@ -52,7 +53,6 @@ export function proxy(req: NextRequest) {
 
   headers.set('x-dyeflow-user-id', s.uid)
   headers.set('x-dyeflow-username', s.u)
-  headers.set('x-dyeflow-role', s.r)
   return NextResponse.next({ request: { headers } })
 }
 

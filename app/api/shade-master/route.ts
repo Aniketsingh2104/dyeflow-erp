@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'shade-master', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('shade_master',
     { order: 'shade_name.asc', limit: '5000' },
     'id,shade_name,shade_group,created_at'

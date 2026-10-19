@@ -93,7 +93,7 @@ export default function FobPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'mark_sent', id })
       }).then(r => r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('📤 FOB marked as sent')
       load()
     } finally { setSaving(false) }
@@ -111,7 +111,7 @@ export default function FobPage() {
           process_route: r.process_route || []
         })
       }).then(x => x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast(res.next_process ? `✓ FOB Approved → ${res.next_process}` : '✓ FOB Approved — complete')
       load()
     } finally { setSaving(false) }
@@ -133,7 +133,7 @@ export default function FobPage() {
           reprocess_reason: data.reprocess_reason,
         })
       }).then(x => x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       const msg = data.reprocess_type === 'partial' && res.remain_kg > 0
         ? `🔄 ${res.repair_kg}Kg to Repairing · ${res.remain_kg}Kg → ${res.next_process}`
         : '🔄 Full batch sent to Repairing Orders'
@@ -150,7 +150,7 @@ export default function FobPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id:editModal.id, ...editData })
       }).then(r => r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('✓ Record updated'); setEditModal(null); load()
     } finally { setSaving(false) }
   }
@@ -161,7 +161,7 @@ export default function FobPage() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ action:'delete', id })
     }).then(r => r.json())
-    if (!res.ok) { alert('Error: ' + res.error); return }
+    if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
     showToast('✓ Deleted'); load()
   }
 

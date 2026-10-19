@@ -92,12 +92,12 @@ export default function BatchesPage() {
 
     if (!confirm(`Mark batch ${batch.batch_id} as done in ${curCode || '(current process)'}?`)) return
 
-    const { error } = await markProcessDone(batch.id, curCode, nextProcess)
-    if (error) { alert('Error: ' + error); return }
+    const { error, next_process } = await markProcessDone(batch.id, curCode, nextProcess)
+    if (error) { alert('Error: ' + error); loadBatches(); return }
 
     showToast(
-      nextProcess
-        ? `✓ ${batch.batch_id} moved to ${nextProcess}`
+      next_process
+        ? `✓ ${batch.batch_id} moved to ${next_process}`
         : `✓ ${batch.batch_id} — all processes complete`
     )
     loadBatches()

@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server"
-import { dbSelect, dbUpdate } from "@/lib/supabase"
+import { dbSelect, dbSelectIn, sb } from "@/lib/supabase"
+import { canonicalCode } from "@/lib/processCodes"
+import { guard } from "@/lib/access"
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const g = await guard(req, 'repair-assign', 'GET')
+  if (g.deny) return g.deny
   try {
     // Get ALL repairing orders (pending or In Repair)
+    // only open repairs (closed ones can never be assigned); dbSelect pages past 1000 rows
     const { data: repairs, error: repErr } = await dbSelect("repairing_orders",
-      { limit: "1000" },
+      { status: 'in.(pending,"In Repair")' },
       "id,batch_id,repair_kg,repair_mtr,repair_taka,source_type,reprocess_type,notes,status"
     )
     if (repErr) return NextResponse.json({ ok: false, error: repErr }, { status: 500 })
@@ -15,9 +20,7 @@ export async function GET() {
     if (!batchIds.length) return NextResponse.json({ ok: true, data: [] })
 
     // Fetch those batches (status = repairing OR pending = assigned but not yet in process)
-    const { data: batches, error: bErr } = await dbSelect("batches",
-      { id: `in.(${batchIds.join(",")})`, limit: "1000" },
-      "id,batch_id,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
+    const { data: batches, error: bErr } = await dbSelectIn("batches", 'id', batchIds, "id,batch_id,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
     )
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
 
@@ -33,9 +36,7 @@ export async function GET() {
     const orderIds = [...new Set((batches || []).map((b: any) => b.order_id).filter(Boolean))]
     let orderMap: Record<string, any> = {}
     if (orderIds.length) {
-      const { data: orders } = await dbSelect("orders",
-        { id: `in.(${orderIds.join(",")})`, limit: "1000" },
-        "id,order_number,party,sub_party,sales_person,article,color,gsm,blend,width,lab_no,lot_no,challan_no,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)"
+      const { data: orders } = await dbSelectIn("orders", 'id', orderIds, "id,order_number,party,sub_party,sales_person,article,color,gsm,blend,width,lab_no,lot_no,challan_no,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)"
       )
       for (const o of orders || []) orderMap[o.id] = o
     }
@@ -85,23 +86,33 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  const g = await guard(req, 'repair-assign', body.action)
+  if (g.deny) return g.deny
   const { action, batch_id, repair_id, supervisor_id, machine_id, process_route } = body
   if (action === "assign") {
     if (!batch_id || !machine_id || !process_route?.length) {
       return NextResponse.json({ ok: false, error: "batch_id, machine_id, process_route required" }, { status: 400 })
     }
-    const { error: bErr } = await dbUpdate("batches", { id: batch_id }, {
-      supervisor_id:   supervisor_id || null,
-      machine_id,
-      process_route,
-      // Keep status as 'repairing' — only changes to 'pending' when Split/Full Split clicked
-      status:          "repairing",
-      current_process: null,
+    // Only a batch that is waiting in repair (an open repairing order, batch
+    // still 'repairing') can get a new route / machine here
+    const { data: ros } = await dbSelect("repairing_orders",
+      { batch_id: `eq.${batch_id}`, status: 'in.(pending,"In Repair")', limit: "1" }, "id")
+    const ro = ros?.[0]
+    if (!ro || (repair_id && ro.id !== repair_id)) {
+      return NextResponse.json({ ok: false, stale: true, error: "This batch is no longer waiting in repair. Refresh the page." }, { status: 409 })
+    }
+    const route = (process_route as string[]).map(c => canonicalCode(c)).filter(Boolean)
+    const { data: rows, error: bErr } = await sb<any[]>("/batches", {
+      method: "PATCH",
+      params: { id: `eq.${batch_id}`, status: "eq.repairing" },
+      body: JSON.stringify({ supervisor_id: supervisor_id || null, machine_id, process_route: route, updated_at: new Date().toISOString() }),
     })
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
-    if (repair_id) {
-      await dbUpdate("repairing_orders", { id: repair_id }, { status: "In Repair" })
+    if (!Array.isArray(rows) || !rows.length) {
+      return NextResponse.json({ ok: false, stale: true, error: "This batch is no longer waiting in repair. Refresh the page." }, { status: 409 })
     }
+    await sb("/repairing_orders", { method: "PATCH", params: { id: `eq.${ro.id}`, status: "eq.pending" },
+      body: JSON.stringify({ status: "In Repair" }), headers: { "Prefer": "return=minimal" } })
     return NextResponse.json({ ok: true })
   }
   return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 })

@@ -15,7 +15,7 @@
  *       to read the tables directly from the browser.)
  */
 import { useEffect, useRef } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Navigation from '@/components/Navigation'
 import { saveUiSession, clearUiSession } from '@/lib/clientSession'
 
@@ -48,6 +48,7 @@ function patchFetchOnce() {
 
 export default function DbProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const router   = useRouter()
   const isLogin  = pathname === '/login'
   const lastSig  = useRef<string | null>(null)
 
@@ -64,13 +65,17 @@ export default function DbProvider({ children }: { children: React.ReactNode }) 
         if (j?.ok && j.user) {
           saveUiSession(j.user)
           window.dispatchEvent(new Event('storage'))   // Navigation / permission hooks re-read it
+          // Party (customer) logins only use their order sheets
+          if (j.user.role === 'party' && !pathname.startsWith('/order-sheets') && !pathname.startsWith('/sheet')) {
+            router.replace('/order-sheets')
+          }
         } else if (status === 401) {
           goToLogin()
         }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [pathname, isLogin])
+  }, [pathname, isLogin, router])
 
   // Light change-watch instead of Realtime
   useEffect(() => {

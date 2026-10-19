@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbUpsert } from '@/lib/supabase'
 import { DATE_COL, dateColFor, anchorColFor } from '@/lib/processCodes'
 
@@ -7,6 +8,7 @@ import { DATE_COL, dateColFor, anchorColFor } from '@/lib/processCodes'
 const PROC_COLS = DATE_COL
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'date-plans', 'GET'); if (g.deny) return g.deny }
   try {
     const { searchParams } = new URL(req.url)
     const batchId = searchParams.get('batch_id')       // uuid
@@ -27,6 +29,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
+    { const g = await guard(req, 'date-plans', (body as any)?.action); if (g.deny) return g.deny }
     const { action } = body
 
     // ── Upsert date plan for a batch ──────────────────────────────────────

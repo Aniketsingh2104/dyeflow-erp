@@ -4,10 +4,12 @@
  * Backed by process_route_templates table (migrated from settings.processRouteMaster)
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'route-templates', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect(
     'process_route_templates', { order: 'created_at.asc' },
     'id,name,route,steps,created_at,updated_at'

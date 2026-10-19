@@ -171,9 +171,9 @@ function FmsContent() {
     if (!confirm(`Mark ${r.batchId} DONE in ${procName(r.routeCode)}?${nextTxt}`)) return
     setSaving(true)
     try {
-      const { error } = await markProcessDone(r.id, r.routeCode, r.next)
-      if (error) { flash('Not saved: ' + error, false); return }
-      flash(`✅ ${r.batchId} ${r.next ? '→ ' + procName(r.next) : 'completed'}`)
+      const { error, next_process } = await markProcessDone(r.id, r.routeCode, r.next)
+      if (error) { flash('Not saved: ' + error, false); load(selected); return }
+      flash(`✅ ${r.batchId} ${next_process ? '→ ' + procName(next_process) : 'completed'}`)
       load(selected)
     } finally { setSaving(false) }
   }

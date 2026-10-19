@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbDelete } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'setup-holidays', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type')
 

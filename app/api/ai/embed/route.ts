@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { embedText, embedTexts, OllamaError, OLLAMA_BASE_URL, EMBED_MODEL } from '@/lib/rag/ollama'
 
 // ── app/api/ai/embed — generic Ollama embedding endpoint ────────────────────
@@ -33,6 +34,7 @@ function ollamaErrorResponse(err: OllamaError) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
+    { const g = await guard(req, 'ai-embed', 'POST'); if (g.deny) return g.deny }
 
     if (Array.isArray(body?.texts)) {
       const texts: string[] = body.texts.filter((t: any) => typeof t === 'string' && t.trim())
@@ -55,7 +57,8 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'ai-embed', 'GET'); if (g.deny) return g.deny }
   try {
     const embedding = await embedText('healthcheck')
     return NextResponse.json({ ok: true, ollama_url: OLLAMA_BASE_URL, model: EMBED_MODEL, dims: embedding.length })

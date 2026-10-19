@@ -190,10 +190,10 @@ export default function SplittedOrdersPage() {
     try {
       const res  = await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'process_done', batch_id: row.id, process_code: row.current_process, next_process: next }),
+        body: JSON.stringify({ action: 'process_done', batch_id: row.id, process_code: row.current_process }),
       })
       const data = await res.json()
-      if (!data.ok) { alert('Error: ' + data.error); return }
+      if (!data.ok) { alert('Error: ' + data.error); if (data.stale) load(); return }
       showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'completed!'}`)
       load()
     } catch (err: any) { alert('Network error: ' + err.message) }

@@ -118,6 +118,7 @@ export default function UserManagementPage() {
   const [supervisorNames,   setSupervisorNames]   = useState<string[]>([])
   const [availableParties,  setAvailableParties]  = useState<string[]>([])
   const [saveError,         setSaveError]         = useState('')
+  const [sheets,            setSheets]            = useState<{ id: string; title: string; assigned_to?: string }[]>([])
 
   const [formData, setFormData] = useState({
     username: '', fullName: '', password: '', confirmPassword: '',
@@ -129,12 +130,14 @@ export default function UserManagementPage() {
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [usersRes, pagesRes, supRes, ordersRes] = await Promise.all([
+      const [usersRes, pagesRes, supRes, ordersRes, sheetsRes] = await Promise.all([
         fetch('/api/users',       { cache: 'no-store' }).then(r => r.json()),
         fetchPageList(),
         fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/order-sheets', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
+      setSheets((sheetsRes.data || []).map((x: any) => ({ id: x.id, title: x.title, assigned_to: x.assigned_to })))
 
       const shapedUsers = (usersRes.data || []).map(shapeUser)
       setUsers(shapedUsers)
@@ -158,7 +161,7 @@ export default function UserManagementPage() {
   const setPagePerm    = (path: string, perm: PagePerm) =>
     setFormPerms(prev => ({ ...prev, pages: { ...prev.pages, [path]: perm } }))
   const applyRolePreset = (role: RolePreset) => {
-    setFormPerms(buildPermissionsFromRole(role, allPages, formPerms.supervisorFilter))
+    setFormPerms(buildPermissionsFromRole(role, allPages, formPerms.supervisorFilter, formPerms.allowedSheets || []))
     setFormData(f => ({ ...f, role }))
   }
   const grantGroupAll  = (group: string, perm: PagePerm) => {
@@ -500,6 +503,41 @@ export default function UserManagementPage() {
                     <input value={formData.notes} onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))}
                       placeholder="Optional notes about this user" autoComplete="off" />
                   </div>
+
+                  {/* Order sheets this user may open (party users: the only thing they can use) */}
+                  {formData.role !== 'admin' && (
+                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>📄 Order sheets</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+                        {formData.role === 'party'
+                          ? 'A party user can only open and fill these sheets — nothing else in DyeFlow.'
+                          : 'Sheets this user can open and fill (staff with Edit on Pending Approvals can open every sheet).'}
+                      </div>
+                      {sheets.length === 0 ? (
+                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No order sheets yet — create one on the Order Sheets page.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
+                          {sheets.map(sh => {
+                            const on = (formPerms.allowedSheets || []).includes(sh.id)
+                            return (
+                              <label key={sh.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                                <input type="checkbox" checked={on}
+                                  onChange={e => setFormPerms(p => {
+                                    const cur = new Set(p.allowedSheets || [])
+                                    if (e.target.checked) cur.add(sh.id); else cur.delete(sh.id)
+                                    return { ...p, allowedSheets: [...cur] }
+                                  })} />
+                                {sh.title}{sh.assigned_to ? <span style={{ color: 'var(--text-tertiary)' }}> · {sh.assigned_to}</span> : null}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {formData.role === 'party' && !(formPerms.allowedSheets || []).some(id => sheets.some(sh => sh.id === id)) && (
+                        <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 8 }}>⚠ Tick at least one sheet, or this party user can't open anything.</div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Supervisor filter */}
                   <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid var(--border-light)' }}>

@@ -98,7 +98,7 @@ export default function FaultyPage() {
           process_route:  okModal.process_route || [],
         })
       }).then(r => r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       const next = res.next_process
       showToast(next ? `✓ Batch marked OK → sent to ${next}` : '✓ Batch marked OK — completed')
       setOkModal(null)
@@ -128,7 +128,7 @@ export default function FaultyPage() {
           reprocess_reason: data.reprocess_reason,
         })
       }).then(r => r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       const msg = data.reprocess_type === 'partial' && res.remain_kg > 0
         ? `🔄 ${res.repair_kg}Kg to Repairing · ${res.remain_kg}Kg → ${res.next_process}`
         : '🔄 Full batch sent to Repairing Orders'
@@ -146,7 +146,7 @@ export default function FaultyPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update', id: editModal.id, ...editData })
       }).then(r => r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('✓ Record updated')
       setEditModal(null)
       load()
@@ -159,7 +159,7 @@ export default function FaultyPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', id })
     }).then(r => r.json())
-    if (!res.ok) { alert('Error: ' + res.error); return }
+    if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
     showToast('✓ Deleted')
     load()
   }

@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
 
 // Allow triggering with a plain browser visit too — this is a manual/dev-only
 // maintenance action, not a public API endpoint.
-export async function GET(req: NextRequest) {
-  return POST(req)
+// Seeding changes data, so it only runs on POST (a link / GET can't trigger it)
+export async function GET() {
+  return NextResponse.json({ ok: false, error: 'Use POST to re-seed the knowledge base.' }, { status: 405 })
 }

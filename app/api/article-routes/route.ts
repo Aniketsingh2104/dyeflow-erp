@@ -4,11 +4,13 @@
  * Backed by article_process_routes table (migrated from settings.articleProcessMap)
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'article-routes', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const article = searchParams.get('article')
 

@@ -159,7 +159,7 @@ export async function fetchPageList(): Promise<PageDef[]> {
   }
 }
 
-export type RolePreset = 'admin' | 'machine_operator' | 'supervisor_role' | 'lab_technician' | 'viewer' | 'custom'
+export type RolePreset = 'admin' | 'machine_operator' | 'supervisor_role' | 'lab_technician' | 'viewer' | 'custom' | 'party'
 
 export const ROLE_LABELS: Record<RolePreset, string> = {
   admin:            'Admin (Full Access)',
@@ -168,12 +168,14 @@ export const ROLE_LABELS: Record<RolePreset, string> = {
   lab_technician:   'Lab Technician',
   viewer:           'Viewer (Read-Only)',
   custom:           'Custom',
+  party:            'Party (own order sheets only)',
 }
 
 export function buildPermissionsFromRole(
   role: RolePreset,
   allPages: PageDef[],
-  supervisorFilter = 'all'
+  supervisorFilter = 'all',
+  allowedSheets: string[] = [],     // kept when a preset is applied
 ): UserPermissions {
   const pages: Record<string, PagePerm> = {}
   const grant     = (path: string, perm: PagePerm) => { pages[path] = perm }
@@ -195,9 +197,13 @@ export function buildPermissionsFromRole(
       grantGroup('Lab', { view: true, edit: true, delete: false })
       ;['/orders', '/batches', '/'].forEach(p => grant(p, VIEW_PERM))
       break
+    case 'party':
+      // customer login: only the order sheets picked in User Management
+      grant('/order-sheets', { view: true, edit: true, delete: false })
+      break
     default: break
   }
-  return { pages, supervisorFilter }
+  return { pages, supervisorFilter, allowedSheets }
 }
 
 const SESSION_KEY = 'dyeflow_session'

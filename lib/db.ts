@@ -97,11 +97,14 @@ export async function createSplits(orderId: string, batches: any[], processRoute
   } catch (e: any) { return { data: null, error: e.message } }
 }
 
-export async function markProcessDone(batchId: string, processCode: string, nextProcess?: string): Promise<{ error: string | null }> {
+// The next process is worked out on the server from the batch's own route
+// and returned as next_process; `_nextProcess` is kept only so existing
+// callers still compile.
+export async function markProcessDone(batchId: string, processCode: string, _nextProcess?: string): Promise<{ error: string | null; next_process?: string | null }> {
   try {
-    const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'process_done', batch_id: batchId, process_code: processCode, next_process: nextProcess }) })
+    const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'process_done', batch_id: batchId, process_code: processCode }) })
     const data = await res.json()
-    return { error: data.error || null }
+    return { error: data.error || null, next_process: data.next_process ?? null }
   } catch (e: any) { return { error: e.message } }
 }
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbSelectAll, sb } from '@/lib/supabase'
 import { lastByKey } from '@/lib/dedupe'
 
@@ -18,7 +19,8 @@ import { lastByKey } from '@/lib/dedupe'
 //      report format — Balance Qty column) — conversion to Kg happens at
 //      display time only.
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'colour-store', 'GET'); if (g.deny) return g.deny }
   const [chemRes, stockRes] = await Promise.all([
     dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,lead_time,safety_factor,avg_daily_consumption,created_at'),
     dbSelectAll('colour_store_stock', { order: 'stock_date.desc' }, 'id,chemical_id,name,group_name,stock_qty,stock_date,rate,created_at'),
@@ -30,6 +32,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'colour-store', (body as any)?.action); if (g.deny) return g.deny }
   const { action } = body
 
   if (action === 'upload_stock') {

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'article-supervisor-map', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const supervisor = searchParams.get('supervisor')
   const article    = searchParams.get('article')

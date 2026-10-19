@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'greige', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const id    = searchParams.get('id')
   const type  = searchParams.get('type') // entries | lots
@@ -31,6 +33,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'greige', (body as any)?.action); if (g.deny) return g.deny }
   const { action, id, ...payload } = body
 
   if (action === 'create_entry') {

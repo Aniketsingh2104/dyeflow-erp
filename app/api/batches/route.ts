@@ -1,13 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
-import { canonicalCode, sameCode } from '@/lib/processCodes'
-import { markProcessEntered } from '@/lib/processTimes'
+import { canonicalCode } from '@/lib/processCodes'
+import { guard, pick, canWorkProcess } from '@/lib/access'
+import { rpc, rpcFail } from '@/lib/rpc'
+
+// Columns the generic "update" action may change (machine sheet numbering,
+// Date Calculator, supervisor pages). Where a batch IS (process / status /
+// done / faulty) is never set here — only by the batch-move actions below
+// (send_first, process_done, mark_faulty, rollback …), which check the batch
+// in the database first. Anything else the browser sends is dropped.
+const BATCH_UPDATE_FIELDS = [
+  'date_calc_plan', 'dc_generated_once', 'dc_regenerate', 'supervisor_id', 'machine_id',
+  'process_machine_map', 'notes', 'planned_date', 'actual_date', 'fms_actual_dates',
+] as const
+// Most kg a split may go over the order qty (rounding)
+const SPLIT_TOLERANCE_KG = 0.5
 import { deriveMachineMap, primaryMachine } from '@/lib/machineMap'
 import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
 
+function noProcess(code: string) {
+  return NextResponse.json({ ok: false,
+    error: `You don't have Edit permission on FMS — ${code}. Ask an admin to give it to you in User Management.` }, { status: 403 })
+}
+
 // GET /api/batches
 export async function GET(req: NextRequest) {
+  const g = await guard(req, 'batches', 'GET')
+  if (g.deny) return g.deny
   try {
     const { searchParams } = new URL(req.url)
     const uuid_id    = searchParams.get('id')
@@ -51,7 +71,7 @@ export async function GET(req: NextRequest) {
 // highest number the order already has (B1, B2 … even after deletes).
 async function getSplitContext(order_id: string) {
   const { data: orderRows, error: orderErr } = await dbSelect('orders',
-    { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,qty_kg,qty_mtr,no_of_taka,process_machines,process_route')
+    { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,status,qty_kg,qty_mtr,no_of_taka,process_machines,process_route')
   const order = orderRows?.[0]
   if (orderErr || !order) {
     return { order: null, nextNo: 0, allocatedKg: 0, error: orderErr || 'Order not found' }
@@ -92,7 +112,10 @@ async function insertBatchProcesses(created: any[] | null | undefined, process_r
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { action, _user, ...payload } = body
+    const { action, _user: _ignored, ...payload } = body
+    const _user = undefined            // the audit log uses the signed-in user
+    const g = await guard(req, 'batches', action)
+    if (g.deny) return g.deny
     // One standard spelling for process codes (e.g. 'ADD' → 'Add', 'QA' → 'Qa')
     if (payload.process_code) payload.process_code = canonicalCode(payload.process_code)
     if (payload.next_process) payload.next_process = canonicalCode(payload.next_process)
@@ -111,10 +134,21 @@ export async function POST(req: NextRequest) {
       if (!parts.length) {
         return NextResponse.json({ ok: false, error: 'Every batch needs a quantity above 0 Kg' }, { status: 400 })
       }
+      if (ctx.order.status === 'hold') {
+        return NextResponse.json({ ok: false, error: `${ctx.order.order_number} is on hold — release the hold before splitting.` }, { status: 409 })
+      }
+      const newKg = parts.reduce((t: number, b: any) => t + (parseFloat(b.kg) || 0), 0)
+      const orderKg = parseFloat(ctx.order.qty_kg) || 0
+      if (orderKg > 0 && ctx.allocatedKg + newKg > orderKg + SPLIT_TOLERANCE_KG) {
+        return NextResponse.json({ ok: false, error:
+          `Too much: ${Math.round(ctx.allocatedKg)} Kg is already split and these batches add ${Math.round(newKg * 100) / 100} Kg, ` +
+          `but the order is ${orderKg} Kg (${Math.max(0, Math.round((orderKg - ctx.allocatedKg) * 100) / 100)} Kg left).` }, { status: 400 })
+      }
 
       // Client-sent batch_id is ignored — the server numbers new batches
       // after the highest existing one so IDs never collide or restart.
-      const route: string[] = process_route || ctx.order.process_route || []
+      // the order's route when the page didn't send one (an empty list counts as none)
+      const route: string[] = ((process_route?.length ? process_route : ctx.order.process_route) || []).map((c: string) => canonicalCode(c))
       const rows = parts.map((b: any, idx: number) => {
         // Which machine runs each process of this batch (lib/machineMap.ts)
         const map = deriveMachineMap(route, ctx.order.process_machines, b.machine_id || null, b.process_machine_map)
@@ -128,7 +162,7 @@ export async function POST(req: NextRequest) {
         mtr:           parseFloat(b.mtr)  || null,
         taka:          parseInt(b.taka)   || null,
         status:        'pending',
-        process_route: process_route || [],  // save route on batch so machine page shows correct process
+        process_route: route,  // save route on batch so machine page shows correct process
       }})
 
       const { data: created, error } = await sb<any[]>('/batches', {
@@ -137,8 +171,7 @@ export async function POST(req: NextRequest) {
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-      await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
-      await insertBatchProcesses(created, process_route)
+      await insertBatchProcesses(created, route)
 
       await auditLog({ username: _user, action: 'split', entity_type: 'order',
         entity_id: order_id,
@@ -149,80 +182,70 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'update') {
-      const { id, ...patch } = payload
+      const { id } = payload
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-      // Moving to a new process? remember when it arrived (lib/processTimes.ts)
-      let movedTo: string | null = null
-      let movedFrom: string | null = null
-      const moving = 'current_process' in patch
-      if (moving) {
-        const { data: prev } = await dbSelect('batches', { id: `eq.${id}`, limit: '1' }, 'current_process')
-        movedFrom = prev?.[0]?.current_process || null
-        if (patch.current_process && !sameCode(movedFrom, patch.current_process)) movedTo = patch.current_process
-      }
+      const patch: Record<string, any> = pick(payload, BATCH_UPDATE_FIELDS)
+      if (!Object.keys(patch).length) return NextResponse.json({ ok: false, error: 'Nothing to update' }, { status: 400 })
       const { error } = await dbUpdate('batches', { id }, { ...patch, updated_at: new Date().toISOString() })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-      if (movedTo) await markProcessEntered(id, movedTo, patch.sent_at)
-      if (moving && (movedFrom || null) !== (patch.current_process || null)) {
-        // Sent to first process / rolled back — recorded so Batch Trace can show it
-        await auditLog({ username: _user, action: 'batch_move', entity_type: 'batch', entity_id: id,
-          old_value: movedFrom || 'not started', new_value: patch.current_process || (patch.status || 'not started') })
-      }
-      await refreshOrderStatusForBatch(id)   // keep orders.status in step (lib/orderStatus.ts)
       return NextResponse.json({ ok: true })
     }
 
-    if (action === 'process_done') {
-      const { batch_id, process_code, next_process } = payload
+    // ── Send a waiting batch to the first process of its own route ─────────
+    // (First Process page) — refused if it was already sent (df_send_first)
+    if (action === 'send_first') {
+      const { id } = payload
+      if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+      const r = await rpc<any>('df_send_first', { p_batch: id })
+      if (r.error) return rpcFail(r)
+      await refreshOrderStatus(r.data?.order_id)
+      return NextResponse.json({ ok: true, first_process: r.data?.first_process ?? null })
+    }
+
+    // ── FMS rollback: one step back on the batch's own route (df_rollback) ─
+    // Only while the batch is running at that process with no open FOB.
+    if (action === 'rollback') {
+      const { batch_id, process_code } = payload
       if (!batch_id || !process_code) {
         return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
       }
-      await sb('/batch_processes', {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'done', done_at: new Date().toISOString() }),
-        params: { batch_id: `eq.${batch_id}`, process_code: `eq.${process_code}` },
-        headers: { 'Prefer': 'return=minimal' },
-      })
-      const batchPatch: Record<string, any> = { current_process: next_process || null }
-      if (!next_process) { batchPatch.is_done = true; batchPatch.status = 'done' }
-      await dbUpdate('batches', { id: batch_id }, batchPatch)
-      if (next_process) await markProcessEntered(batch_id, next_process)
-      await auditLog({ username: _user, action: 'process_done', entity_type: 'batch',
-        entity_id: batch_id, old_value: process_code, new_value: next_process || 'completed' })
-      await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)
-      return NextResponse.json({ ok: true })
+      if (!canWorkProcess(g.user!, process_code)) return noProcess(process_code)
+      const r = await rpc<any>('df_rollback', { p_batch: batch_id, p_code: process_code })
+      if (r.error) return rpcFail(r)
+      await refreshOrderStatus(r.data?.order_id)
+      return NextResponse.json({ ok: true, prev_process: r.data?.prev_process ?? null })
     }
 
+    // ── Process Done — one all-or-nothing database step (df_process_done):
+    // refuses if the batch is no longer at this process (stale page / double
+    // click) or has an open FOB; the next process comes from the batch's own
+    // route in the database, never from the browser.
+    if (action === 'process_done') {
+      const { batch_id, process_code } = payload
+      if (!batch_id || !process_code) {
+        return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
+      }
+      if (!canWorkProcess(g.user!, process_code)) return noProcess(process_code)
+      const r = await rpc<any>('df_process_done', { p_batch: batch_id, p_code: process_code })
+      if (r.error) return rpcFail(r)
+      await refreshOrderStatus(r.data?.order_id)   // keep orders.status in step (lib/orderStatus.ts)
+      return NextResponse.json({ ok: true, next_process: r.data?.next_process ?? null })
+    }
+
+    // ── Mark Faulty — one all-or-nothing database step (df_mark_faulty)
     if (action === 'mark_faulty') {
-      const { batch_id, order_id, faulty_type, faulty_kg, process_code, order_number, party, color } = payload
-      const now = new Date().toISOString()
-
-      // 1. Update batch: faulty status + save last_process so FMS page keeps showing it
-      await dbUpdate('batches', { id: batch_id }, {
-        is_faulty:       true,
-        status:          'faulty',
-        current_process: null,
-        last_process:    process_code,  // remember where it was faulty'd for FMS display
+      const { batch_id, faulty_type, faulty_kg, process_code } = payload
+      if (!batch_id || !process_code) {
+        return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
+      }
+      if (!canWorkProcess(g.user!, process_code)) return noProcess(process_code)
+      const r = await rpc<any>('df_mark_faulty', {
+        p_batch: batch_id, p_code: process_code, p_type: faulty_type || null,
+        p_kg: faulty_kg !== undefined && faulty_kg !== '' && faulty_kg !== null ? Number(faulty_kg) : null,
       })
-
-      // 2. Set done_at on batch_processes using RPC (reliable composite key update)
-      await sb('/rpc/mark_process_faulty', {
-        method: 'POST',
-        body: JSON.stringify({ p_batch_id: batch_id, p_process_code: process_code, p_done_at: now }),
-      })
-
-      // 3. Create faulty record with color
-      const { data, error } = await dbInsert('faulty_records', {
-        batch_id, order_id, order_number, party, color: color || null,
-        faulty_type, faulty_kg, process_code,
-        status: 'open',
-      })
-      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-
-      await auditLog({ username: _user, action: 'faulty_mark', entity_type: 'batch',
-        entity_id: batch_id, new_value: faulty_type })
-      await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step (lib/orderStatus.ts)
-      return NextResponse.json({ ok: true, data })
+      if (r.error) return rpcFail(r)
+      await refreshOrderStatus(r.data?.order_id)
+      return NextResponse.json({ ok: true, data: { id: r.data?.id } })
     }
 
     // ── Delete one batch and restore qty to order ────────────────────────────
@@ -254,8 +277,10 @@ export async function POST(req: NextRequest) {
       // Check if this order has any remaining batches
       const { data: remaining } = await dbSelect('batches', { order_id: `eq.${batch.order_id}`, limit: '1' }, 'id')
       if (!remaining?.length) {
-        // No batches left — revert order status back to splitting so supervisor can re-split
-        await dbUpdate('orders', { id: batch.order_id }, { status: 'splitting' })
+        // No batches left — back to 'splitting' so the supervisor can re-split
+        // (an order on hold stays on hold)
+        await sb('/orders', { method: 'PATCH', params: { id: `eq.${batch.order_id}`, status: 'neq.hold' },
+          body: JSON.stringify({ status: 'splitting' }), headers: { 'Prefer': 'return=minimal' } })
       }
 
       await auditLog({ username: _user, action: 'delete_batch', entity_type: 'batch',
@@ -275,6 +300,9 @@ export async function POST(req: NextRequest) {
 
       const ctx = await getSplitContext(order_id)
       if (ctx.error || !ctx.order) return NextResponse.json({ ok: false, error: ctx.error }, { status: 400 })
+      if (ctx.order.status === 'hold') {
+        return NextResponse.json({ ok: false, error: `${ctx.order.order_number} is on hold — release the hold before splitting.` }, { status: 409 })
+      }
 
       const totalKg   = parseFloat(ctx.order.qty_kg)     || 0
       const totalMtr  = parseFloat(ctx.order.qty_mtr)    || 0
@@ -286,7 +314,7 @@ export async function POST(req: NextRequest) {
       const ratio = totalKg > 0 ? remainKg / totalKg : 1
       const isFirst = ctx.allocatedKg <= 0
 
-      const fsRoute: string[] = process_route || ctx.order.process_route || []
+      const fsRoute: string[] = ((process_route?.length ? process_route : ctx.order.process_route) || []).map((c: string) => canonicalCode(c))
       const fsMap = deriveMachineMap(fsRoute, ctx.order.process_machines, machine_id || null)
       const batch = {
         batch_id:     `${ctx.order.order_number}-B${ctx.nextNo}`,
@@ -298,7 +326,7 @@ export async function POST(req: NextRequest) {
         mtr:          totalMtr  ? (isFirst ? totalMtr  : Math.round(totalMtr  * ratio)) : null,
         taka:         totalTaka ? (isFirst ? totalTaka : Math.round(totalTaka * ratio)) : null,
         status:       'pending',
-        process_route: process_route || [],
+        process_route: fsRoute,
       }
 
       const { data: created, error } = await sb<any[]>('/batches', {
@@ -307,9 +335,7 @@ export async function POST(req: NextRequest) {
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
-      // Update order status to splitting
-      await dbUpdate('orders', { id: order_id }, { status: 'splitting' })
-      await insertBatchProcesses(created, process_route)
+      await insertBatchProcesses(created, fsRoute)
 
       await auditLog({ username: _user, action: 'full_split', entity_type: 'order',
         entity_id: order_id, new_value: `${batch.batch_id} · ${remainKg}kg` })

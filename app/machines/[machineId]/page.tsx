@@ -519,11 +519,25 @@ export default function MachinePage() {
     loadData()
   }
 
+  // Ticking "Faulty" raises a proper faulty record at the batch's current
+  // process (same as the FMS page). A faulty batch is cleared on the Faulty
+  // page (Mark OK / Reprocess), not by unticking here.
   const toggleFaulty = async (batchId: string, _orderId: string, currentFaulty: boolean) => {
-    await fetch('/api/batches', {
+    if (currentFaulty) { alert('This batch is faulty — clear it on the Faulty page (Mark OK or Reprocess).'); return }
+    const row = batches.find(b => b.id === batchId)
+    const fresh = await fetch(`/api/batches?id=${batchId}`, { cache: 'no-store' }).then(r => r.json()).catch(() => null)
+    const cur = fresh?.data?.[0]
+    if (!cur?.current_process || cur.status !== 'in-process') {
+      alert(`${row?.batchId || 'This batch'} is not running at a process right now — it can't be marked faulty here.`); return
+    }
+    const reason = prompt(`Mark ${cur.batch_id} faulty at ${cur.current_process}? Enter the fault:`)
+    if (!reason || !reason.trim()) return
+    const res = await fetch('/api/batches', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', id: batchId, is_faulty: !currentFaulty })
-    })
+      body: JSON.stringify({ action: 'mark_faulty', batch_id: batchId, process_code: cur.current_process,
+        faulty_type: reason.trim(), faulty_kg: parseFloat(cur.kg) || 0 }),
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    if (!res.ok) alert('Error: ' + res.error)
     loadData()
   }
 
@@ -872,16 +886,37 @@ export default function MachinePage() {
 
   const clearNumbering = async () => {
     if (!confirm('Are you sure you want to clear all plan numbers for this machine?')) return
-    // Get unique batch UUIDs (deduplicate since same batch may appear twice for 2 processes)
-    const uniqueIds = [...new Set(batches.filter(b => b.planNumber).map(b => b.id))]
-    await Promise.all(uniqueIds.map(id =>
-      fetch('/api/batches', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update', id, date_calc_plan: null }),
-      })
-    ))
+    // Only the numbers of THIS machine's processes are removed. A batch that
+    // also has a number on another machine (e.g. SCQ here, Dyeing elsewhere)
+    // keeps that other number.
+    const procsByBatch: Record<string, Set<string>> = {}
+    for (const b of batches) {
+      if (!b.planNumber || !b.currentProcess) continue
+      ;(procsByBatch[b.id] ||= new Set()).add(b.currentProcess)
+    }
+    const failed: string[] = []
+    await Promise.all(Object.entries(procsByBatch).map(async ([uuid, procs]) => {
+      try {
+        const r = await fetch(`/api/batches?id=${uuid}`, { cache: 'no-store' }).then(x => x.json())
+        const fresh: any = r.data?.[0]?.date_calc_plan || {}
+        const byProcess: Record<string, number> = { ...(fresh.byProcess || {}) }
+        const byProcessDates: Record<string, string> = { ...(fresh.byProcessDates || {}) }
+        for (const code of procs) { delete byProcess[code]; delete byProcessDates[code] }
+        const left = Object.entries(byProcess)
+        let plan: any = null
+        if (left.length) {
+          const [firstCode, firstNum] = left.reduce((a, b) => (b[1] < a[1] ? b : a))
+          plan = { planNumber: firstNum, byProcess, byProcessDates, plannedDate: byProcessDates[firstCode] || null }
+        }
+        const res = await fetch('/api/batches', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'update', id: uuid, date_calc_plan: plan }),
+        }).then(x => x.json())
+        if (!res.ok) failed.push(res.error || uuid)
+      } catch (e: any) { failed.push(e?.message || uuid) }
+    }))
     await loadData()
-    alert('✅ All numbering cleared!')
+    alert(failed.length ? `⚠ Cleared, but ${failed.length} batch(es) failed: ${failed.slice(0, 3).join(' · ')}` : '✅ Numbering cleared for this machine')
   }
 
   const applyFilters = () => {

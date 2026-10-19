@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'lab', 'GET'); if (g.deny) return g.deny }
   const { searchParams } = new URL(req.url)
   const type      = searchParams.get('type')      // indents | requests | issues
   const indentId  = searchParams.get('indent_id')
@@ -57,6 +59,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'lab', (body as any)?.action); if (g.deny) return g.deny }
   const { action, id, ...payload } = body
 
   // ── Indents ──────────────────────────────────────────────────────────────

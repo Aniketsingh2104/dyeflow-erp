@@ -73,13 +73,10 @@ export default function SheetPageContent() {
           fetch(`/api/order-sheets?id=${sheetId}`, { cache: 'no-store' }).then(r => r.json()),
           fetch(`/api/sheet-rows?sheet_id=${sheetId}`, { cache: 'no-store' }).then(r => r.json()),
         ])
+        // Access is decided by the server (admin, office staff, or the sheets
+        // ticked for this user in User Management)
+        if (sheetRes.ok === false && /access/i.test(sheetRes.error || '')) { setSheet({ __accessDenied: true }); return }
         if (!sheetRes.ok || !sheetRes.data) { setNotFound(true); return }
-
-        const sessionRaw = localStorage.getItem('dyeflow_session')
-        const session    = sessionRaw ? JSON.parse(sessionRaw) : null
-        const isAdmin    = session?.role === 'admin'   // no session / no role = not admin
-        const allowed    = session?.permissions?.allowedSheets || []
-        if (!isAdmin && !allowed.includes(sheetId)) { setSheet({ __accessDenied: true }); return }
 
         setSheet(sheetRes.data)
         let clientRows: any[] = rowsRes.ok ? (rowsRes.data || []) : []
@@ -158,7 +155,7 @@ export default function SheetPageContent() {
     if (ci === 0) {
       // SUBMIT FOR APPROVAL
       if (checked) {
-        if (st === 'pending' || st === 'edit-request') return
+        if (st === 'pending' || st === 'edit-request' || st === 'approving') return
         if (st === 'approved' || st === 'edit-accepted') {
           // Already an order → this is an EDIT request, only if something was changed
           if (!row.requestEdit || !Object.keys(row.editHistory || {}).length) {

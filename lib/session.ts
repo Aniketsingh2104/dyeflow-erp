@@ -18,6 +18,9 @@ export interface SessionData {
   uid: string      // dyeflow_users.id
   u:   string      // username
   r:   string      // role at sign-in (admin checks re-read the DB)
+  sv?: number      // dyeflow_users.session_version at sign-in — a newer number in
+                   // the DB (logout, role / permission / password change,
+                   // deactivation) makes this cookie invalid (lib/access.ts)
   exp: number      // expiry, ms since epoch
 }
 

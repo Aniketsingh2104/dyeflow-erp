@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { getActiveUserRecord } from '@/lib/permissions'
 
 async function apiSheets(body?: any) {
   if (!body) {
@@ -21,6 +22,9 @@ export default function OrderSheetsPage() {
   const [showModal,  setShowModal]  = useState(false)
   const [formData,   setFormData]   = useState({ title: '', assignedTo: '' })
   const [saving,     setSaving]     = useState(false)
+  // Creating / closing / deleting sheets is admin only (checked on the server too)
+  const [isAdmin,    setIsAdmin]    = useState(false)
+  useEffect(() => { setIsAdmin(getActiveUserRecord()?.role === 'admin') }, [])
 
   const loadSheets = useCallback(async () => {
     setLoading(true)
@@ -95,7 +99,7 @@ export default function OrderSheetsPage() {
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
             {sheets.length} sheet{sheets.length !== 1 ? 's' : ''}
           </span>
-          <button className="primary" onClick={() => setShowModal(true)}>+ Create Order Sheet</button>
+          {isAdmin && <button className="primary" onClick={() => setShowModal(true)}>+ Create Order Sheet</button>}
         </div>
       </div>
 
@@ -146,10 +150,12 @@ export default function OrderSheetsPage() {
                       <button className="xs primary">📋 View</button>
                     </Link>
                     <button className="xs" style={{ marginLeft: 4 }} onClick={() => downloadCSV(sheet)}>📥</button>
-                    <button className="xs" style={{ marginLeft: 4 }} onClick={() => handleToggle(sheet)}>
-                      {sheet.status === 'Active' ? 'Deactivate' : 'Activate'}
-                    </button>
-                    <button className="xs danger" style={{ marginLeft: 4 }} onClick={() => handleDelete(sheet)}>Delete</button>
+                    {isAdmin && <>
+                      <button className="xs" style={{ marginLeft: 4 }} onClick={() => handleToggle(sheet)}>
+                        {sheet.status === 'Active' ? 'Deactivate' : 'Activate'}
+                      </button>
+                      <button className="xs danger" style={{ marginLeft: 4 }} onClick={() => handleDelete(sheet)}>Delete</button>
+                    </>}
                   </td>
                 </tr>
               ))}

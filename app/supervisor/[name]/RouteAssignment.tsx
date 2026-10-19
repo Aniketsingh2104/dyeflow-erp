@@ -258,7 +258,11 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         }),
       })
       const data = await res.json()
-      if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return }
+      if (!data.ok) {
+        alert('Error: ' + (data.error || 'Unknown'))
+        if (data.stale) { checkBatchLock(); onUpdate() }
+        return
+      }
       setEditMode(false)
       onUpdate()
     } catch (err: any) { alert('Network error: ' + err.message) }

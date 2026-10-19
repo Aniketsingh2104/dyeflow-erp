@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'machines', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('machines', { order: 'name.asc' },
     'id,name,capacity,status,machine_type,is_active,numbering_base_date,created_at')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

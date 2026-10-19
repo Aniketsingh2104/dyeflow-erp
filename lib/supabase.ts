@@ -197,3 +197,21 @@ export async function auditLog(entry: {
     headers: { 'Prefer': 'return=minimal' },
   })
 }
+
+/**
+ * Read rows whose `column` is one of many ids. Long `in.(…)` lists make the
+ * request URL too long (a few hundred UUIDs), so this asks in chunks.
+ */
+export async function dbSelectIn<T = any>(
+  table: string, column: string, ids: string[], select = '*', extra: Record<string, string> = {}, chunk = 150
+): Promise<{ data: T[]; error: string | null }> {
+  const uniq = [...new Set(ids.filter(Boolean))]
+  const all: T[] = []
+  for (let i = 0; i < uniq.length; i += chunk) {
+    const part = uniq.slice(i, i + chunk)
+    const { data, error } = await dbSelect<T>(table, { ...extra, [column]: `in.(${part.join(',')})` }, select)
+    if (error) return { data: all, error }
+    all.push(...data)
+  }
+  return { data: all, error: null }
+}

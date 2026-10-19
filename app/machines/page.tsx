@@ -152,9 +152,9 @@ export default function MachinesPage() {
     const idx  = route.indexOf(curCode)
     const next = idx >= 0 ? route[idx + 1] : undefined
     if (!confirm(`Mark ${batch.batch_id} done in ${curCode || '?'}?`)) return
-    const { error } = await markProcessDone(batch.id, curCode, next)
-    if (error) { alert('Error: ' + error); return }
-    showToast(`✓ ${batch.batch_id} ${next ? '→ ' + next : 'complete'}`)
+    const { error, next_process } = await markProcessDone(batch.id, curCode, next)
+    if (error) { alert('Error: ' + error); loadData(); return }
+    showToast(`✓ ${batch.batch_id} ${next_process ? '→ ' + next_process : 'complete'}`)
     loadData()
   }
 

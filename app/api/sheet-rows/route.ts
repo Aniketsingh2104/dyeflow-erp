@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbSelect, dbUpdate, dbDelete, sb } from '@/lib/supabase'
+import { dbSelect, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
+import { guard, canUseSheet, isSheetOffice } from '@/lib/access'
+import { createOrder, nextOrderNumber } from '@/lib/orderCreate'
+
+const NO_SHEET = "You don't have access to this sheet."
 
 function toClient(r: any) {
   return {
@@ -81,14 +85,20 @@ function toDB(row: any, sheetId: string) {
 
 // GET /api/sheet-rows?sheet_id=X[&approval_status=Y]
 export async function GET(req: NextRequest) {
+  const g = await guard(req, 'sheet-rows', 'GET')
+  if (g.deny) return g.deny
   const { searchParams } = new URL(req.url)
   const sheet_id        = searchParams.get('sheet_id')
   const approval_status = searchParams.get('approval_status')
 
   if (!sheet_id) return NextResponse.json({ ok: false, error: 'sheet_id required' }, { status: 400 })
+  if (!canUseSheet(g.user!, sheet_id)) return NextResponse.json({ ok: false, error: NO_SHEET }, { status: 403 })
 
   const query: Record<string, string> = { sheet_id: `eq.${sheet_id}`, order: 'row_index.asc', limit: '5000' }
-  if (approval_status) query['approval_status'] = `eq.${approval_status}`
+  // "pending" also lists rows whose approval was interrupted half-way
+  // ('approving' for over 2 minutes) so they can be approved again.
+  if (approval_status === 'pending') query['approval_status'] = 'in.(pending,approving)'
+  else if (approval_status) query['approval_status'] = `eq.${approval_status}`
 
   const { data, error } = await dbSelect('order_sheet_rows', query,
     'id,sheet_id,row_index,party,sub_party,sales_person,article,blend,width,gsm,color,' +
@@ -132,6 +142,20 @@ async function insertRow(sheetId: string, dbRow: Record<string, any>) {
   return { id: null, row_index: null, error: 'Could not add the row — please try again' }
 }
 
+// Office moves (Pending Approvals): reject a request, accept / reject an edit
+const OFFICE_MOVES = new Set(['pending>rejected', 'edit-request>edit-accepted', 'edit-request>approved'])
+
+// Order details on a row. Once a row is an order, a party may change them only
+// with "Request Edit" ticked (the office then accepts or rejects the change).
+const CONTENT_FIELDS = ['party', 'sub_party', 'sales_person', 'article', 'blend', 'width', 'gsm', 'color', 'lab_no',
+  'lot_no', 'challan_no', 'qty_kg', 'qty_mtr', 'no_of_taka', 'type_of_finish', 'type_of_packing', 'remarks']
+const sameVal = (a: any, b: any) => {
+  // empty, null and 0 count as the same (qty columns default to 0)
+  const n = (x: any) => (x === null || x === undefined || String(x).trim() === '' ? ''
+    : !isNaN(Number(x)) ? (Number(x) === 0 ? '' : String(Number(x))) : String(x).trim())
+  return n(a) === n(b)
+}
+
 /** Save one row. Existing rows are patched by id; rows without an id are inserted. */
 async function saveOne(sheetId: string, row: any, fromSheet: boolean) {
   const dbRow: Record<string, any> = toDB(row, sheetId)
@@ -139,25 +163,59 @@ async function saveOne(sheetId: string, row: any, fromSheet: boolean) {
   delete dbRow.row_index
 
   if (row.id) {
-    const { data: cur } = await dbSelect('order_sheet_rows', { id: `eq.${row.id}`, limit: '1' },
-      'id,sheet_id,approval_status')
+    const { data: cur } = await dbSelect('order_sheet_rows', { id: `eq.${row.id}`, limit: '1' }, '*')
     const inDb = cur?.[0]
     if (inDb) {
       if (inDb.sheet_id !== sheetId) return { status: 400, error: 'Row belongs to another sheet' }
+      // A row that became an order keeps its order number — nobody can change
+      // or clear it from here (orders are only created by "approve_row").
+      if (inDb.order_number) dbRow.order_number = inDb.order_number
+      else delete dbRow.order_number
+      if (inDb.approval_status === 'approving') {
+        return { status: 409, error: 'This row is being approved right now. Reload the sheet in a moment.' }
+      }
+      if (!inDb.order_number && dbRow.approval_status === 'approved') {
+        return { status: 409, error: 'Use "Approve" on Pending Approvals to turn a row into an order.' }
+      }
+      const was = inDb.approval_status || 'draft'
+      const now = dbRow.approval_status || 'draft'
       if (fromSheet) {
         for (const f of OFFICE_FIELDS) delete dbRow[f]
-        const was = inDb.approval_status || 'draft'
-        const now = dbRow.approval_status || 'draft'
         if (was !== now && !SHEET_MOVES.has(`${was}>${now}`)) {
           return { status: 409, error: `This row was updated by the office (now "${was}"). Reload the sheet to see the latest.` }
         }
         if (was === 'rejected' && now === 'pending') dbRow.rejection_reason = null   // resubmitted after fixing
+        const isOrder = ['approved', 'edit-accepted', 'edit-request'].includes(was)
+        // content may change only after "Request Edit" was saved (or when an
+        // edit request is withdrawn and the old values are put back)
+        const editing = inDb.request_edit === true || (was === 'edit-request' && now === 'approved')
+        if (isOrder && !editing && CONTENT_FIELDS.some(f => !sameVal(dbRow[f], inDb[f]))) {
+          return { status: 409, error: 'This row is already an order — tick "Request Edit" before changing it.' }
+        }
+      } else if (was !== now && !SHEET_MOVES.has(`${was}>${now}`) && !OFFICE_MOVES.has(`${was}>${now}`)) {
+        return { status: 409, error: `This row is now "${was}" — it was changed meanwhile. Refresh the page.` }
       }
-      const { error } = await dbUpdate('order_sheet_rows', { id: row.id }, dbRow)
-      return error ? { status: 500, error } : { status: 200, id: row.id }
+      // Write only if the row is still as read above (a save racing with an
+      // approval or another office user gets 409 instead of undoing it)
+      const { data: upd, error } = await sb<any[]>('/order_sheet_rows', {
+        method: 'PATCH',
+        params: {
+          id: `eq.${row.id}`,
+          approval_status: inDb.approval_status == null ? 'is.null' : `eq.${inDb.approval_status}`,
+          order_number: inDb.order_number ? `eq.${inDb.order_number}` : 'is.null',
+        },
+        body: JSON.stringify(dbRow),
+      })
+      if (error) return { status: 500, error }
+      if (!Array.isArray(upd) || !upd.length) {
+        return { status: 409, error: 'This row was changed meanwhile (by the office or another screen). Reload to see the latest.' }
+      }
+      return { status: 200, id: row.id }
     }
     // The row was deleted elsewhere — fall through and add it back as a new row
   }
+  delete dbRow.order_number   // a new row is never an order yet
+  if (dbRow.approval_status === 'approved' || dbRow.approval_status === 'approving') dbRow.approval_status = 'draft'
   if (fromSheet) {
     for (const f of OFFICE_FIELDS) delete dbRow[f]
     // a party's new row starts as a draft or is submitted — nothing else
@@ -167,18 +225,37 @@ async function saveOne(sheetId: string, row: any, fromSheet: boolean) {
   return ins.error ? { status: 500, error: ins.error } : { status: 200, id: ins.id, row_index: ins.row_index }
 }
 
+async function orderExists(orderNumber: string): Promise<boolean> {
+  const { data } = await dbSelect('orders', { order_number: `eq.${orderNumber}`, limit: '1' }, 'id')
+  return !!data?.length
+}
+
+/** Mark an approving row approved with its order number (one retry). */
+async function finishRow(id: string, orderNumber: string) {
+  const done = { approval_status: 'approved', order_number: orderNumber, submit_for_approval: false,
+                 request_edit: false, received_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  let fin = await dbUpdate('order_sheet_rows', { id }, done)
+  if (fin.error) fin = await dbUpdate('order_sheet_rows', { id }, done)
+  return fin
+}
+
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
   const { action } = body
-  // Anyone who isn't an admin saves under the party-sheet rules (no office
-  // fields, only the allowed status moves). Decided from the signed-in role,
-  // not from anything the browser sends.
-  const fromSheet = req.headers.get('x-dyeflow-role') !== 'admin'
+  const g = await guard(req, 'sheet-rows', action)
+  if (g.deny) return g.deny
+  const user = g.user!
+  // Anyone who isn't office (admin, or Edit on Pending Approvals) saves under
+  // the party-sheet rules (no office fields, only the allowed status moves).
+  // Decided from the user's role in the database, not from the browser.
+  const fromSheet = !isSheetOffice(user)
+  const noSheet = () => NextResponse.json({ ok: false, error: NO_SHEET }, { status: 403 })
 
   // ── Save one row (new rows return their id) ───────────────────────────────
   if (action === 'upsert_row') {
     const { sheet_id, row } = body
     if (!sheet_id || !row) return NextResponse.json({ ok: false, error: 'sheet_id and row required' }, { status: 400 })
+    if (!canUseSheet(user, sheet_id)) return noSheet()
     const r = await saveOne(sheet_id, row, fromSheet)
     if (r.error) return NextResponse.json({ ok: false, error: r.error }, { status: r.status })
     return NextResponse.json({ ok: true, id: r.id, row_index: (r as any).row_index ?? null })
@@ -189,8 +266,16 @@ export async function POST(req: NextRequest) {
     const { sheet_id, rows } = body
     if (!sheet_id || !Array.isArray(rows))
       return NextResponse.json({ ok: false, error: 'sheet_id and rows[] required' }, { status: 400 })
+    if (!canUseSheet(user, sheet_id)) return noSheet()
     const { data: existing } = await dbSelect('order_sheet_rows', { sheet_id: `eq.${sheet_id}`, limit: '1' }, 'id')
     if (!existing?.length) {
+      const { data: sh0 } = await dbSelect('order_sheets', { id: `eq.${sheet_id}`, limit: '1' }, 'id,rows')
+      const legacyCount = Array.isArray(sh0?.[0]?.rows) ? sh0[0].rows.length : 0
+      if (!legacyCount) return NextResponse.json({ ok: true, upserted: 0 })
+      if (fromSheet) {
+        return NextResponse.json({ ok: false,
+          error: 'This sheet has not been moved to the new format yet — ask the office to open it once.' }, { status: 409 })
+      }
       // Empty sheet = one-time copy of a legacy sheet. The rows are read from
       // the sheet's own saved copy (order_sheets.rows) on the server — not
       // taken from the browser — numbered 0..n and inserted in a few large
@@ -218,6 +303,7 @@ export async function POST(req: NextRequest) {
   if (action === 'add_row') {
     const { sheet_id } = body
     if (!sheet_id) return NextResponse.json({ ok: false, error: 'sheet_id required' }, { status: 400 })
+    if (!canUseSheet(user, sheet_id)) return noSheet()
     const ins = await insertRow(sheet_id, { approval_status: 'draft', updated_at: new Date().toISOString() })
     if (ins.error) return NextResponse.json({ ok: false, error: ins.error }, { status: 500 })
     return NextResponse.json({ ok: true, id: ins.id, row_index: ins.row_index })
@@ -227,13 +313,14 @@ export async function POST(req: NextRequest) {
   if (action === 'delete_row') {
     const { id } = body
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    // A row that already became an order (or is waiting for approval) can't be
-    // deleted from a party sheet — only an admin can remove it.
-    const { data: cur } = await dbSelect('order_sheet_rows', { id: `eq.${id}`, limit: '1' }, 'id,approval_status,order_number')
+    const { data: cur } = await dbSelect('order_sheet_rows', { id: `eq.${id}`, limit: '1' }, 'id,sheet_id,approval_status,order_number')
     const r = cur?.[0]
     if (!r) return NextResponse.json({ ok: true })   // already gone
+    if (!canUseSheet(user, r.sheet_id)) return noSheet()
+    // A row that already became an order (or is waiting for approval) can't be
+    // deleted from a party sheet — only an admin can remove it.
     const st = r.approval_status || 'draft'
-    if ((r.order_number || !['draft', 'rejected'].includes(st)) && req.headers.get('x-dyeflow-role') !== 'admin') {
+    if ((r.order_number || !['draft', 'rejected'].includes(st)) && !user.isAdmin) {
       return NextResponse.json({ ok: false, error: `This row is "${st}"${r.order_number ? ` (order ${r.order_number})` : ''} — ask the office to remove it.` }, { status: 403 })
     }
     const { error } = await dbDelete('order_sheet_rows', { id })
@@ -241,21 +328,106 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
-  // ── Update approval status only ───────────────────────────────────────────
-  if (action === 'update_approval') {
-    const { id, approval_status, order_number, rejection_reason, received_at } = body
+  // ── Approve a row → create its order (office only) ────────────────────────
+  // 1. claim the row: pending → 'approving', only if it still has no order
+  //    number (a second click / second office user gets 409, never a 2nd order)
+  // 2. create the order from the row AS SAVED IN THE DATABASE
+  // 3. row → 'approved' with the order number (on failure → back to 'pending')
+  if (action === 'approve_row') {
+    const { id } = body
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    const patch: Record<string, any> = { approval_status, updated_at: new Date().toISOString() }
-    if (order_number)     patch.order_number     = order_number
-    if (rejection_reason) patch.rejection_reason = rejection_reason
-    if (received_at)      patch.received_at      = received_at
-    if (approval_status !== 'pending' && approval_status !== 'edit-request') {
-      patch.submit_for_approval = false
-      patch.request_edit        = false
+    const now = new Date()
+    const staleBefore = new Date(now.getTime() - 2 * 60_000).toISOString()
+    // (plain filters only — PostgREST re-checks an "or=" filter on the
+    // returned row, which would hide the row we just claimed)
+    const claimWhere = async (extra: Record<string, string>) => sb<any[]>('/order_sheet_rows', {
+      method: 'PATCH',
+      params: { id: `eq.${id}`, order_number: 'is.null', ...extra },
+      body: JSON.stringify({ approval_status: 'approving', updated_at: now.toISOString() }),
+    })
+    // An approval that broke off half-way over 2 minutes ago: if its order
+    // exists, finish the row; if not, put the row back so it can be approved
+    {
+      const { data: cur0 } = await dbSelect('order_sheet_rows', { id: `eq.${id}`, limit: '1' }, 'approval_status,order_number,updated_at')
+      const c0 = cur0?.[0]
+      if (c0?.approval_status === 'approving' && c0.order_number && new Date(c0.updated_at).getTime() < now.getTime() - 2 * 60_000) {
+        if (await orderExists(c0.order_number)) {
+          await finishRow(id, c0.order_number)
+          return NextResponse.json({ ok: true, order_number: c0.order_number, recovered: true })
+        }
+        await sb('/order_sheet_rows', {
+          method: 'PATCH', params: { id: `eq.${id}`, approval_status: 'eq.approving', order_number: `eq.${c0.order_number}` },
+          body: JSON.stringify({ approval_status: 'pending', order_number: null, updated_at: new Date().toISOString() }),
+          headers: { 'Prefer': 'return=minimal' },
+        })
+      }
     }
-    const { error } = await dbUpdate('order_sheet_rows', { id }, patch)
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    let claim = await claimWhere({ approval_status: 'eq.pending' })
+    if (!claim.error && !(Array.isArray(claim.data) && claim.data.length)) {
+      // an approval that broke off half-way over 2 minutes ago may be retried
+      claim = await claimWhere({ approval_status: 'eq.approving', updated_at: `lt.${staleBefore}` })
+    }
+    if (claim.error) return NextResponse.json({ ok: false, error: claim.error }, { status: 500 })
+    const row = Array.isArray(claim.data) ? claim.data[0] : null
+    if (!row) {
+      const { data: cur } = await dbSelect('order_sheet_rows', { id: `eq.${id}`, limit: '1' }, 'approval_status,order_number')
+      const c = cur?.[0]
+      const why = !c ? 'This row no longer exists.'
+        : c.approval_status === 'approving' ? 'Someone is approving this row right now.'
+        : c.order_number ? `This row is already order ${c.order_number}.`
+        : `This row is now "${c.approval_status || 'draft'}" — it is no longer waiting for approval.`
+      return NextResponse.json({ ok: false, stale: true, error: `${why} Refresh the page.` }, { status: 409 })
+    }
+    const release = () => sb('/order_sheet_rows', {
+      method: 'PATCH', params: { id: `eq.${id}`, approval_status: 'eq.approving', order_number: 'is.null' },
+      body: JSON.stringify({ approval_status: 'pending', updated_at: new Date().toISOString() }),
+      headers: { 'Prefer': 'return=minimal' },
+    })
+    if (!canUseSheet(user, row.sheet_id)) { await release(); return noSheet() }
+
+    // Take the order number and write it on the row FIRST: if anything fails
+    // later the row can never be approved into a second order.
+    const no = await nextOrderNumber()
+    if (no.error || !no.number) { await release(); return NextResponse.json({ ok: false, error: no.error }, { status: 500 }) }
+    const tag = await sb<any[]>('/order_sheet_rows', {
+      method: 'PATCH', params: { id: `eq.${id}`, approval_status: 'eq.approving', order_number: 'is.null' },
+      body: JSON.stringify({ order_number: no.number, updated_at: new Date().toISOString() }),
+    })
+    if (tag.error || !Array.isArray(tag.data) || !tag.data.length) {
+      await release()
+      return NextResponse.json({ ok: false, error: tag.error || 'The row changed while approving — try again.' }, { status: tag.error ? 500 : 409 })
+    }
+
+    const num = (v: any) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? 0 : Number(v))
+    const { data: order, error } = await createOrder({
+      status: 'new', process_route: [],
+      party: row.party || '', article: row.article || '', blend: row.blend || '', color: row.color || '',
+      challan_no: row.challan_no || '', qty_kg: num(row.qty_kg), qty_mtr: num(row.qty_mtr),
+      no_of_taka: Math.round(num(row.no_of_taka)), width: row.width || '', gsm: row.gsm || '',
+      lab_no: row.lab_no || '', lot_no: row.lot_no || '', sub_party: row.sub_party || '',
+      sales_person: row.sales_person || '', type_of_finish: row.type_of_finish || '',
+      type_of_packing: row.type_of_packing || '', delivery_date: row.delivery_date || null,
+      remarks: row.remarks || '',
+    }, 'Sheet approval', { orderNumber: no.number })
+    if ((error || !order?.order_number) && await orderExists(no.number)) {
+      // the order was saved even though the answer got lost — carry on
+    } else if (error || !order?.order_number) {
+      // no order was made → take the number off again and put the row back
+      await sb('/order_sheet_rows', {
+        method: 'PATCH', params: { id: `eq.${id}`, approval_status: 'eq.approving', order_number: `eq.${no.number}` },
+        body: JSON.stringify({ approval_status: 'pending', order_number: null, updated_at: new Date().toISOString() }),
+        headers: { 'Prefer': 'return=minimal' },
+      })
+      return NextResponse.json({ ok: false, error: error || 'Order was not created' }, { status: 500 })
+    }
+    const fin = await finishRow(id, no.number)
+    if (fin.error) {
+      return NextResponse.json({ ok: false,
+        error: `Order ${no.number} was created, but the sheet row still shows "approving" (${fin.error}). Click Approve again in a few minutes to finish it — no second order is made.` }, { status: 500 })
+    }
+    await auditLog({ action: 'sheet_approve', entity_type: 'order_sheet_row', entity_id: id,
+      new_value: no.number })
+    return NextResponse.json({ ok: true, order_number: no.number })
   }
 
   return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })

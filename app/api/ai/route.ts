@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 
 // ── Server-side AI proxy — supports Gemini OR Groq ───────────────────────────
 // Set ONE of these in .env.local and restart the server:
@@ -11,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
+    { const g = await guard(req, 'ai', 'POST'); if (g.deny) return g.deny }
 
     // ── Try Groq first if key is set ─────────────────────────────────────────
     const groqKey = process.env.GROQ_API_KEY

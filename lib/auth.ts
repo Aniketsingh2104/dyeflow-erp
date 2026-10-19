@@ -7,12 +7,15 @@
  *   const deny = await requireAdmin(req)
  *   if (deny) return deny
  *
- * The role is re-read from dyeflow_users on every admin action, so turning a
- * user Inactive or changing their role takes effect immediately.
+ * Both go through lib/access.ts: the role is read from dyeflow_users and the
+ * login must still be current (session_version), so turning a user Inactive
+ * or changing their role takes effect at once. Most routes use guard() from
+ * lib/access.ts directly.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect } from '@/lib/supabase'
 import { SESSION_COOKIE, verifySessionToken, SessionData } from '@/lib/session'
+import { getAccessUser } from '@/lib/access'
 
 export function getSession(req: NextRequest): SessionData | null {
   return verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value)
@@ -21,7 +24,7 @@ export function getSession(req: NextRequest): SessionData | null {
 export async function loadActiveUser(uid: string) {
   const { data, error } = await dbSelect('dyeflow_users',
     { id: `eq.${uid}`, limit: '1' },
-    'id,username,full_name,role,permissions,scope_mode,unit,party,is_active')
+    'id,username,full_name,role,permissions,scope_mode,unit,party,is_active,session_version')
   if (error) return { user: null, error }
   const user = data?.[0]
   if (!user || user.is_active === false) return { user: null, error: null }
@@ -35,24 +38,17 @@ function deny(status: number, error: string) {
   })
 }
 
-/** Any signed-in, active user. Returns a response to send back, or null if allowed. */
+/** Any signed-in, active user (with an up-to-date login). Returns a response to send back, or null if allowed. */
 export async function requireUser(req: NextRequest): Promise<NextResponse | null> {
-  const s = getSession(req)
-  if (!s) return deny(401, 'Not signed in — please sign in again.')
-  const { user, error } = await loadActiveUser(s.uid)
-  if (error) return deny(503, 'Could not check your account: ' + error)
-  if (!user) return deny(401, 'Your account is inactive or no longer exists.')
-  return null
+  const { deny } = await getAccessUser(req)
+  return deny
 }
 
 /** Admin only. Returns a response to send back, or null if allowed. */
 export async function requireAdmin(req: NextRequest): Promise<NextResponse | null> {
-  const s = getSession(req)
-  if (!s) return deny(401, 'Not signed in — please sign in again.')
-  const { user, error } = await loadActiveUser(s.uid)
-  if (error) return deny(503, 'Could not check your account: ' + error)
-  if (!user) return deny(401, 'Your account is inactive or no longer exists.')
-  if (user.role !== 'admin') return deny(403, 'Only an admin can do this.')
+  const { user, deny: d } = await getAccessUser(req)
+  if (d) return d
+  if (!user?.isAdmin) return deny(403, 'Only an admin can do this.')
   return null
 }
 

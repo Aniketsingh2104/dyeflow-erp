@@ -107,7 +107,7 @@ export default function RepairingOrderPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', id: r.id })
       }).then(x => x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('Batch ' + res.reverted_batch_id + ' returned to ' + (res.source_type === 'fob' ? 'FOB' : 'Faulty') + ' page')
       load()
     } finally { setSaving(false) }
@@ -121,7 +121,7 @@ export default function RepairingOrderPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id:editModal.id, ...editData })
       }).then(r=>r.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('Updated'); setEditModal(null); load()
     } finally { setSaving(false) }
   }
@@ -135,7 +135,7 @@ export default function RepairingOrderPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'full_split', id:r.id })
       }).then(x=>x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast(r.batch_id_str + ' now on Splitted Orders page')
       load()
     } finally { setSaving(false) }
@@ -170,7 +170,7 @@ export default function RepairingOrderPage() {
           })),
         })
       }).then(x=>x.json())
-      if (!res.ok) { alert('Error: ' + res.error); return }
+      if (!res.ok) { alert('Error: ' + res.error); if (res.stale) load(); return }
       showToast('Split into ' + (res.batches?.length || splitParts.length) + ' batches - now on Splitted Orders page')
       setSplitModal(null); setSplitParts([]); load()
     } finally { setSaving(false) }

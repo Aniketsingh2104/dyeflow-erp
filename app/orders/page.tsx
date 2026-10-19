@@ -412,7 +412,18 @@ export default function OrdersPage() {
         if (error) { alert('Error: ' + error); return }
         showToast(`✓ Order ${created?.order_number || ''} created`)
       } else if (modal === 'edit' && selectedOrder) {
-        const { error } = await updateOrder(selectedOrder.id, payload)
+        // Send only the fields that were changed in the popup, so saving can't
+        // overwrite what someone else changed meanwhile (status, route, …)
+        const norm = (x: any) => (x === undefined || x === null || x === ''
+            || (Array.isArray(x) && !x.length) || (typeof x === 'object' && !Array.isArray(x) && !Object.keys(x).length)) ? null
+          : (typeof x === 'number' || (typeof x === 'string' && x.trim() !== '' && !isNaN(Number(x)))) ? Number(x)
+          : typeof x === 'object' ? JSON.stringify(x) : x
+        const changed: Record<string, any> = {}
+        for (const [k, val] of Object.entries(payload)) {
+          if (norm(val) !== norm((selectedOrder as any)[k])) changed[k] = val
+        }
+        if (!Object.keys(changed).length) { showToast('No changes'); setModal(null); setSelectedOrder(null); return }
+        const { error } = await updateOrder(selectedOrder.id, changed)
         if (error) { alert('Error: ' + error); return }
         showToast('✓ Order updated')
       }

@@ -5,7 +5,8 @@
  * For each watched table: row count + latest updated_at. Inserts, updates and
  * deletes all change the signature. Requires sign-in (proxy.ts).
  */
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { SUPABASE_URL, SUPABASE_API_KEY } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +29,8 @@ async function tableSig(table: string): Promise<string> {
   return `${table}:${total}:${rows?.[0]?.updated_at || ''}`
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'changes', 'GET'); if (g.deny) return g.deny }
   try {
     const parts = await Promise.all(TABLES.map(tableSig))
     return NextResponse.json({ ok: true, sig: parts.join('|') })

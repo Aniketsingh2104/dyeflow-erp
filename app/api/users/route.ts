@@ -11,6 +11,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, auditLog } from '@/lib/supabase'
 import { requireAdmin, getSession } from '@/lib/auth'
+import { forgetUser } from '@/lib/access'
+import { SESSION_COOKIE, createSessionToken, sessionCookieOptions, requestIsHttps } from '@/lib/session'
+
+/** Raise the user's session_version → every login cookie they hold stops working. */
+async function signOutEverywhere(id: string): Promise<number | null> {
+  const { data } = await dbSelect('dyeflow_users', { id: `eq.${id}`, limit: '1' }, 'id,session_version')
+  if (!data?.[0]) return null
+  const next = (data[0].session_version || 0) + 1
+  await dbUpdate('dyeflow_users', { id }, { session_version: next })
+  forgetUser(id)
+  return next
+}
 import { hashPassword, isHashed } from '@/lib/password'
 
 export async function GET(req: NextRequest) {
@@ -102,7 +114,20 @@ export async function POST(req: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     const changed = Object.keys(patch).filter(k => k !== 'updated_at')
     await auditLog({ action: 'user_update', entity_type: 'user', entity_id: id, new_value: changed.join(',') })
-    return NextResponse.json({ ok: true })
+    forgetUser(id)
+
+    // Anything that changes what this user may do signs them out everywhere,
+    // so the change takes effect at once (they just sign in again).
+    const res = NextResponse.json({ ok: true })
+    if (changed.some(k => ['role', 'permissions', 'is_active', 'password', 'username'].includes(k))) {
+      const sv = await signOutEverywhere(id)
+      if (isSelf && sv !== null && body.is_active !== false) {
+        // keep the admin who made the change signed in on this device
+        const token = createSessionToken({ uid: id, u: patch.username || me.u, r: patch.role || me.r, sv })
+        if (token) res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(requestIsHttps(req)))
+      }
+    }
+    return res
   }
 
   if (action === 'delete') {
@@ -111,6 +136,7 @@ export async function POST(req: NextRequest) {
     if (id === me.uid) return NextResponse.json({ ok: false, error: "You can't delete your own account." }, { status: 400 })
     const { error } = await dbDelete('dyeflow_users', { id })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    forgetUser(id)
     await auditLog({ action: 'user_delete', entity_type: 'user', entity_id: id })
     return NextResponse.json({ ok: true })
   }
@@ -122,7 +148,13 @@ export async function POST(req: NextRequest) {
     const { error } = await dbUpdate('dyeflow_users', { id }, { password: hashPassword(password), updated_at: new Date().toISOString() })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     await auditLog({ action: 'user_reset_password', entity_type: 'user', entity_id: id })
-    return NextResponse.json({ ok: true })
+    const sv = await signOutEverywhere(id)       // old logins of this user stop working
+    const res = NextResponse.json({ ok: true })
+    if (id === me.uid && sv !== null) {
+      const token = createSessionToken({ uid: id, u: me.u, r: me.r, sv })
+      if (token) res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(requestIsHttps(req)))
+    }
+    return res
   }
 
   return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })

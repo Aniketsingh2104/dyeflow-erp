@@ -249,40 +249,26 @@ export default function FirstProcessBatchPage() {
     if (!confirm(`Send ${selected.length} batch(es) to their first process?`)) return
     setSending(true)
     try {
-      const now = new Date().toISOString()
-      await Promise.all(selected.map(b =>
+      // The server sends each batch to the first process of its OWN route,
+      // and refuses one that was already sent (e.g. from another screen)
+      const results = await Promise.all(selected.map(b =>
         fetch('/api/batches', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action:          'update',
-            id:              b.id,
-            current_process: b.first_process,
-            status:          'in-process',
-            sent_at:         now,           // timestamp when batch arrived at process
-          })
-        })
+          body: JSON.stringify({ action: 'send_first', id: b.id }),
+        }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+          .then(res => ({ b, res }))
       ))
       setSelectedBatches(new Set())
       await load()
-      // Group by process for toast message
       const byProcess: Record<string,number> = {}
-      selected.forEach(b => { byProcess[b.first_process] = (byProcess[b.first_process]||0)+1 })
+      const failed: string[] = []
+      for (const { b, res } of results) {
+        if (res.ok) byProcess[res.first_process || b.first_process] = (byProcess[res.first_process || b.first_process] || 0) + 1
+        else failed.push(`${b.batch_id}: ${res.error}`)
+      }
       const msg = Object.entries(byProcess).map(([p,n]) => `${n} → ${p}`).join(', ')
-      alert(`✓ Sent: ${msg}`)
+      alert((msg ? `✓ Sent: ${msg}` : 'Nothing was sent.') + (failed.length ? `\n\n⚠ Not sent:\n${failed.join('\n')}` : ''))
     } finally { setSending(false) }
-  }
-
-  // ── Dispatch ──────────────────────────────────────────────────────────────
-  const handleDispatch = async (batch: any) => {
-    if (!confirm(`Dispatch ${batch.batch_id}?`)) return
-    setSaving(true)
-    try {
-      await fetch('/api/batches', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action:'update', id: batch.id, status:'done', is_done: true })
-      })
-      await load()
-    } finally { setSaving(false) }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────

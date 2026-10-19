@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbSelect, dbUpdate, dbInsert, sb, auditLog } from '@/lib/supabase'
-import { startReprocess } from '@/lib/repair'
+import { dbSelect, dbUpdate, sb, auditLog, dbSelectIn } from '@/lib/supabase'
 import { canonicalCode } from '@/lib/processCodes'
-import { refreshOrderStatus, refreshOrderStatusForBatch } from '@/lib/orderStatus'
-import { requireAdmin } from '@/lib/auth'
-import { markProcessEntered } from '@/lib/processTimes'
+import { refreshOrderStatus } from '@/lib/orderStatus'
+import { guard, canWorkProcess } from '@/lib/access'
+import { rpc, rpcFail } from '@/lib/rpc'
 
 
 export async function GET(req: NextRequest) {
+  const g = await guard(req, 'fob', 'GET')
+  if (g.deny) return g.deny
   try {
     const { searchParams } = new URL(req.url)
     const type = searchParams.get('type')
@@ -25,16 +26,12 @@ export async function GET(req: NextRequest) {
     let orderMap:Record<string,any> = {}
 
     if (batchIds.length) {
-      const { data:batches } = await dbSelect('batches',
-        { id:`in.(${batchIds.join(',')})`, limit:'2000' },
-        'id,batch_id,kg,mtr,taka,sent_at,created_at,process_route,machines(id,name)'
+      const { data:batches } = await dbSelectIn('batches', 'id', batchIds, 'id,batch_id,kg,mtr,taka,sent_at,created_at,process_route,machines(id,name)'
       )
       for (const b of batches||[]) batchMap[b.id] = b
     }
     if (orderIds.length) {
-      const { data:orders } = await dbSelect('orders',
-        { id:`in.(${orderIds.join(',')})`, limit:'2000' },
-        'id,order_number,party,sub_party,article,blend,width,gsm,color,lab_no,lot_no,challan_no,qty_kg,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)'
+      const { data:orders } = await dbSelectIn('orders', 'id', orderIds, 'id,order_number,party,sub_party,article,blend,width,gsm,color,lab_no,lot_no,challan_no,qty_kg,qty_mtr,no_of_taka,type_of_finish,type_of_packing,remarks,supervisors(id,name)'
       )
       for (const o of orders||[]) orderMap[o.id] = o
     }
@@ -76,105 +73,72 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
+  const g = await guard(req, 'fob', body.action)
+  if (g.deny) return g.deny
   const { action, id, ...payload } = body
   if (payload.process_code) payload.process_code = canonicalCode(payload.process_code)
 
-  // ── Create FOB ────────────────────────────────────────────────────────────
+  const num = (v: any) => (v === undefined || v === null || v === '' || isNaN(Number(v)) ? null : Number(v))
+
+  // ── Create FOB — one all-or-nothing database step (df_fob_create): refuses
+  // if the batch is no longer at this process or already has an open FOB here.
   if (action === 'create') {
-    const { data, error } = await dbInsert('fob_records', {
-      batch_id:     payload.batch_id,
-      order_id:     payload.order_id,
-      order_number: payload.order_number,
-      party:        payload.party,
-      fob_kg:       payload.fob_kg || 0,
-      process_code: payload.process_code,
-      fob_type:     payload.fob_type || 'dyeing',
-      status:       'open',
-      notes:        payload.notes || '',
+    if (!payload.batch_id || !payload.process_code) {
+      return NextResponse.json({ ok: false, error: 'batch_id and process_code required' }, { status: 400 })
+    }
+    if (!canWorkProcess(g.user!, payload.process_code)) {
+      return NextResponse.json({ ok: false, error: `You don't have Edit permission on FMS — ${payload.process_code}.` }, { status: 403 })
+    }
+    const r = await rpc<any>('df_fob_create', {
+      p_batch: payload.batch_id, p_code: payload.process_code, p_kg: num(payload.fob_kg),
+      p_type: payload.fob_type || 'dyeing', p_notes: payload.notes || '',
     })
-    if (error) return NextResponse.json({ ok:false, error }, { status:500 })
-
-    // Upsert batch_processes: mark this process as 'fob' with done_at timestamp
-    // Use upsert because repair batches may not have batch_processes rows yet
-    const now = new Date().toISOString()
-    await sb('/batch_processes?on_conflict=batch_id,process_code', {
-      method: 'POST',
-      body: JSON.stringify({
-        batch_id:     payload.batch_id,
-        process_code: payload.process_code,
-        status:       'fob',
-        done_at:      now,
-      }),
-      headers: {
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-    })
-
-    // Also save last_process on batch so FMS can show FOB badge even after current_process changes
-    await dbUpdate('batches', { id: payload.batch_id }, {
-      last_process: payload.process_code,
-    })
-    await auditLog({ action:'fob_create', entity_type:'batch', entity_id: payload.batch_id,
-      new_value: `${payload.process_code} · ${payload.fob_type || ''} · ${payload.fob_kg ?? ''} Kg` })
-
-    return NextResponse.json({ ok:true, data })
+    if (r.error) return rpcFail(r)
+    return NextResponse.json({ ok: true, data: [{ id: r.data?.id }] })
   }
 
-  // ── Mark FOB Sent ─────────────────────────────────────────────────────────
+  // ── Mark FOB Sent (only an open FOB) ──────────────────────────────────────
   if (action === 'mark_sent') {
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
     const now = new Date().toISOString()
-    const { error } = await dbUpdate('fob_records', { id }, {
-      status: 'sent', sent_at: now,
+    const { data, error } = await sb<any[]>('/fob_records', {
+      method: 'PATCH', params: { id: `eq.${id}`, status: 'eq.open' },
+      body: JSON.stringify({ status: 'sent', sent_at: now }),
     })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
+    if (!Array.isArray(data) || !data.length) {
+      return NextResponse.json({ ok: false, stale: true, error: 'This FOB is no longer open. Refresh the page.' }, { status: 409 })
+    }
     await auditLog({ action:'fob_sent', entity_type:'fob_record', entity_id:id, new_value:'sent' })
     return NextResponse.json({ ok:true, sent_at:now })
   }
 
-  // ── FOB Approved → batch goes to next process ─────────────────────────────
+  // ── FOB Approved → batch goes to next process — one all-or-nothing
+  // database step (df_fob_approve); next process from the batch's own route.
   if (action === 'fob_approved') {
-    const { batch_id, process_code, process_route } = payload
-    const route:string[] = process_route || []
-    const idx = route.findIndex((c:string) => c.toUpperCase() === (process_code||'').toUpperCase() || c === process_code)
-    const nextProcess = idx >= 0 && idx < route.length-1 ? route[idx+1] : null
-    const now = new Date().toISOString()
-
-    await dbUpdate('fob_records', { id }, {
-      status: 'approved', approved_at: now,
-    })
-    await dbUpdate('batches', { id: batch_id }, {
-      status: nextProcess ? 'in-process' : 'done',
-      current_process: nextProcess || null,
-      sent_at: now,
-    })
-    if (nextProcess) await markProcessEntered(batch_id, nextProcess, now)
-    await auditLog({ action:'fob_approved', entity_type:'fob_record', entity_id:id, new_value: nextProcess||'completed' })
-    await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
-    return NextResponse.json({ ok:true, next_process:nextProcess })
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const r = await rpc<any>('df_fob_approve', { p_record: id })
+    if (r.error) return rpcFail(r)
+    await refreshOrderStatus(r.data?.order_id)   // keep orders.status in step
+    return NextResponse.json({ ok: true, next_process: r.data?.next_process ?? null })
   }
 
-  // ── Reprocess (Full or Partial) — shared logic in lib/repair.ts ─────────
-  // Partial reprocess now creates a SEPARATE batch row for the repair part,
-  // so the remaining qty that carries on is never touched by the repair flow.
+  // ── Reprocess (Full or Partial) — one all-or-nothing database step (df_reprocess)
   if (action === 'reprocess') {
-    const { batch_id, order_id, fob_kg, process_code, process_route,
-            reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka,
-            reprocess_reason } = payload
-    if (!reprocess_reason?.trim()) return NextResponse.json({ ok: false, error: 'Reason required' }, { status: 400 })
-    if (!batch_id) return NextResponse.json({ ok: false, error: 'batch_id required' }, { status: 400 })
-
-    const r = await startReprocess({
-      source: 'fob', recordId: id, batch_id, order_id,
-      sourceKg: parseFloat(fob_kg) || 0, process_code, process_route: process_route || [],
-      reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka, reason: reprocess_reason,
+    const { reprocess_type, reprocess_kg, reprocess_mtr, reprocess_taka, reprocess_reason } = payload
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    if (!String(reprocess_reason || '').trim()) return NextResponse.json({ ok: false, error: 'Reason required' }, { status: 400 })
+    const taka = num(reprocess_taka)
+    const r = await rpc<any>('df_reprocess', {
+      p_source: 'fob', p_record: id, p_type: reprocess_type || 'full',
+      p_kg: num(reprocess_kg), p_mtr: num(reprocess_mtr), p_taka: taka === null ? null : Math.round(taka),
+      p_reason: String(reprocess_reason).trim(),
     })
-    if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: r.status || 500 })
-
-    await auditLog({ action:'fob_reprocess', entity_type:'fob_record', entity_id:id,
-      new_value:`${reprocess_type}:${r.repair_kg}kg → ${r.repair_batch_id}` })
-    await refreshOrderStatusForBatch(batch_id)   // keep orders.status in step
-    return NextResponse.json({ ok:true, repair_kg:r.repair_kg, remain_kg:r.remain_kg, next_process:r.next_process, repair_batch_id:r.repair_batch_id })
+    if (r.error) return rpcFail(r)
+    await refreshOrderStatus(r.data?.order_id)   // keep orders.status in step
+    return NextResponse.json({ ok: true, repair_kg: r.data?.repair_kg, remain_kg: r.data?.remain_kg,
+      next_process: r.data?.next_process ?? null, repair_batch_id: r.data?.repair_batch_id })
   }
 
   // ── Standard update ───────────────────────────────────────────────────────
@@ -191,8 +155,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'delete') {
-    // Delete — admin only (checked on the server — lib/auth.ts)
-    { const deny = await requireAdmin(req); if (deny) return deny }
+    // Delete — admin only (POLICY in lib/access.ts)
     const { error } = await sb('/fob_records', { method:'DELETE', params:{ id:`eq.${id}` } })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
     return NextResponse.json({ ok:true })

@@ -45,6 +45,8 @@ export default function Navigation() {
 
   // ── Load dynamic nav items from Supabase ─────────────────────────────────
   const loadDynamic = useCallback(async () => {
+    // Party (customer) logins see only their order sheets — nothing to load
+    if (getActiveUserRecord()?.role === 'party') return
     try {
       const [mRes, pRes, sRes, bRes] = await Promise.all([
         fetch('/api/machines',    { cache: 'no-store' }).then(r => r.json()),

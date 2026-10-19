@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect } from '@/lib/supabase'
 import { FAULTY_PENDING_FILTER, FOB_PENDING_FILTER } from '@/lib/recordStatus'
 
@@ -22,6 +23,7 @@ function daysUntil(d: string): number {
 }
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'context', 'GET'); if (g.deny) return g.deny }
   try {
     const [ordersRes, batchesRes, machinesRes, supervisorsRes, faultyRes, fobRes, processesRes, plansRes] =
       await Promise.all([

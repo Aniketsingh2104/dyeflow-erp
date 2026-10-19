@@ -8,7 +8,7 @@ const api = (path: string, body?: any) =>
     : { cache: 'no-store' }
   ).then(r => r.json())
 
-// Order numbers are assigned by the server (database counter) — see /api/orders 'create'.
+// Order numbers are assigned by the server (database counter) — see /api/sheet-rows 'approve_row'.
 
 const fmtDate = (d?: string) => {
   if (!d) return '-'
@@ -116,27 +116,10 @@ export default function PendingApprovalsPage() {
     if (!res.ok) throw new Error(res.error || 'Save failed')
   }
 
-  const buildOrderPayload = (row: any) => ({
-    action: 'create', status: 'new', process_route: [],
-    party:           row.party          || '',
-    article:         row.article        || '',
-    blend:           row.blend          || '',
-    color:           row.color          || '',
-    challan_no:      row.challanNo      || '',
-    qty_kg:          parseFloat(row.qtyKg)  || 0,
-    qty_mtr:         parseFloat(row.qtyMtr) || 0,
-    no_of_taka:      parseInt(row.noOfTa)   || 0,
-    width:           row.width          || '',
-    gsm:             row.gsm            || '',
-    lab_no:          row.labNo          || '',
-    lot_no:          row.lotNo          || '',
-    sub_party:       row.subParty       || '',
-    sales_person:    row.salesPerson    || '',
-    type_of_finish:  row.typeOfFinish   || '',
-    type_of_packing: row.typeOfPacking  || '',
-    delivery_date:   row.deliveryDate   || '',
-    remarks:         row.remarks        || '',
-  })
+  // Approving a row creates its order on the server from the row as saved in
+  // the database (action 'approve_row'). The row is claimed first, so a double
+  // click or two people approving at once can never create two orders.
+  const approveRow = (item: SheetItem) => api('/api/sheet-rows', { action: 'approve_row', id: item.row.id })
 
   // ── New Orders: approve selected ──────────────────────────────────────────
   const approveSelected = async () => {
@@ -147,15 +130,11 @@ export default function PendingApprovalsPage() {
     try {
       let done=0; const errors:string[]=[]
       for (const item of toApprove) {
-        const result = await api('/api/orders', buildOrderPayload(item.row))
-        if (!result.ok) { errors.push(`Row ${item.rowIndex+1}: ${result.error}`) }
-        else {
-          const orderNumber = result.data?.order_number
-          try { await updateSheetRow(item, { approvalStatus:'approved', orderNumber, submitForApproval:false, requestEdit:false, receivedAt:new Date().toISOString() }) }
-          catch(e) { errors.push(`Row ${item.rowIndex+1}: sheet update failed`) }
-        }
+        const result = await approveRow(item).catch(() => ({ ok: false, error: 'Network error' }))
+        if (!result.ok) errors.push(`Row ${item.rowIndex+1}: ${result.error}`)
         done++; setProgress({done,total:toApprove.length})
       }
+      if (errors.length) alert(errors.join('\n'))
       showToast(errors.length ? `✓ ${toApprove.length-errors.length} approved · ${errors.length} failed` : `✓ ${toApprove.length} order(s) created`, !!errors.length)
       setSelected(new Set()); await load()
     } finally { setSaving('__bulk__',false); setProgress(null) }
@@ -165,11 +144,9 @@ export default function PendingApprovalsPage() {
   const approveSingle = async (item: SheetItem) => {
     setSaving(item.row.id, true)
     try {
-      const result      = await api('/api/orders', buildOrderPayload(item.row))
-      if (!result.ok) { alert('Error: '+result.error); return }
-      const orderNumber = result.data?.order_number
-      await updateSheetRow(item, { approvalStatus:'approved', orderNumber, submitForApproval:false, requestEdit:false, receivedAt:new Date().toISOString() })
-      showToast(`✓ Order ${orderNumber} created`)
+      const result = await approveRow(item)
+      if (!result.ok) { alert('Error: '+result.error); if (result.stale) await load(); return }
+      showToast(`✓ Order ${result.order_number} created`)
       await load()
     } catch(e:any) { alert(e.message) }
     finally { setSaving(item.row.id, false) }

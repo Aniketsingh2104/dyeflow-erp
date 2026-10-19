@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { embedText, chatOllama, OllamaError, OLLAMA_BASE_URL, EMBED_MODEL, CHAT_MODEL } from '@/lib/rag/ollama'
 import { sb } from '@/lib/supabase'
 import { getLiveSnapshot, getTargetedContext } from '@/lib/rag/liveContext'
@@ -53,6 +54,7 @@ function ollamaErrorResponse(err: OllamaError) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
+    { const g = await guard(req, 'ai-rag', 'POST'); if (g.deny) return g.deny }
     const question: string = (body?.question ?? body?.message ?? '').toString()
     const history: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body?.history) ? body.history : []
 

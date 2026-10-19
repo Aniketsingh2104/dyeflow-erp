@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import {
   getLearnedDuration, getLearnedDurationBatch,
   getFaultyRisk, getFaultyRiskBatch,
@@ -30,6 +31,7 @@ import {
 // blends live + historical since names match cleanly between the two.
 
 export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'predict', 'GET'); if (g.deny) return g.deny }
   try {
     const { searchParams } = new URL(req.url)
     const type = searchParams.get('type')
@@ -83,6 +85,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
+    { const g = await guard(req, 'predict', 'POST'); if (g.deny) return g.deny }
     const type = body?.type
 
     if (type === 'duration_batch') {

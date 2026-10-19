@@ -3,11 +3,13 @@
  * Returns orders (with splits inline), fobRecords, faultyRecords, machines,
  * supervisors, and processList in the same shape that QUERY_LIBRARY expects.
  */
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect } from '@/lib/supabase'
 import { DATE_COL } from '@/lib/processCodes'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'snapshot', 'GET'); if (g.deny) return g.deny }
   try {
     // Fetch all tables in parallel
     const [oRes, bRes, mRes, sRes, fobRes, faultyRes, pRes, dpRes] = await Promise.all([

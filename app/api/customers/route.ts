@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  { const g = await guard(req, 'customers', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('customers',
     { order: 'name.asc', limit: '2000', is_active: 'eq.true' },
     'id,name,contact,phone,created_at'

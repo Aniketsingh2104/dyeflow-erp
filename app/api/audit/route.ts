@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, sb, currentUsername } from '@/lib/supabase'
-import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
+  const g = await guard(req, 'audit', 'GET')
+  if (g.deny) return g.deny
   const { searchParams } = new URL(req.url)
   const limit  = parseInt(searchParams.get('limit')  || '500')
   const action = searchParams.get('action')
   const entity = searchParams.get('entity')
   const entityIds = (searchParams.get('entity_id') || '').split(',').map(s => s.trim()).filter(Boolean)
+  // The full log is admin only; staff may read the history of one record
+  // (e.g. a batch's trace page asks for its own ids).
+  if (!g.user?.isAdmin && !entityIds.length) {
+    return NextResponse.json({ ok: false, error: 'Only an admin can open the full audit log.' }, { status: 403 })
+  }
 
   const query: Record<string, string> = {
     order: 'created_at.desc',
@@ -25,6 +32,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  { const g = await guard(req, 'audit', (body as any)?.action); if (g.deny) return g.deny }
   const { action } = body
 
   if (action === 'log') {
@@ -44,8 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'clear') {
-    // Clearing the audit log — admin only (checked on the server — lib/auth.ts)
-    { const deny = await requireAdmin(req); if (deny) return deny }
+    // Clearing the audit log — admin only (POLICY in lib/access.ts)
     const { error } = await sb('/audit_log', {
       method: 'DELETE',
       params: { id: 'neq.never' }, // delete all rows

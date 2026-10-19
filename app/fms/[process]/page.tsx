@@ -304,34 +304,27 @@ export default function FmsProcessPage() {
     if (!confirm(`Mark ${row.batch_id} done in ${processCode}?`)) return
     setSaving(true)
     try {
-      const { error } = await markProcessDone(row.id, row.current_process || processCode, next)
-      if (error) { alert('Error: ' + error); return }
-      showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'complete'}`)
+      const { error, next_process } = await markProcessDone(row.id, row.current_process || processCode, next)
+      if (error) { alert('Error: ' + error); loadRows(); return }
+      showToast(`✓ ${row.batch_id} ${next_process ? '→ ' + next_process : 'complete'}`)
       loadRows()
     } finally { setSaving(false) }
   }
 
   // ── Rollback — send batch back to previous process ──────────────────────
   const handleRollback = async (row: any) => {
+    // Only a batch that is running at THIS process can be rolled back from here
+    if (!sameCode(row.current_process, processCode) || row.status !== 'in-process' || row.is_faulty) {
+      alert(`${row.batch_id} is not running at ${processCode} any more — refresh the page.`)
+      loadRows(); return
+    }
     const block = collabBlockMessage(row, processCode, allBatches)
     if (block) { alert(block); return }
     const route: string[] = row.process_route || row.routeStr?.split('/') || []
-    const currentIdx = route.findIndex((c: string) =>
-      sameCode(c, processCode) || c === row.current_process
-    )
+    const currentIdx = route.findIndex((c: string) => sameCode(c, processCode))
 
-    let prevProcess: string | null = null
-    let newStatus = 'in-process'
-
-    if (currentIdx <= 0) {
-      // First process — rollback to pending (back to First Process page)
-      prevProcess = null
-      newStatus   = 'pending'
-    } else {
-      // Not first — rollback to previous process
-      prevProcess = route[currentIdx - 1]
-      newStatus   = 'in-process'
-    }
+    // First process → back to pending (First Process page); else the previous process
+    const prevProcess: string | null = currentIdx > 0 ? route[currentIdx - 1] : null
 
     const msg = prevProcess
       ? `Roll back ${row.batch_id} from ${processCode} to ${prevProcess}?`
@@ -340,46 +333,16 @@ export default function FmsProcessPage() {
     if (!confirm(msg)) return
     setSaving(true)
     try {
-      // 1. Update batch: set current_process to previous, clear sent_at
-      await fetch('/api/batches', {
+      // One server step: moves the batch back and resets both process steps
+      // (refused if the batch moved on, or has an open FOB here)
+      const res = await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action:          'update',
-          id:              row.id,
-          current_process: prevProcess,
-          status:          newStatus,
-          sent_at:         null,
-        })
-      })
-
-      // 2. Reset BOTH:
-      //    a) The process we're rolling back FROM (current page) - mark as pending  
-      //    b) The process we're going BACK TO (prevProcess) - so it can be marked Done again
-      
-      // Reset current process (where batch is now leaving)
-      await fetch('/api/batches', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action:       'reset_process',
-          batch_id:     row.id,
-          process_code: processCode,   // current page (e.g. H - leaving this)
-        })
-      })
-
-      // Reset previous process (where batch is going back to, so Done works)
-      if (prevProcess) {
-        await fetch('/api/batches', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action:       'reset_process',
-            batch_id:     row.id,
-            process_code: prevProcess,  // where batch goes back (e.g. C - needs to be active)
-          })
-        })
-      }
-
-      showToast(prevProcess
-        ? `↩ ${row.batch_id} rolled back to ${prevProcess}`
+        body: JSON.stringify({ action: 'rollback', batch_id: row.id, process_code: processCode }),
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      if (!res.ok) { alert('Error: ' + res.error); loadRows(); return }
+      const back = res.prev_process ?? null
+      showToast(back
+        ? `↩ ${row.batch_id} rolled back to ${back}`
         : `↩ ${row.batch_id} returned to First Process page`)
       loadRows()
     } finally { setSaving(false) }
@@ -401,7 +364,7 @@ export default function FmsProcessPage() {
         faulty_kg:    parseFloat(row.kg) || 0,
         process_code: processCode,
       })
-      if (error) { alert('Error: ' + error); return }
+      if (error) { alert('Error: ' + error); loadRows(); return }
       showToast(`✓ ${row.batch_id} marked faulty`)
       setFaultyModal(null); setFaultyReason('')
       loadRows()
@@ -428,7 +391,7 @@ export default function FmsProcessPage() {
           notes:        fobReason,
         }),
       }).then(r => r.json())
-      if (!fobRes.ok) { alert('Error: ' + fobRes.error); return }
+      if (!fobRes.ok) { alert('Error: ' + fobRes.error); if (fobRes.stale) loadRows(); return }
       showToast(`✓ FOB entry created for ${row.batch_id}`)
       setFobModal(null); setFobReason('')
       loadRows()
@@ -729,7 +692,8 @@ export default function FmsProcessPage() {
                                   {hasFob ? '✓ FOB' : '+ FOB'}
                                 </button>
 
-                                {/* DELETE — always enabled */}
+                                {/* DELETE (roll back) — only while the batch is running here */}
+                                {sameCode(row.current_process, processCode) && row.status === 'in-process' && !row.is_faulty && (
                                 <button
                                   onClick={() => handleRollback(row)}
                                   disabled={saving}
@@ -738,6 +702,7 @@ export default function FmsProcessPage() {
                                   title="Roll back to previous process">
                                   ↩ Delete
                                 </button>
+                                )}
 
                               </div>
                             </td>

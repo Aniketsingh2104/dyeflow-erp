@@ -17,6 +17,7 @@ import {
   SESSION_COOKIE, createSessionToken, sessionConfigured, sessionCookieOptions, requestIsHttps,
 } from '@/lib/session'
 import { getSession, loadActiveUser, publicUser } from '@/lib/auth'
+import { forgetUser } from '@/lib/access'
 
 function clearCookie(res: NextResponse, req: NextRequest) {
   res.cookies.set(SESSION_COOKIE, '', sessionCookieOptions(requestIsHttps(req), 0))
@@ -28,8 +29,9 @@ export async function GET(req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'Not signed in' }, { status: 401 })
   const { user, error } = await loadActiveUser(s.uid)
   if (error) return NextResponse.json({ ok: false, error: 'Database unavailable' }, { status: 503 })
-  if (!user) {
-    return clearCookie(NextResponse.json({ ok: false, error: 'Account inactive' }, { status: 401 }), req)
+  if (!user || (user.session_version || 0) !== (s.sv || 0)) {
+    // inactive, deleted, or signed out / changed since this cookie was issued
+    return clearCookie(NextResponse.json({ ok: false, error: 'Please sign in again' }, { status: 401 }), req)
   }
   return NextResponse.json({ ok: true, user: publicUser(user) })
 }
@@ -38,7 +40,19 @@ export async function POST(req: NextRequest) {
   try {
     const { username, password, action } = await req.json()
 
-    if (action === 'logout') return clearCookie(NextResponse.json({ ok: true }), req)
+    if (action === 'logout') {
+      // Cancel this login everywhere: older cookies (other tabs, devices, a
+      // copied cookie) stop working too.
+      const s = getSession(req)
+      if (s) {
+        const { data } = await dbSelect('dyeflow_users', { id: `eq.${s.uid}`, limit: '1' }, 'id,session_version')
+        if (data?.[0] && (data[0].session_version || 0) === (s.sv || 0)) {
+          await dbUpdate('dyeflow_users', { id: s.uid }, { session_version: (data[0].session_version || 0) + 1 })
+        }
+        forgetUser(s.uid)
+      }
+      return clearCookie(NextResponse.json({ ok: true }), req)
+    }
 
     if (!sessionConfigured()) {
       return NextResponse.json({ ok: false,
@@ -54,7 +68,7 @@ export async function POST(req: NextRequest) {
     const { data: users, error } = await dbSelect(
       'dyeflow_users',
       { username: `eq.${uname}`, is_active: 'eq.true', limit: '1' },
-      'id,username,full_name,role,permissions,password,scope_mode,unit,party,notes'
+      'id,username,full_name,role,permissions,password,scope_mode,unit,party,notes,session_version'
     )
     if (error) {
       return NextResponse.json({ ok: false, error: 'Database unavailable — try again shortly.' }, { status: 503 })
@@ -72,7 +86,8 @@ export async function POST(req: NextRequest) {
       await dbUpdate('dyeflow_users', { id: user.id }, { password: hashPassword(String(password)) })
     }
 
-    const token = createSessionToken({ uid: user.id, u: user.username, r: user.role || 'custom' })!
+    const token = createSessionToken({ uid: user.id, u: user.username, r: user.role || 'custom', sv: user.session_version || 0 })!
+    forgetUser(user.id)
     const res = NextResponse.json({ ok: true, user: publicUser(user) })
     res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(requestIsHttps(req)))
     return res
