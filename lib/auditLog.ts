@@ -26,37 +26,8 @@ function getActiveUsername(): string {
   } catch { return 'System' }
 }
 
-/**
- * Log an audit entry to Supabase via /api/audit (fire-and-forget).
- * Never throws — audit failures must not crash the app.
- */
-export function logAudit(entry: Omit<AuditEntry, 'id' | 'timestamp' | 'user'>): void {
-  if (typeof window === 'undefined') return
-  try {
-    const id         = `AL-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
-    const activeUser = getActiveUsername()
-
-    fetch('/api/audit', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action:      'log',
-        id,
-        user:        activeUser,
-        action_type: entry.action,
-        entity_type: entry.entityType,
-        entity_id:   entry.entityId,
-        field:       entry.field,
-        old_value:   entry.oldValue,
-        new_value:   entry.newValue,
-        note:        entry.note,
-      }),
-    }).catch(() => {}) // never throw
-
-  } catch {
-    // Never crash the app on audit failure
-  }
-}
+// (logAudit() — writing audit entries from the browser — was removed:
+//  every audit entry is now written by the server when the change happens.)
 
 /** Read audit log from Supabase. */
 export async function readAuditLogAsync(limit = 500): Promise<AuditEntry[]> {

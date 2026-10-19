@@ -12,6 +12,7 @@
  * Tabs: Overdue · Due this week · All open · Not planned yet · Dispatched.
  */
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { toCsv } from '@/lib/csv'
 import Link from 'next/link'
 import { getUrgency, URGENCY_CELL_STYLE } from '@/lib/dateUrgency'
 import { dateColFor } from '@/lib/processCodes'
@@ -132,7 +133,7 @@ export default function DeliveryTrackerPage() {
     const head = ['Order', 'Party', 'Article', 'Colour', 'Supervisor', 'Order Kg', 'Split Kg', 'Done Kg', 'Dispatch date', 'Status', 'Now at', 'Late batches']
     const body = shown.map(r => [r.orderNumber, r.party, r.article, r.color, r.supervisor, r.qtyKg, r.splitKg, r.doneKg,
       r.dispatch, r.status, r.where, r.atRisk])
-    const csv = [head, ...body].map(l => l.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+    const csv = toCsv([head, ...body])
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
     a.download = `delivery-tracker-${today()}.csv`

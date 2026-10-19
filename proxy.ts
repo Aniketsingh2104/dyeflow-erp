@@ -20,6 +20,16 @@ import { SESSION_COOKIE, verifySessionToken } from '@/lib/session'
 
 const USER_HEADERS = ['x-dyeflow-user-id', 'x-dyeflow-username', 'x-dyeflow-role']
 
+// The Cloudflare tunnel host points at the app on the factory PC. Through it
+// only the Ollama relay may be reached — never the ERP pages or other APIs.
+const RELAY_ONLY_HOSTS = (process.env.RELAY_ONLY_HOSTS || 'ollama.ginzaapp.in')
+  .split(',').map(h => h.trim().toLowerCase()).filter(Boolean)
+
+function hostOf(req: NextRequest): string {
+  const h = req.headers.get('x-forwarded-host') || req.headers.get('host') || ''
+  return h.split(',')[0].trim().toLowerCase().replace(/:\d+$/, '')
+}
+
 function isPublic(pathname: string): boolean {
   return pathname === '/login'
       || pathname === '/api/auth'
@@ -29,6 +39,15 @@ function isPublic(pathname: string): boolean {
 
 export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl
+
+  // On the factory PC (not on Vercel) anything that came through Cloudflare
+  // (cf-connecting-ip is set by the tunnel) is treated the same way, in case
+  // the tunnel passes a different Host header.
+  const viaTunnel = RELAY_ONLY_HOSTS.includes(hostOf(req))
+    || (process.env.VERCEL !== '1' && !!req.headers.get('cf-connecting-ip'))
+  if (viaTunnel && !pathname.startsWith('/api/ollama-relay/')) {
+    return new NextResponse('Not found', { status: 404 })
+  }
 
   const headers = new Headers(req.headers)
   for (const h of USER_HEADERS) headers.delete(h)
@@ -57,6 +76,8 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next's own static files and plain image/font assets
-  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|txt|map)$).*)'],
+  // Everything except Next's own built files, the favicon and the few image
+  // files that sit directly in /public (file.svg, next.svg …). A page address
+  // that merely ENDS in .png / .txt (e.g. /fms/D.png) still gets the login check.
+  matcher: ['/((?!_next/static/|_next/image|favicon\\.ico$|[^/]+\\.svg$).*)'],
 }

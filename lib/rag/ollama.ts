@@ -48,7 +48,9 @@ async function ollamaPost(path: string, body: any): Promise<any> {
       cache: 'no-store',
     })
   } catch {
-    throw new OllamaError(`Cannot reach Ollama at ${OLLAMA_BASE_URL}${path}`, UNREACHABLE_HINT)
+    // the address stays in the server log only
+    console.error(`[ollama] cannot reach ${OLLAMA_BASE_URL}${path}`)
+    throw new OllamaError('Cannot reach the AI server (Ollama) right now.', UNREACHABLE_HINT)
   }
 
   // Ollama returns 404 for two very different reasons, so read the raw body

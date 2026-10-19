@@ -42,7 +42,17 @@ function AiInsightsPanel() {
   const [error, setError] = useState('')
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
 
-  const loadInsights = useCallback(async () => {
+  // The insights are kept for 10 minutes in this browser tab, so moving
+  // around the app doesn't use up the AI limit (↻ always asks again).
+  const loadInsights = useCallback(async (force = false) => {
+    if (!force) {
+      try {
+        const c = JSON.parse(sessionStorage.getItem('dyeflow_ai_insights') || 'null')
+        if (c && Date.now() - c.at < 10 * 60_000 && Array.isArray(c.insights)) {
+          setInsights(c.insights); setLastRefreshed(new Date(c.at)); setLoading(false); return
+        }
+      } catch {}
+    }
     setLoading(true); setError('')
     try {
       const ctxRes = await fetch('/api/context', { cache: 'no-store' })
@@ -72,16 +82,19 @@ Rules:
         })
       })
       const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Could not load AI insights.')
       const text = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
       const parsed = parseInsights(text)
-      setInsights(parsed.length > 0 ? parsed : [{ text: 'Factory data loaded. No urgent issues detected.', type: 'good' }])
+      const list: AiInsight[] = parsed.length > 0 ? parsed : [{ text: 'Factory data loaded. No urgent issues detected.', type: 'good' }]
+      setInsights(list)
       setLastRefreshed(new Date())
+      try { sessionStorage.setItem('dyeflow_ai_insights', JSON.stringify({ at: Date.now(), insights: list })) } catch {}
     } catch (err: any) {
       setError(err.message || 'Could not load AI insights.')
     } finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { loadInsights() }, [loadInsights])
+  useEffect(() => { loadInsights(false) }, [loadInsights])
 
   const iconMap: Record<string, string> = { urgent: '⚠', info: '●', good: '✓' }
   const colorMap: Record<string, any> = {
@@ -104,7 +117,7 @@ Rules:
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Link href="/ai-assistant" style={{ fontSize: 11, color: '#94a3b8', textDecoration: 'none', padding: '3px 8px', border: '1px solid #334155', borderRadius: 4 }}>Open AI Assistant →</Link>
-          <button onClick={loadInsights} disabled={loading} style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: '1px solid #334155', borderRadius: 4, padding: '3px 8px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1 }}>
+          <button onClick={() => loadInsights(true)} disabled={loading} style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: '1px solid #334155', borderRadius: 4, padding: '3px 8px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1 }}>
             {loading ? '…' : '↻'}
           </button>
         </div>
@@ -114,7 +127,7 @@ Rules:
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Reading factory data from Supabase…</span>
         ) : error ? (
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-            Could not load AI insights — <button onClick={loadInsights} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>Retry</button>
+            Could not load AI insights — <button onClick={() => loadInsights(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>Retry</button>
           </span>
         ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

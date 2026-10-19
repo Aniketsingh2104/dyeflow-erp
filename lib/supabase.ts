@@ -5,20 +5,46 @@
 const SUPABASE_URL  = process.env.SUPABASE_URL || ''
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_KEY || ''
 const SECRET_KEY    = process.env.SUPABASE_SECRET_KEY  || ''   // new sb_secret_ format
-const ANON_KEY      = process.env.SUPABASE_ANON_KEY    || ''
 
-// Prefer new sb_secret_ key, fall back to legacy service_role key, then anon
+// The server key: new sb_secret_ key, else the legacy service_role key.
+// There is NO fallback to the public anon key any more — without a server
+// key every database call fails with "Supabase not configured" (and the
+// Vercel log says why) instead of quietly running with the wrong key.
 export const SUPABASE_API_KEY =
   (SECRET_KEY  && !SECRET_KEY.includes('YOUR_'))  ? SECRET_KEY  :
   (SERVICE_KEY && !SERVICE_KEY.includes('YOUR_')) ? SERVICE_KEY :
-  ANON_KEY
+  ''
+if (!SUPABASE_API_KEY) console.error('[supabase] SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_KEY) is not set — every database call will fail.')
+
+// ── Errors shown to users ────────────────────────────────────────────────────
+// Our own database functions (df_…) raise clear messages with codes PT400 /
+// PT404 / PT409 — those are passed on as they are. Any other database error
+// is logged on the server with a short reference and the user sees a plain
+// message with that reference (no table / constraint names).
+const FRIENDLY: Record<string, string> = {
+  '23505': 'This already exists (duplicate).',
+  '23503': 'This is still used somewhere else, so it can\'t be changed or removed.',
+  '23502': 'A required value is missing.',
+  '23514': 'One of the values is not allowed here.',
+  '22P02': 'One of the values has the wrong format.',
+  '22007': 'A date has the wrong format.',
+  '22008': 'A date is out of range.',
+}
+function userError(path: string, method: string, status: number, json: any): string {
+  const code = String(json?.code || '')
+  if (code.startsWith('PT') && json?.message) return String(json.message)
+  const ref = Math.random().toString(36).slice(2, 6).toUpperCase()
+  console.error(`[db] ref ${ref} · ${method} ${path} → HTTP ${status}`, json)
+  const friendly = FRIENDLY[code]
+  return friendly ? `${friendly} (ref ${ref})` : `Database error (ref ${ref}) — please try again, or tell the admin this ref.`
+}
 
 export { SUPABASE_URL }
 
 export async function sb<T = any>(
   path: string,
   options: RequestInit & { params?: Record<string, string> } = {}
-): Promise<{ data: T | null; error: string | null; status: number }> {
+): Promise<{ data: T | null; error: string | null; status: number; rawError?: string }> {
   if (!SUPABASE_URL || !SUPABASE_API_KEY) {
     return { data: null, error: 'Supabase not configured', status: 503 }
   }
@@ -40,10 +66,14 @@ export async function sb<T = any>(
     })
     if (res.status === 204) return { data: null, error: null, status: 204 }
     const json = await res.json().catch(() => null)
-    if (!res.ok) return { data: null, error: json?.message || `HTTP ${res.status}`, status: res.status }
+    if (!res.ok) {
+      return { data: null, error: userError(path, String(options.method || 'GET'), res.status, json),
+               status: res.status, rawError: json?.message || `HTTP ${res.status}` }
+    }
     return { data: json as T, error: null, status: res.status }
   } catch (err: any) {
-    return { data: null, error: err?.message || 'Network error', status: 500 }
+    console.error(`[db] network error · ${path}:`, err?.message || err)
+    return { data: null, error: 'Database unreachable — try again in a moment.', status: 500, rawError: err?.message }
   }
 }
 
@@ -72,7 +102,7 @@ export async function dbSelect<T = any>(
 
   // First page
   let first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
-  if (first.error && mayPage && !rest.order && /column|id/i.test(first.error)) {
+  if (first.error && mayPage && !rest.order && /column|id/i.test(first.rawError || '')) {
     delete base.order                               // table has no "id" column
     first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
   }

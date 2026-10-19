@@ -105,15 +105,16 @@ export default function AuditLogPage() {
   const uniqueEntities = [...new Set(entries.map(e => e.entityType))]
 
   const clearLog = async () => {
-    if (!confirm('Clear the entire audit log? This cannot be undone.')) return
+    if (!confirm('Clear the audit log? The process history (Done / batch moves) is kept for Batch Trace and the predictions. This cannot be undone.')) return
     setClearing(true)
     try {
-      await fetch('/api/audit', {
+      const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'clear' }),
-      })
-      setEntries([])
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      if (!res.ok) { alert('Not cleared: ' + (res.error || 'Unknown error')); return }
+      await load()
     } finally { setClearing(false) }
   }
 

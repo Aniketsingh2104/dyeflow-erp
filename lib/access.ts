@@ -6,7 +6,7 @@
  * POLICY below.
  *
  * The user's role and page permissions are read from dyeflow_users (cached
- * 30 seconds per server instance) — never from the browser.
+ * 10 seconds per server instance) — never from the browser.
  *
  *   admin  → everything
  *   staff  → (every non-party role) may READ factory data; may CHANGE data
@@ -109,7 +109,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
   'ai-rag': { POST: { view: ['/ai-assistant'] } },
   'ai-embed': { GET: 'admin', POST: 'admin' },
   'ai-seed': { GET: 'admin', POST: 'admin' },
-  audit:   { GET: 'staff', log: 'staff', clear: 'admin' },   // GET narrowed in the route (admin or one entity)
+  audit:   { GET: 'staff', clear: 'admin' },   // GET narrowed in the route (admin or one entity)
   changes: { GET: 'any' },
   // order sheets — party users allowed, the route also checks the sheet
   'order-sheets': { GET: 'any', create: 'admin', update_rows: 'admin', toggle_status: 'admin', delete: 'admin' },
@@ -118,7 +118,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
 }
 
 // ── User lookup (30 s cache) ───────────────────────────────────────────────
-const TTL_MS = 30_000
+const TTL_MS = 10_000   // a logout / role change takes effect everywhere within 10 s
 const cache = new Map<string, { at: number; row: any }>()
 
 async function loadUserRow(uid: string): Promise<{ row: any; error: string | null }> {

@@ -22,6 +22,21 @@ import { saveUiSession, clearUiSession } from '@/lib/clientSession'
 const POLL_MS = 30_000
 
 // Dispatch a global event so any component can react to DB changes
+
+// Very old versions kept the whole user list (with plain-text passwords) in
+// this browser's localStorage under "dyeflow_db". Remove those parts.
+function dropOldBrowserUsers() {
+  try {
+    const raw = localStorage.getItem('dyeflow_db')
+    if (!raw) return
+    const db = JSON.parse(raw)
+    if (db && typeof db === 'object' && ('users' in db || 'currentUser' in db || 'activeUser' in db)) {
+      delete db.users; delete db.currentUser; delete db.activeUser
+      localStorage.setItem('dyeflow_db', JSON.stringify(db))
+    }
+  } catch { /* unreadable copy — leave it */ }
+}
+
 export function notifyDbChanged(table?: string) {
   window.dispatchEvent(new CustomEvent('dyeflow-db-updated', { detail: { table } }))
 }
@@ -52,7 +67,7 @@ export default function DbProvider({ children }: { children: React.ReactNode }) 
   const isLogin  = pathname === '/login'
   const lastSig  = useRef<string | null>(null)
 
-  useEffect(() => { patchFetchOnce() }, [])
+  useEffect(() => { patchFetchOnce(); dropOldBrowserUsers() }, [])
 
   // Refresh the UI copy of the signed-in user on every page change
   useEffect(() => {

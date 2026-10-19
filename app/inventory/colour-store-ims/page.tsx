@@ -26,6 +26,7 @@
 // all-or-nothing against the Colour Chemical Master.
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { toCsv } from '@/lib/csv'
 import * as XLSX from 'xlsx'
 
 type Band = 'crit' | 'warn' | 'ok' | 'none'
@@ -279,9 +280,7 @@ export default function ColourStoreIMSPage() {
       r.reorder  != null ? r.reorder.toFixed(2)  : '',
       ...shownDates.map(d => { const g = r.dateValues[d]; return g != null ? (g / 1000).toFixed(3) : '' }),
     ])
-    const csv = [head, ...body]
-      .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
+    const csv = toCsv([head, ...body])
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a')
     a.href = url

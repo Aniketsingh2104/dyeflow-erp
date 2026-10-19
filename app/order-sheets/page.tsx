@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { toCsv } from '@/lib/csv'
 import Link from 'next/link'
 import { getActiveUserRecord } from '@/lib/permissions'
 
@@ -76,8 +77,7 @@ export default function OrderSheetsPage() {
       r.party, r.subParty, r.salesPerson, r.article, r.color,
       r.qtyKg, r.qtyMtr, r.remarks, r.approvalStatus || 'draft',
     ])
-    const esc = (v: any) => { const s = String(v ?? ''); return (s.includes(',') || s.includes('"')) ? `"${s.replace(/"/g,'""')}"` : s }
-    const csv = [headers.map(esc).join(','), ...rows.map((r: any[]) => r.map(esc).join(','))].join('\n')
+    const csv = toCsv([headers, ...rows])
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
     a.download = `${sheet.title.replace(/[^a-z0-9]+/ig,'_')}.csv`

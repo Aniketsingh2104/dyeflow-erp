@@ -199,7 +199,7 @@ export default function UserManagementPage() {
     setSaveError('')
     if (!formData.username.trim()) { setSaveError('Username is required.'); return }
     if (!editingUserId && !formData.password.trim()) { setSaveError('Password required for new users.'); return }
-    if (formData.password && formData.password.length < 4) { setSaveError('Password must be ≥ 4 characters.'); return }
+    if (formData.password && formData.password.trim().length < 8) { setSaveError('Password must be at least 8 characters.'); return }
     if (formData.password && formData.password !== formData.confirmPassword) { setSaveError('Passwords do not match.'); return }
 
     setSaving(true)
@@ -268,7 +268,7 @@ export default function UserManagementPage() {
     if (!user) return
     const newPwd = prompt(`New password for "${user.username}":`)
     if (!newPwd?.trim()) return
-    if (newPwd.trim().length < 4) { alert('Password must be at least 4 characters.'); return }
+    if (newPwd.trim().length < 8) { alert('Password must be at least 8 characters.'); return }
     const res  = await fetch('/api/users', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -277,6 +277,17 @@ export default function UserManagementPage() {
     const data = await res.json()
     if (data.ok) alert(`✓ Password updated for "${user.username}"`)
     else alert('Reset failed: ' + (data.error || 'Unknown'))
+  }
+
+  // ── Unlock a login blocked by too many wrong passwords ────────────────────
+  const unlockLogin = async (userId: string) => {
+    const user = users.find(u => u.id === userId)
+    if (!user) return
+    const res = await fetch('/api/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'unlock_login', id: userId }),
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    alert(res.ok ? `✓ "${user.username}" can log in again.` : 'Unlock failed: ' + (res.error || 'Unknown'))
   }
 
   const groupedPages = useMemo(() => {
@@ -366,6 +377,8 @@ export default function UserManagementPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button className="xs" style={{ marginRight: 4 }} onClick={() => openEditModal(user.id)}>Edit</button>
                         <button className="xs" style={{ marginRight: 4 }} onClick={() => resetPassword(user.id)}>Reset Pwd</button>
+                        <button className="xs" style={{ marginRight: 4 }} onClick={() => unlockLogin(user.id)}
+                          title="Clear a login block caused by too many wrong passwords">🔓 Unlock</button>
                         <button className="xs danger" onClick={() => deleteUser(user.id)} disabled={isActive}
                           title={isActive ? "You can't delete your own account" : undefined}>Delete</button>
                       </td>
@@ -460,7 +473,7 @@ export default function UserManagementPage() {
                       <div className="form-group">
                         <label>{editingUserId ? 'New Password' : 'Password *'}</label>
                         <PasswordInput value={formData.password} onChange={v => { setFormData(f => ({ ...f, password: v })); setSaveError('') }}
-                          placeholder={editingUserId ? 'Leave blank to keep current' : 'Min. 4 characters'} required={!editingUserId} />
+                          placeholder={editingUserId ? 'Leave blank to keep current' : 'Min. 8 characters'} required={!editingUserId} />
                       </div>
                       <div className="form-group">
                         <label>Confirm Password</label>

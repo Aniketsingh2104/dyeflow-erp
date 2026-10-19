@@ -3,11 +3,18 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { saveUiSession } from '@/lib/clientSession'
 
-// Only allow redirects back to our own pages (never to another site)
+// Only allow redirects back to our own pages (never to another site).
+// The value is read as a URL against this site: "/\\evil.com", "/%09/evil.com"
+// and the like resolve to another host and are refused.
 function safeNext(): string {
   if (typeof window === 'undefined') return '/'
   const n = new URLSearchParams(window.location.search).get('next') || '/'
-  return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '/'
+  if (!n.startsWith('/') || /[\\\u0000-\u001f]/.test(n)) return '/'
+  try {
+    const u = new URL(n, window.location.origin)
+    if (u.origin !== window.location.origin || u.pathname.startsWith('/login')) return '/'
+    return u.pathname + u.search + u.hash
+  } catch { return '/' }
 }
 
 

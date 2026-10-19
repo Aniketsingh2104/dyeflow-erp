@@ -156,6 +156,14 @@ const sameVal = (a: any, b: any) => {
   return n(a) === n(b)
 }
 
+/** A stored original value back in its column's type. */
+function dbValue(f: string, v: any) {
+  if (v === null || v === undefined || v === '') return null
+  if (f === 'qty_kg' || f === 'qty_mtr') { const n = parseFloat(v); return isNaN(n) ? null : n }
+  if (f === 'no_of_taka') { const n = parseInt(v); return isNaN(n) ? null : n }
+  return String(v)
+}
+
 /** Save one row. Existing rows are patched by id; rows without an id are inserted. */
 async function saveOne(sheetId: string, row: any, fromSheet: boolean) {
   const dbRow: Record<string, any> = toDB(row, sheetId)
@@ -191,6 +199,35 @@ async function saveOne(sheetId: string, row: any, fromSheet: boolean) {
         const editing = inDb.request_edit === true || (was === 'edit-request' && now === 'approved')
         if (isOrder && !editing && CONTENT_FIELDS.some(f => !sameVal(dbRow[f], inDb[f]))) {
           return { status: 409, error: 'This row is already an order — tick "Request Edit" before changing it.' }
+        }
+        // The edit history (original value of each changed cell, which the
+        // office sees and "Reject" puts back) is kept by the server — never
+        // taken from the browser.
+        // A new edit (Request Edit just ticked) starts with an empty history,
+        // so old leftovers can never be "restored" over the order's values.
+        const startingEdit = isOrder && inDb.request_edit !== true && dbRow.request_edit === true && was !== 'edit-request'
+        const hist: Record<string, any> = startingEdit ? {}
+          : { ...((inDb.edit_history && typeof inDb.edit_history === 'object') ? inDb.edit_history : {}) }
+        const withdrawing = isOrder && ((was === 'edit-request' && now === 'approved')
+          || (inDb.request_edit === true && dbRow.request_edit !== true && now === was))
+        if (withdrawing) {
+          // edit withdrawn / Request Edit unticked → every cell goes back to
+          // the order's values (changed cells from the history, the others
+          // as they are in the database — nothing taken from the browser)
+          CONTENT_FIELDS.forEach((f, i) => {
+            const idx = String(i + 2)
+            dbRow[f] = idx in hist ? dbValue(f, hist[idx]) : inDb[f]
+          })
+          dbRow.edit_history = {}
+        } else if (isOrder && editing) {
+          CONTENT_FIELDS.forEach((f, i) => {
+            const idx = String(i + 2)
+            if (!(idx in hist) && !sameVal(dbRow[f], inDb[f])) hist[idx] = inDb[f] ?? ''   // first change wins
+            if (idx in hist && sameVal(dbRow[f], hist[idx])) delete hist[idx]             // changed back
+          })
+          dbRow.edit_history = hist
+        } else {
+          dbRow.edit_history = hist
         }
       } else if (was !== now && !SHEET_MOVES.has(`${was}>${now}`) && !OFFICE_MOVES.has(`${was}>${now}`)) {
         return { status: 409, error: `This row is now "${was}" — it was changed meanwhile. Refresh the page.` }

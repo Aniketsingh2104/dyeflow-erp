@@ -12,7 +12,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, auditLog } from '@/lib/supabase'
 import { requireAdmin, getSession } from '@/lib/auth'
 import { forgetUser } from '@/lib/access'
+import { unlockLogin } from '@/lib/rateLimit'
 import { SESSION_COOKIE, createSessionToken, sessionCookieOptions, requestIsHttps } from '@/lib/session'
+
+// New and changed passwords (existing shorter ones keep working until changed)
+const MIN_PASSWORD = 8
 
 /** Raise the user's session_version → every login cookie they hold stops working. */
 async function signOutEverywhere(id: string): Promise<number | null> {
@@ -51,8 +55,8 @@ export async function POST(req: NextRequest) {
   if (action === 'create') {
     const { username, password, full_name, role, permissions, scope_mode, unit, party, notes } = body
     if (!username?.trim()) return NextResponse.json({ ok: false, error: 'Username required' }, { status: 400 })
-    if (!password?.trim() || password.trim().length < 4) {
-      return NextResponse.json({ ok: false, error: 'Password must be at least 4 characters' }, { status: 400 })
+    if (!password?.trim() || password.trim().length < MIN_PASSWORD) {
+      return NextResponse.json({ ok: false, error: `Password must be at least ${MIN_PASSWORD} characters` }, { status: 400 })
     }
     const uname = username.trim().toLowerCase()
 
@@ -99,7 +103,7 @@ export async function POST(req: NextRequest) {
     if (body.notes       !== undefined) patch.notes       = body.notes || null
     if (typeof body.is_active === 'boolean') patch.is_active = body.is_active
     if (password?.trim()) {
-      if (password.trim().length < 4) return NextResponse.json({ ok: false, error: 'Password must be at least 4 characters' }, { status: 400 })
+      if (password.trim().length < MIN_PASSWORD) return NextResponse.json({ ok: false, error: `Password must be at least ${MIN_PASSWORD} characters` }, { status: 400 })
       patch.password = hashPassword(password)
     }
     if (body.username !== undefined) {
@@ -141,13 +145,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
+  // Clear a login block (too many wrong passwords) — admin only
+  if (action === 'unlock_login') {
+    const { id } = body
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const { data: u } = await dbSelect('dyeflow_users', { id: `eq.${id}`, limit: '1' }, 'id,username')
+    if (!u?.[0]) return NextResponse.json({ ok: false, error: 'User not found' }, { status: 404 })
+    const { error } = await unlockLogin(u[0].username)
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    await auditLog({ action: 'user_unlock_login', entity_type: 'user', entity_id: u[0].username })
+    return NextResponse.json({ ok: true })
+  }
+
   if (action === 'reset_password') {
     const { id, password } = body
     if (!id || !password?.trim()) return NextResponse.json({ ok: false, error: 'id and password required' }, { status: 400 })
-    if (password.trim().length < 4) return NextResponse.json({ ok: false, error: 'Password must be at least 4 characters' }, { status: 400 })
+    if (password.trim().length < MIN_PASSWORD) return NextResponse.json({ ok: false, error: `Password must be at least ${MIN_PASSWORD} characters` }, { status: 400 })
     const { error } = await dbUpdate('dyeflow_users', { id }, { password: hashPassword(password), updated_at: new Date().toISOString() })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     await auditLog({ action: 'user_reset_password', entity_type: 'user', entity_id: id })
+    { const { data: u } = await dbSelect('dyeflow_users', { id: `eq.${id}`, limit: '1' }, 'username')
+      if (u?.[0]?.username) await unlockLogin(u[0].username) }   // a new password also lifts a login block
     const sv = await signOutEverywhere(id)       // old logins of this user stop working
     const res = NextResponse.json({ ok: true })
     if (id === me.uid && sv !== null) {

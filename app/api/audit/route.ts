@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { dbSelect, dbInsert, sb, currentUsername } from '@/lib/supabase'
+import { dbSelect, sb } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
   const g = await guard(req, 'audit', 'GET')
@@ -35,27 +35,16 @@ export async function POST(req: NextRequest) {
   { const g = await guard(req, 'audit', (body as any)?.action); if (g.deny) return g.deny }
   const { action } = body
 
-  if (action === 'log') {
-    // username comes from the signed-in session, not from the browser
-    const { error } = await dbInsert('audit_log', {
-      username:    (await currentUsername()) || 'System',
-      action:      body.action_type,
-      entity_type: body.entity_type,
-      entity_id:   body.entity_id,
-      field:       body.field       || null,
-      old_value:   body.old_value   || null,
-      new_value:   body.new_value   || null,
-      note:        body.note        || null,
-    })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true })
-  }
+  // (The old 'log' action — any user writing their own entries — is gone:
+  //  audit entries are only written by the server itself.)
 
   if (action === 'clear') {
     // Clearing the audit log — admin only (POLICY in lib/access.ts)
     const { error } = await sb('/audit_log', {
       method: 'DELETE',
-      params: { id: 'neq.never' }, // delete all rows
+      // everything except the process history (process_done / batch_move),
+      // which the predictions and Batch Trace are built from
+      params: { action: 'not.in.(process_done,batch_move)' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })

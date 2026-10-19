@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { embedText, chatOllama, OllamaError, OLLAMA_BASE_URL, EMBED_MODEL, CHAT_MODEL } from '@/lib/rag/ollama'
+import { embedText, chatOllama, OllamaError, EMBED_MODEL, CHAT_MODEL } from '@/lib/rag/ollama'
+import { aiLimit, tooLong, AI_MAX_CHARS } from '@/lib/aiGuard'
 import { sb } from '@/lib/supabase'
 import { getLiveSnapshot, getTargetedContext } from '@/lib/rag/liveContext'
 
@@ -40,7 +41,6 @@ function ollamaErrorResponse(err: OllamaError) {
     {
       error: err.message,
       hint: err.hint === '__NOT_FOUND__' ? undefined : err.hint,
-      ollama_url: OLLAMA_BASE_URL,
       setup: [
         '1. Install Ollama: https://ollama.com',
         '2. Start it (usually runs automatically, or: ollama serve)',
@@ -54,13 +54,19 @@ function ollamaErrorResponse(err: OllamaError) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    { const g = await guard(req, 'ai-rag', 'POST'); if (g.deny) return g.deny }
+    const g = await guard(req, 'ai-rag', 'POST')
+    if (g.deny) return g.deny
     const question: string = (body?.question ?? body?.message ?? '').toString()
-    const history: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body?.history) ? body.history : []
+    // last 10 turns of history, as plain text
+    const history: { role: 'user' | 'assistant'; content: string }[] = (Array.isArray(body?.history) ? body.history : [])
+      .slice(-10).map((h: any) => ({ role: h?.role === 'assistant' ? 'assistant' : 'user', content: String(h?.content ?? '') }))
 
     if (!question.trim()) {
       return NextResponse.json({ error: 'question (string) is required' }, { status: 400 })
     }
+    if (question.length + history.reduce((n, h) => n + h.content.length, 0) > AI_MAX_CHARS) return tooLong('This question')
+    const limited = await aiLimit(g.user?.id)
+    if (limited) return limited
 
     // 1) Embed the question
     const questionVector = await embedText(question)
@@ -108,10 +114,11 @@ QUESTION: ${question}`
       sources: knowledgeChunks.map((c) => ({ source: c.source, category: c.category, similarity: c.similarity })),
       model: CHAT_MODEL,
       embed_model: EMBED_MODEL,
-      knowledge_rpc_error: rpcError || undefined,
+      knowledge_search_failed: rpcError ? true : undefined,
     })
   } catch (err: any) {
     if (err instanceof OllamaError) return ollamaErrorResponse(err)
-    return NextResponse.json({ error: `Server error: ${err?.message || String(err)}` }, { status: 500 })
+    console.error('[/api/ai/rag] error:', err)
+    return NextResponse.json({ error: 'AI request failed — try again.' }, { status: 500 })
   }
 }

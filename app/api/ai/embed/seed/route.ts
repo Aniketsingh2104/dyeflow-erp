@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { embedTexts, OllamaError, OLLAMA_BASE_URL, EMBED_MODEL } from '@/lib/rag/ollama'
+import { embedTexts, OllamaError, EMBED_MODEL } from '@/lib/rag/ollama'
 import { dbUpsert } from '@/lib/supabase'
 import knowledgeChunksJson from '@/lib/rag/knowledge_chunks.json'
 import { requireAdmin } from '@/lib/auth'
@@ -67,7 +67,6 @@ function ollamaErrorResponse(err: OllamaError) {
     {
       error: err.message,
       hint: err.hint === '__NOT_FOUND__' ? undefined : err.hint,
-      ollama_url: OLLAMA_BASE_URL,
       setup: [
         '1. Install Ollama: https://ollama.com',
         '2. Start it (usually runs automatically, or: ollama serve)',

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { toCsv } from '@/lib/csv'
 import { QUERY_LIBRARY, QUERY_CATALOG, ReportResult, DbSnapshot } from '@/lib/reportQueries'
 import { isFaultyOpen, isFaultyRepairing, isFaultyClosed, isFobOpen, isFobRepairing, isFobClosed } from '@/lib/recordStatus'
 
@@ -114,9 +115,7 @@ function parseAiResponse(raw: string): any | null {
 // ── Report Table ──────────────────────────────────────────────────────────────
 function ReportTable({ report }: { report: ReportResult }) {
   const exportCSV = () => {
-    const csv = [report.columns, ...report.rows]
-      .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
+    const csv = toCsv([report.columns, ...report.rows])
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

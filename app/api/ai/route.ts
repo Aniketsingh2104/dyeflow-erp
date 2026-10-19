@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
+import { aiLimit, tooLong, capTokens, textOf, AI_MAX_CHARS } from '@/lib/aiGuard'
 
 // ── Server-side AI proxy — supports Gemini OR Groq ───────────────────────────
 // Set ONE of these in .env.local and restart the server:
@@ -12,7 +13,17 @@ import { guard } from '@/lib/access'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    { const g = await guard(req, 'ai', 'POST'); if (g.deny) return g.deny }
+    const g = await guard(req, 'ai', 'POST')
+    if (g.deny) return g.deny
+    // size + rate limits (lib/aiGuard.ts). A long chat keeps its newest
+    // messages: the oldest ones are dropped until the text fits.
+    const msgs: any[] = Array.isArray(body?.messages) ? [...body.messages] : []
+    const size = () => textOf(body?.system).length + msgs.reduce((n: number, m: any) => n + textOf(m?.content).length, 0)
+    while (msgs.length > 1 && size() > AI_MAX_CHARS) msgs.shift()
+    if (size() > AI_MAX_CHARS) return tooLong()
+    body.messages = msgs
+    const limited = await aiLimit(g.user?.id)
+    if (limited) return limited
 
     // ── Try Groq first if key is set ─────────────────────────────────────────
     const groqKey = process.env.GROQ_API_KEY
@@ -45,10 +56,8 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     )
   } catch (err: any) {
-    return NextResponse.json(
-      { error: `Server error: ${err?.message || String(err)}` },
-      { status: 500 }
-    )
+    console.error('[/api/ai] error:', err)
+    return NextResponse.json({ error: 'AI request failed — try again.' }, { status: 500 })
   }
 }
 
@@ -78,7 +87,7 @@ async function callGroq(body: any, apiKey: string) {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',   // Free, fast, very capable
       messages,
-      max_tokens: body.max_tokens || 1000,
+      max_tokens: capTokens(body.max_tokens),
       temperature: 0.7,
     }),
   })
@@ -86,10 +95,11 @@ async function callGroq(body: any, apiKey: string) {
   const data = await response.json()
 
   if (!response.ok) {
-    const errMsg = data?.error?.message || JSON.stringify(data)
+    // the provider's own error text stays in the server log
+    console.error('[/api/ai] Groq error', response.status, data?.error?.message || JSON.stringify(data))
     return NextResponse.json(
-      { error: `Groq API error ${response.status}: ${errMsg}` },
-      { status: response.status }
+      { error: response.status === 429 ? 'The AI service is busy (rate limit) — try again in a minute.' : `AI service error (${response.status}) — try again.` },
+      { status: response.status === 429 ? 429 : 502 }
     )
   }
 
@@ -112,7 +122,7 @@ async function callGemini(body: any, apiKey: string) {
   const geminiBody: any = {
     contents,
     generationConfig: {
-      maxOutputTokens: body.max_tokens || 1000,
+      maxOutputTokens: capTokens(body.max_tokens),
       temperature: 0.7,
     },
   }
@@ -130,10 +140,10 @@ async function callGemini(body: any, apiKey: string) {
   const data = await response.json()
 
   if (!response.ok) {
-    const errMsg = data?.error?.message || JSON.stringify(data)
+    console.error('[/api/ai] Gemini error', response.status, data?.error?.message || JSON.stringify(data))
     return NextResponse.json(
-      { error: `Gemini API error ${response.status}: ${errMsg}` },
-      { status: response.status }
+      { error: response.status === 429 ? 'The AI service is busy (rate limit) — try again in a minute.' : `AI service error (${response.status}) — try again.` },
+      { status: response.status === 429 ? 429 : 502 }
     )
   }
 
