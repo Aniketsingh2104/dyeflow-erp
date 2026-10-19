@@ -34,7 +34,7 @@ export default function LabWithIssuePage() {
   const openCount = (id: string) => issues.filter(i => i.request_id === id && !i.solved).length
 
   const toggleIssue = async (id: string) => {
-    await labPost({ action: 'toggle_issue', id })
+    await labPost({ action: 'toggle_issue', id, solved: !issues.find((i: any) => i.id === id)?.solved })
     load()
   }
 

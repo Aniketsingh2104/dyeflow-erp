@@ -1,8 +1,10 @@
 'use client'
 import React, { useEffect, useState, useCallback } from 'react'
+import { todayIST, ymdIST, addDaysYMD } from '@/lib/istDate'
 import Link from 'next/link'
 import { buildDbContext, fetchAnomalyContext, AnomalyItem } from '@/lib/dbContext'
 import { useSupervisorFilter } from '@/lib/permissions'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 interface AiInsight { text: string; type: 'urgent' | 'info' | 'good' }
 
@@ -239,14 +241,14 @@ function ProductionHeatmap() {
       .then(data => {
         const countByDay: Record<string, number> = {}
         for (const b of (data.data || [])) {
-          const day = (b.updated_at || b.created_at || '').slice(0, 10)
+          const day = ymdIST(b.updated_at || b.created_at || '')   // India date
           if (day) countByDay[day] = (countByDay[day] || 0) + 1
         }
-        const today = new Date()
+        const todayYmd = todayIST()
         const days: any[] = []
         for (let i = 34; i >= 0; i--) {
-          const d = new Date(today); d.setDate(today.getDate() - i)
-          const iso = d.toISOString().slice(0, 10)
+          const iso = addDaysYMD(todayYmd, -i)
+          const d = new Date(iso + 'T12:00:00')
           days.push({ date: iso, label: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }), count: countByDay[iso] || 0, isToday: i === 0, dayOfWeek: d.getDay() })
         }
         setCells(days)
@@ -387,7 +389,7 @@ export default function DashboardPage() {
   const activeBatch = batches.filter(b => b.status === 'in-process').length
 
   const machineLoad: Record<string, number> = {}
-  batches.filter(b => b.status !== 'done').forEach(b => {
+  batches.filter(b => !isBatchFinished(b)).forEach(b => {
     const mn = b.machines?.name || b.machine_id
     if (mn) machineLoad[mn] = (machineLoad[mn] || 0) + (parseFloat(b.kg) || 0)
   })

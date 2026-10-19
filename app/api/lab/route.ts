@@ -135,15 +135,18 @@ export async function POST(req: NextRequest) {
     if (!reqRow) return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404 })
 
     const field = action === 'mark_sample_received' ? 'sample_received' : 'parameters_ok'
-    const otherField = field === 'sample_received' ? 'parameters_ok' : 'sample_received'
-    const patch: Record<string, any> = { [field]: true, [`${field}_at`]: new Date().toISOString() }
-    if (reqRow[otherField]) {
-      patch.confirmed = true
-      patch.confirmed_at = new Date().toISOString()
-    }
-    const { error } = await dbUpdate('lab_requests', { id }, patch)
+    const now = new Date().toISOString()
+    const { error } = await dbUpdate('lab_requests', { id }, { [field]: true, [`${field}_at`]: now })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, movedToFms: !!patch.confirmed })
+    // Then confirm in the database only if BOTH are ticked by now — whichever
+    // of two clicks at the same moment lands last does it (a read-then-write
+    // here let both clicks miss it).
+    const { data: moved } = await sb<any[]>('/lab_requests', {
+      method: 'PATCH',
+      params: { id: `eq.${id}`, sample_received: 'is.true', parameters_ok: 'is.true', confirmed: 'not.is.true' },
+      body: JSON.stringify({ confirmed: true, confirmed_at: now }),
+    })
+    return NextResponse.json({ ok: true, movedToFms: Array.isArray(moved) && moved.length > 0 })
   }
 
   // Direct confirm (Rechecked / PC Lab / Requested Unit pages) — moves the
@@ -184,9 +187,12 @@ export async function POST(req: NextRequest) {
     const { data: existing } = await dbSelect('lab_issues', { id: `eq.${id}` })
     const issue = existing?.[0]
     if (!issue) return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404 })
+    // the page sends the value it wants (a double click no longer flips it back)
+    const solved = typeof payload.solved === 'boolean' ? payload.solved : !issue.solved
+    if (solved === !!issue.solved) return NextResponse.json({ ok: true })
     const { error } = await dbUpdate('lab_issues', { id }, {
-      solved:    !issue.solved,
-      solved_at: !issue.solved ? new Date().toISOString() : null,
+      solved,
+      solved_at: solved ? new Date().toISOString() : null,
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true })

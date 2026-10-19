@@ -11,7 +11,8 @@ export async function GET(req: NextRequest) {
   if (g.deny) return g.deny
   try {
     const { data: records, error } = await dbSelect('faulty_records',
-      { order: 'created_at.desc', limit: '2000' },
+      // every open / repairing record, plus the closed ones of the last 180 days
+      { order: 'created_at.desc', or: `(status.in.(open,repairing),created_at.gte.${new Date(Date.now() - 180 * 86_400_000).toISOString()})` },
       'id,batch_id,order_id,order_number,party,color,faulty_type,faulty_kg,process_code,status,if_ok,notes,reported_by,resolved_at,reprocess_type,reprocess_kg,reprocess_mtr,reprocess_taka,next_process,created_at,updated_at'
     )
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
@@ -107,12 +108,13 @@ export async function POST(req: NextRequest) {
       next_process: r.data?.next_process ?? null, repair_batch_id: r.data?.repair_batch_id })
   }
 
-  // ── Standard update ───────────────────────────────────────────────────────
+  // ── Standard update: notes, or Write Off ─────────────────────────────────
+  // By hand a record can only be WRITTEN OFF (Open → Resolved goes through
+  // "Mark OK", → Repairing through "Reprocess"). Writing off is one database
+  // step (df_faulty_write_off): the record closes and its batch is finished
+  // as 'written-off', so the order can still reach Done.
   if (action === 'update') {
-    // By hand a record can only be WRITTEN OFF. Open → Resolved goes through
-    // "Mark OK" and → Repairing through "Reprocess", which also move the batch;
-    // changing only the status would leave the batch stuck as faulty.
-    const patch:Record<string,any> = {}
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
     if (payload.status !== undefined) {
       const { data: cur } = await dbSelect('faulty_records', { id: `eq.${id}`, limit: '1' }, 'status')
       const was = cur?.[0]?.status
@@ -120,35 +122,27 @@ export async function POST(req: NextRequest) {
         if (payload.status !== 'written-off') {
           return NextResponse.json({ ok:false, error:`Use "Mark OK" or "Reprocess" to change the status — only "Written Off" can be set here.` }, { status:400 })
         }
-        if ((was || 'open') !== 'open') {
-          return NextResponse.json({ ok:false, stale:true, error:`Only an open record can be written off (this one is "${was}"). Refresh the page.` }, { status:409 })
-        }
-        patch.status = 'written-off'
-        patch.resolved_at = new Date().toISOString()
+        const r = await rpc<any>('df_faulty_write_off', { p_record: id, p_notes: payload.notes ?? null })
+        if (r.error) return rpcFail(r)
+        return NextResponse.json({ ok: true })
       }
     }
-    if (payload.notes  !== undefined) patch.notes  = payload.notes
-    if (!Object.keys(patch).length) return NextResponse.json({ ok:true })
-    if (patch.status === 'written-off') {
-      // only while still open (a Mark OK / Reprocess a moment ago wins)
-      const { data: rows, error } = await sb<any[]>('/faulty_records', {
-        method: 'PATCH', params: { id: `eq.${id}`, status: 'eq.open' }, body: JSON.stringify(patch),
-      })
-      if (error) return NextResponse.json({ ok:false, error }, { status:500 })
-      if (!Array.isArray(rows) || !rows.length) {
-        return NextResponse.json({ ok:false, stale:true, error:'This record is no longer open. Refresh the page.' }, { status:409 })
-      }
-      return NextResponse.json({ ok:true })
-    }
-    const { error } = await dbUpdate('faulty_records', { id }, patch)
+    if (payload.notes === undefined) return NextResponse.json({ ok:true })
+    const { error } = await dbUpdate('faulty_records', { id }, { notes: payload.notes })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
     return NextResponse.json({ ok:true })
   }
 
   if (action === 'delete') {
-    // Delete — admin only (POLICY in lib/access.ts)
-    const { error } = await sb('/faulty_records', { method:'DELETE', params:{ id:`eq.${id}` } })
+    // Delete — admin only (POLICY in lib/access.ts), and only a CLOSED record:
+    // deleting an open one would leave its batch faulty with nothing to clear it.
+    const { data, error } = await sb<any[]>('/faulty_records', {
+      method: 'DELETE', params: { id: `eq.${id}`, status: 'in.(resolved,written-off)' },
+    })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
+    if (!Array.isArray(data) || !data.length) {
+      return NextResponse.json({ ok:false, stale:true, error:'Only a resolved or written-off record can be deleted — Mark OK, Reprocess or Write Off it first.' }, { status:409 })
+    }
     return NextResponse.json({ ok:true })
   }
 

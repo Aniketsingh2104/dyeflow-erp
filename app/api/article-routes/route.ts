@@ -98,19 +98,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Sync entire map back to settings.articleProcessMap (backward compat) ─
-  if (action === 'sync_to_settings') {
-    const { data } = await dbSelect('article_process_routes', { limit: '10000' }, 'article,route')
-    if (!data) return NextResponse.json({ ok: false, error: 'No data' }, { status: 500 })
-    const map: Record<string, string[]> = {}
-    for (const row of data) map[row.article] = row.route
-    const res = await fetch('/api/setup/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: 'articleProcessMap', value: map }),
-    })
-    const j = await res.json()
-    return NextResponse.json({ ok: j.ok, synced: data.length })
-  }
+  // ('sync_to_settings' removed — it could never work on the server and nothing calls it)
 
   return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 })
 }

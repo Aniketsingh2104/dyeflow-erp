@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { todayIST } from '@/lib/istDate'
 
 interface ShiftLog {
   id: string
@@ -26,9 +27,9 @@ export default function ShiftsPage() {
   const [logs,        setLogs]        = useState<ShiftLog[]>([])
   const [loading,     setLoading]     = useState(true)
   const [showModal,   setShowModal]   = useState(false)
-  const [viewDate,    setViewDate]    = useState(new Date().toISOString().split('T')[0])
+  const [viewDate,    setViewDate]    = useState(todayIST())
   const [form, setForm] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: todayIST(),
     shift: 'morning' as ShiftLog['shift'],
     supervisorId: '',
     supervisorName: '',
@@ -87,7 +88,7 @@ export default function ShiftsPage() {
   }
 
   const resetForm = () => setForm({
-    date: new Date().toISOString().split('T')[0], shift: 'morning',
+    date: todayIST(), shift: 'morning',
     supervisorId: '', supervisorName: '', machineIds: [],
     notes: '', handoverNotes: '', batchesCompleted: 0,
   })
@@ -119,7 +120,7 @@ export default function ShiftsPage() {
         {(['morning', 'evening', 'night'] as const).map(shift => {
           const cfg = SHIFT_CFG[shift]
           const log = todayLogs.find(l => l.shift === shift)
-          const isCurrent = shift === currentShift && viewDate === new Date().toISOString().split('T')[0]
+          const isCurrent = shift === currentShift && viewDate === todayIST()
           return (
             <div key={shift} style={{ background: cfg.bg, border: `2px solid ${isCurrent ? '#059669' : cfg.border}`, borderRadius: 12, padding: '16px', position: 'relative' }}>
               {isCurrent && (

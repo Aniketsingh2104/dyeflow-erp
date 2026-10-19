@@ -16,6 +16,7 @@ import { toCsv } from '@/lib/csv'
 import Link from 'next/link'
 import { getUrgency, URGENCY_CELL_STYLE } from '@/lib/dateUrgency'
 import { dateColFor } from '@/lib/processCodes'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 type Tab = 'overdue' | 'week' | 'open' | 'unplanned' | 'done'
 
@@ -81,7 +82,7 @@ export default function DeliveryTrackerPage() {
         let from: Row['dispatchFrom'] = dispatch ? 'plan' : ''
         const own = String(o.delivery_date || '').slice(0, 10)
         if (/^\d{4}-\d{2}-\d{2}$/.test(own)) { dispatch = own; from = 'order' }
-        const doneKg  = bs.filter(b => b.status === 'done' || b.is_done).reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
+        const doneKg  = bs.filter(b => isBatchFinished(b)).reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
         const splitKg = bs.reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
         out.push({
           id: o.id, orderNumber: o.order_number || '—', party: o.party || '—', article: o.article || '—',

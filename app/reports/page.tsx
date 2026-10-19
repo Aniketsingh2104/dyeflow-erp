@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import Link from 'next/link'
 import { isFaultyOpen, isFaultyRepairing, isFaultyClosed, isFobOpen, isFobRepairing, isFobClosed } from '@/lib/recordStatus'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
   return (
@@ -95,7 +96,7 @@ export default function ReportsPage() {
           const machine = b.machines?.name || b.machine_id
           return machine === m.name || machine === m.id
         })
-        const activeMBatches = mBatches.filter((b: any) => b.status !== 'done')
+        const activeMBatches = mBatches.filter((b: any) => !isBatchFinished(b))
         const loadedKg = activeMBatches.reduce((s: number, b: any) => s + (parseFloat(b.kg) || 0), 0)
         const loadPct  = m.capacity ? Math.min(100, Math.round((loadedKg / m.capacity) * 100)) : 0
         return { ...m, loadedKg: Math.round(loadedKg), loadPct, activeBatches: activeMBatches.length }

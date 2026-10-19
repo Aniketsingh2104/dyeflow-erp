@@ -4,6 +4,9 @@ import { requireAdmin } from '@/lib/auth'
 import { canonicalCode } from '@/lib/processCodes'
 import { guard, pick, canWorkProcess } from '@/lib/access'
 import { rpc, rpcFail } from '@/lib/rpc'
+import { loadHolidaySet } from '@/lib/holidays'
+import { plannedDateForNumber } from '@/lib/workdays'
+import { todayIST } from '@/lib/istDate'
 
 // Columns the generic "update" action may change (machine sheet numbering,
 // Date Calculator, supervisor pages). Where a batch IS (process / status /
@@ -44,6 +47,8 @@ export async function GET(req: NextRequest) {
     if (machine_id) query['machine_id'] = `eq.${machine_id}`
     if (batch_id)   query['batch_id']   = `eq.${batch_id}`
     if (status)     query['status']     = `eq.${status}`
+    // active=1 → only batches still to finish (AI context, dashboards)
+    else if (searchParams.get('active') === '1') query['status'] = 'not.in.(done,written-off)'
 
     const { data, error } = await dbSelect('batches', query,
       'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,' +
@@ -74,24 +79,26 @@ async function getSplitContext(order_id: string) {
     { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,status,qty_kg,qty_mtr,no_of_taka,process_machines,process_route')
   const order = orderRows?.[0]
   if (orderErr || !order) {
-    return { order: null, nextNo: 0, allocatedKg: 0, error: orderErr || 'Order not found' }
+    return { order: null, nextNo: 0, allocatedKg: 0, allocatedMtr: 0, allocatedTaka: 0, error: orderErr || 'Order not found' }
   }
   if (!order.order_number) {
-    return { order, nextNo: 0, allocatedKg: 0, error: 'This order has no order number — set one before splitting.' }
+    return { order, nextNo: 0, allocatedKg: 0, allocatedMtr: 0, allocatedTaka: 0, error: 'This order has no order number — set one before splitting.' }
   }
 
   const { data: existing } = await dbSelect('batches',
-    { order_id: `eq.${order_id}` }, 'id,batch_id,batch_number,kg')
+    { order_id: `eq.${order_id}` }, 'id,batch_id,batch_number,kg,mtr,taka')
   let maxNo = 0
-  let allocatedKg = 0
+  let allocatedKg = 0, allocatedMtr = 0, allocatedTaka = 0
   for (const b of existing || []) {
     allocatedKg += parseFloat(b.kg) || 0
+    allocatedMtr += parseFloat(b.mtr) || 0
+    allocatedTaka += parseInt(b.taka) || 0
     if (b.batch_number) maxNo = Math.max(maxNo, Number(b.batch_number) || 0)
     // Only plain "-B<n>" ids count here (repair ids like -B2-R / -B2-R-S1 don't)
     const m = String(b.batch_id || '').match(/-B(\d+)$/)
     if (m) maxNo = Math.max(maxNo, parseInt(m[1], 10))
   }
-  return { order, nextNo: maxNo + 1, allocatedKg, error: null as string | null }
+  return { order, nextNo: maxNo + 1, allocatedKg, allocatedMtr, allocatedTaka, error: null as string | null }
 }
 
 async function insertBatchProcesses(created: any[] | null | undefined, process_route: string[] | undefined) {
@@ -191,6 +198,57 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true })
     }
 
+    // ── Machine sheet plan numbers ─────────────────────────────────────────
+    //   set : [{batch, code, num}]        — type / clear numbers (num null = clear)
+    //   auto: {members:[{batch,code}], groups:[[{batch,code}], …]}
+    //         — next free numbers on this machine (one per group), handed out
+    //           while the machine is locked, so two people can't get the same
+    // Each number's planned date is worked out here (3 per working day from
+    // the machine's base date, holidays + Sunday rule) and merged into the
+    // batch's plan inside the database.
+    if (action === 'plan_numbers') {
+      const { machine_id } = payload
+      if (!machine_id) return NextResponse.json({ ok: false, error: 'machine_id required' }, { status: 400 })
+      const { data: mRows } = await dbSelect('machines', { id: `eq.${machine_id}`, limit: '1' }, 'id,name,numbering_base_date')
+      const machine = mRows?.[0]
+      if (!machine) return NextResponse.json({ ok: false, error: 'Machine not found' }, { status: 404 })
+      const clean = (list: any[]) => (Array.isArray(list) ? list : [])
+        .filter((x: any) => x && x.batch && x.code).map((x: any) => ({ batch: String(x.batch), code: String(x.code) }))
+
+      let items: { batch: string; code: string; num: number | null; keep?: boolean }[] = []
+      if (payload.auto) {
+        const groups = (Array.isArray(payload.auto.groups) ? payload.auto.groups : []).map(clean).filter((g: any[]) => g.length)
+        if (!groups.length) return NextResponse.json({ ok: true, items: [], plans: {} })
+        const r = await rpc<any[]>('df_plan_auto', { p_machine: machine.id, p_members: clean(payload.auto.members), p_groups: groups })
+        if (r.error) return rpcFail(r)
+        // keep: the date is added only if nobody renumbered it in the meantime
+        items = (r.data || []).map((x: any) => ({ batch: x.batch, code: x.code, num: Number(x.num), keep: true }))
+      } else {
+        items = (Array.isArray(payload.set) ? payload.set : []).filter((x: any) => x && x.batch && x.code).map((x: any) => {
+          const n = parseInt(x.num, 10)
+          return { batch: String(x.batch), code: String(x.code), num: n > 0 ? n : null }
+        })
+      }
+      if (!items.length) return NextResponse.json({ ok: true, items: [], plans: {} })
+
+      const holidaySet = await loadHolidaySet(machine.id)
+      const baseYMD = machine.numbering_base_date ? String(machine.numbering_base_date).slice(0, 10) : todayIST()
+      const withDates = items.map(i => ({ ...i, date: i.num ? plannedDateForNumber(i.num, baseYMD, holidaySet) : null }))
+      const r2 = await rpc<Record<string, any>>('df_plan_set_many', { p_items: withDates })
+      if (r2.error) return rpcFail(r2)
+      return NextResponse.json({ ok: true, items: withDates, plans: r2.data || {} })
+    }
+
+    // ── Date Calculator "Clear selected": wipe its keys, keep the machine
+    // plan numbers — one database step (df_clear_dc_plan)
+    if (action === 'clear_dc_plan') {
+      const { id } = payload
+      if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+      const r = await rpc<any>('df_clear_dc_plan', { p_batch: id })
+      if (r.error) return rpcFail(r)
+      return NextResponse.json({ ok: true })
+    }
+
     // ── Send a waiting batch to the first process of its own route ─────────
     // (First Process page) — refused if it was already sent (df_send_first)
     if (action === 'send_first') {
@@ -250,44 +308,14 @@ export async function POST(req: NextRequest) {
 
     // ── Delete one batch and restore qty to order ────────────────────────────
     if (action === 'delete_batch') {
-      // Delete — admin only (checked on the server — lib/auth.ts)
-      { const deny = await requireAdmin(req); if (deny) return deny }
-      const { id, order_id } = payload
+      // admin only (POLICY) — one database step (df_delete_batch): only a batch
+      // that is still waiting (pending, never sent) with no faulty / FOB /
+      // repair records; the order goes back to 'splitting' if it was the last
+      const { id } = payload
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-
-      // Get the batch to know its kg before deleting
-      const { data: batchRows } = await dbSelect('batches', { id: `eq.${id}`, limit: '1' }, 'id,kg,mtr,taka,status,is_done,batch_id,order_id')
-      const batch = batchRows?.[0]
-      if (!batch) return NextResponse.json({ ok: false, error: 'Batch not found' }, { status: 404 })
-
-      // Safety check — cannot delete if in-process or done
-      if (batch.is_done || batch.status === 'done' || batch.status === 'in-process') {
-        return NextResponse.json({ ok: false, error: 'Cannot delete a batch that is in-process or done' }, { status: 400 })
-      }
-
-      // Delete batch_processes first, then the batch
-      await sb('/batch_processes', {
-        method: 'DELETE',
-        params: { batch_id: `eq.${batch.id}` },
-        headers: { 'Prefer': 'return=minimal' },
-      })
-      const { error: delError } = await dbDelete('batches', { id })
-      if (delError) return NextResponse.json({ ok: false, error: delError }, { status: 500 })
-
-      // Check if this order has any remaining batches
-      const { data: remaining } = await dbSelect('batches', { order_id: `eq.${batch.order_id}`, limit: '1' }, 'id')
-      if (!remaining?.length) {
-        // No batches left — back to 'splitting' so the supervisor can re-split
-        // (an order on hold stays on hold)
-        await sb('/orders', { method: 'PATCH', params: { id: `eq.${batch.order_id}`, status: 'neq.hold' },
-          body: JSON.stringify({ status: 'splitting' }), headers: { 'Prefer': 'return=minimal' } })
-      }
-
-      await auditLog({ username: _user, action: 'delete_batch', entity_type: 'batch',
-        entity_id: batch.batch_id, note: `Deleted ${batch.kg} Kg` })
-
-      await refreshOrderStatus(batch.order_id)   // keep orders.status in step (lib/orderStatus.ts)
-      return NextResponse.json({ ok: true, restored_kg: batch.kg })
+      const r = await rpc<any>('df_delete_batch', { p_batch: id })
+      if (r.error) return rpcFail(r)
+      return NextResponse.json({ ok: true, restored_kg: r.data?.kg ?? null })
     }
 
     // ── Full split: everything still unsplit becomes ONE new batch ──────────
@@ -323,8 +351,10 @@ export async function POST(req: NextRequest) {
         process_machine_map: fsMap,
         batch_number: ctx.nextNo,
         kg:           remainKg,
-        mtr:          totalMtr  ? (isFirst ? totalMtr  : Math.round(totalMtr  * ratio)) : null,
-        taka:         totalTaka ? (isFirst ? totalTaka : Math.round(totalTaka * ratio)) : null,
+        // the remainder: what's left of the order's metres / taka after the
+        // batches already split (to 0.1 m, like repairs), so they add up exactly
+        mtr:          totalMtr  ? (isFirst ? totalMtr  : Math.max(0, Math.round((ctx.allocatedMtr > 0 ? totalMtr - ctx.allocatedMtr : totalMtr * ratio) * 10) / 10)) : null,
+        taka:         totalTaka ? (isFirst ? totalTaka : Math.max(0, ctx.allocatedTaka > 0 ? totalTaka - ctx.allocatedTaka : Math.round(totalTaka * ratio))) : null,
         status:       'pending',
         process_route: fsRoute,
       }

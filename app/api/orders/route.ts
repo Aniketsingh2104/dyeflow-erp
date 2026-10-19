@@ -26,6 +26,8 @@ export async function GET(req: NextRequest) {
   const query: Record<string, string> = { order: 'priority.asc,created_at.desc,id.asc' }
   if (limit) query.limit = limit
   if (status)       query['status']        = `eq.${status}`
+  // active=1 → only orders not done yet
+  else if (searchParams.get('active') === '1') query['status'] = 'neq.done'
   if (supervisorId) query['supervisor_id'] = `eq.${supervisorId}`
   if (party)        query['party']         = `ilike.*${party}*`
   if (orderId)      query['id']            = `eq.${orderId}`
@@ -143,9 +145,11 @@ export async function POST(req: NextRequest) {
     { const deny = await requireAdmin(req); if (deny) return deny }
     const { id } = payload
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
-    const { error } = await dbDelete('orders', { id })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    // one database step (df_delete_order): refused once any batch has started
+    // or has faulty / FOB / repair records; waiting batches go with the order
+    const r = await rpc<any>('df_delete_order', { p_order: id })
+    if (r.error) return rpcFail(r)
+    return NextResponse.json({ ok: true, batches: r.data?.batches ?? 0 })
   }
 
   if (action === 'assign_supervisor') {

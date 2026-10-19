@@ -128,22 +128,28 @@ interface DurationSample {
  * near-duplicate consecutive events for the same batch are collapsed first.
  */
 async function collectDurationSamples(): Promise<DurationSample[]> {
-  const { data: events } = await dbSelect(
+  // the newest 20,000 Done events (was the first 5,000 in alphabetical order)
+  const { data: newest } = await dbSelect(
     'audit_log',
-    { action: 'eq.process_done', entity_type: 'eq.batch', order: 'entity_id.asc,created_at.asc', limit: '5000' },
+    { action: 'eq.process_done', entity_type: 'eq.batch', order: 'created_at.desc', limit: '20000' },
     'entity_id,old_value,new_value,created_at'
   )
-  if (!events || events.length === 0) return []
+  if (!newest || newest.length === 0) return []
+  const events = [...newest].sort((a: any, b: any) =>
+    String(a.entity_id).localeCompare(String(b.entity_id)) || String(a.created_at).localeCompare(String(b.created_at)))
 
-  const { data: batches } = await dbSelect('batches', { limit: '2000' }, 'id,order_id,created_at')
-  const batchStart: Record<string, string> = {}
+  // every batch (no cap): when it ARRIVED at each process, and its order
+  const { data: batches } = await dbSelect('batches', {}, 'id,batch_id,order_id,fms_enter_at')
+  const batchEnter: Record<string, Record<string, string>> = {}
   const batchOrder: Record<string, string> = {}
+  const isRepair: Record<string, boolean> = {}
   for (const b of (batches || []) as any[]) {
-    batchStart[b.id] = b.created_at
+    batchEnter[b.id] = (b.fms_enter_at && typeof b.fms_enter_at === 'object') ? b.fms_enter_at : {}
     batchOrder[b.id] = b.order_id
+    isRepair[b.id] = /-B\d+-R/.test(String(b.batch_id || ''))   // B2-R, B2-R-S1 … repair batches
   }
 
-  const { data: orders } = await dbSelect('orders', { limit: '1000' }, 'id,article')
+  const { data: orders } = await dbSelect('orders', {}, 'id,article')
   const orderArticle: Record<string, string> = {}
   for (const o of (orders || []) as any[]) orderArticle[o.id] = o.article
 
@@ -156,6 +162,9 @@ async function collectDurationSamples(): Promise<DurationSample[]> {
 
   const samples: DurationSample[] = []
   for (const [batchId, evts] of Object.entries(byBatch)) {
+    // repair batches wait in the repair queue and redo steps — they would
+    // skew the normal process times, so they're left out
+    if (isRepair[batchId]) continue
     const deduped: typeof evts = []
     for (const e of evts) {
       const last = deduped[deduped.length - 1]
@@ -170,7 +179,11 @@ async function collectDurationSamples(): Promise<DurationSample[]> {
       deduped.push(e)
     }
 
-    let prevTime = batchStart[batchId] ? new Date(batchStart[batchId]).getTime() : null
+    // The first Done of a batch is timed from when it arrived at that process
+    // (fms_enter_at) — not from when it was split, which also counted the
+    // days it waited on the First Process page. No arrival time → skipped.
+    const firstEnter = deduped.length ? batchEnter[batchId]?.[deduped[0].old_value] : null
+    let prevTime: number | null = firstEnter ? new Date(firstEnter).getTime() : null
     for (const e of deduped) {
       const doneTime = new Date(e.created_at).getTime()
       if (prevTime != null) {
@@ -311,9 +324,9 @@ async function loadRiskPoolUncached(kind: 'faulty' | 'fob'): Promise<RiskPool> {
 
   const [{ data: liveFlaggedRows }, { data: liveBatches }, { data: liveOrders }, { data: histBatches }, { data: histRows }] =
     await Promise.all([
-      dbSelect(liveTable, { limit: '2000' }, 'batch_id'),
-      dbSelect('batches', { limit: '2000' }, 'id,order_id'),
-      dbSelect('orders', { limit: '1000' }, 'id,article,color,supervisors(name)'),
+      dbSelect(liveTable, {}, 'batch_id'),                       // all (no cap)
+      dbSelect('batches', {}, 'id,order_id'),
+      dbSelect('orders', {}, 'id,article,color,supervisors(name)'),
       dbSelect('historical_batches', { limit: '50000' }, 'batch_no,article,colour,supervisor'),
       dbSelect(histTable, { limit: '5000' }, histCols),
     ])

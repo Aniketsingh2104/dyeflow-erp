@@ -14,7 +14,8 @@ export const SUPABASE_API_KEY =
   (SECRET_KEY  && !SECRET_KEY.includes('YOUR_'))  ? SECRET_KEY  :
   (SERVICE_KEY && !SERVICE_KEY.includes('YOUR_')) ? SERVICE_KEY :
   ''
-if (!SUPABASE_API_KEY) console.error('[supabase] SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_KEY) is not set — every database call will fail.')
+// (server only — the key is never in the browser, so this would fire on every page there)
+if (!SUPABASE_API_KEY && typeof window === 'undefined') console.error('[supabase] SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_KEY) is not set — every database call will fail.')
 
 // ── Errors shown to users ────────────────────────────────────────────────────
 // Our own database functions (df_…) raise clear messages with codes PT400 /
@@ -96,14 +97,18 @@ export async function dbSelect<T = any>(
   const mayPage = wanted > PAGE_SIZE
   const base: Record<string, string> = { select, ...rest }
   if (mayPage && !base.order) base.order = 'id.asc'
+  // sorting only on columns that can repeat (a date, a name) lets pages skip
+  // or repeat rows at the edges — add the id as a tie-breaker
+  else if (mayPage && !/(^|,)id\./.test(base.order)) base.order = `${base.order},id.asc`
 
   const fetchPage = (offset: number, limit: number) =>
     sb<T[]>(`/${table}`, { params: { ...base, limit: String(limit), offset: String(offset) } })
 
   // First page
   let first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
-  if (first.error && mayPage && !rest.order && /column|id/i.test(first.rawError || '')) {
-    delete base.order                               // table has no "id" column
+  if (first.error && mayPage && base.order !== rest.order && /column|id/i.test(first.rawError || '')) {
+    // table has no "id" column — go back to the caller's own order (or none)
+    if (rest.order) base.order = rest.order; else delete base.order
     first = await fetchPage(start, Math.min(PAGE_SIZE, wanted))
   }
   if (first.error) return { data: [], error: first.error }
@@ -145,12 +150,16 @@ export async function dbSelectAll<T = any>(
 ): Promise<{ data: T[]; error: string | null }> {
   const all: T[] = []
   let offset = 0
+  // stable paging: add the id as a tie-breaker after the caller's order
+  // (e.g. ~480 colour-stock rows share each stock_date)
+  let q: Record<string, string> = query.order && !/(^|,)id\./.test(query.order) ? { ...query, order: `${query.order},id.asc` } : query
   while (true) {
-    const params: Record<string, string> = { select, ...query }
+    const params: Record<string, string> = { select, ...q }
     const { data, error } = await sb<T[]>(`/${table}`, {
       params,
       headers: { 'Range-Unit': 'items', 'Range': `${offset}-${offset + pageSize - 1}` },
     })
+    if (error && offset === 0 && q !== query) { q = query; continue }   // table without an id column
     if (error) return { data: all, error }
     const batch = (data as T[]) || []
     all.push(...batch)

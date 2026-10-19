@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { fetchProcessList, ProcessDef } from '@/lib/processMap'
 import Link from 'next/link'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 interface KanbanCard {
   batchId: string
@@ -71,7 +72,7 @@ export default function ProductionPage() {
       const unstartedCards: KanbanCard[] = []
 
       for (const b of batches) {
-        if (b.status === 'done') continue
+        if (isBatchFinished(b)) continue
         total++
         const order = orderMap[b.order_id] || {}
         const dispatchDate = (order.planned_dates || {})['Dispatch'] || ''

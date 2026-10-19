@@ -70,7 +70,7 @@ export default function LabRequestedPage() {
   }
 
   const toggleIssue = async (id: string) => {
-    await labPost({ action: 'toggle_issue', id })
+    await labPost({ action: 'toggle_issue', id, solved: !issues.find((i: any) => i.id === id)?.solved })
     const res = await labApi({ type: 'issues' })
     if (res.ok) setIssues(res.data || [])
   }

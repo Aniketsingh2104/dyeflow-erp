@@ -9,10 +9,12 @@ interface FactorySettings {
   city: string
   gstNumber: string
   phone: string
+  /** Sundays are non-working days for the Date Calculator and machine sheets */
+  sundayHoliday: boolean
 }
 
 const DEFAULTS: FactorySettings = {
-  orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '',
+  orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '', sundayHoliday: true,
 }
 
 // Defined OUTSIDE the page component — a component defined inside render is a
@@ -57,7 +59,7 @@ export default function FactorySettingsPage() {
 
   useEffect(() => { load() }, [load])
 
-  const handleChange = (field: keyof FactorySettings, value: string) => {
+  const handleChange = (field: keyof FactorySettings, value: string | boolean) => {
     setForm(prev => ({ ...prev, [field]: value }))
   }
 
@@ -125,6 +127,23 @@ export default function FactorySettingsPage() {
           <Field label="GST Number" value={form.gstNumber} onChange={v => handleChange('gstNumber', v)} placeholder="e.g. 24AAAAA0000A1Z5" />
           <Field label="Phone" value={form.phone} onChange={v => handleChange('phone', v)} placeholder="e.g. +91 98765 43210" />
         </div>
+      </div>
+
+      {/* Working days */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Working Days</div>
+        <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
+          <input type="checkbox" checked={form.sundayHoliday !== false}
+            onChange={e => handleChange('sundayHoliday', e.target.checked)} style={{ marginTop: 3 }} />
+          <span>
+            <strong>Sunday is a holiday</strong>
+            <span style={{ display: 'block', fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
+              The Date Calculator and the machine sheets skip every Sunday (plus the dates in Holiday Master).
+              If the factory works some Sundays, switch this off and add the Sundays you are closed to Holiday Master.
+            </span>
+          </span>
+        </label>
       </div>
 
       <div style={{ display: 'flex', gap: 10 }}>

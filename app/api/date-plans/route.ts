@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
     const batchId = searchParams.get('batch_id')       // uuid
     const batchIdStr = searchParams.get('batch_id_str') // e.g. DYE26-0004-B1
 
-    const query: Record<string, string> = { limit: '5000' }
+    // every plan (dbSelect pages past the 1,000-row server limit) — the old
+    // 5,000 cap made Generate overwrite plans it had never loaded
+    const query: Record<string, string> = { order: 'batch_id.asc' }
     if (batchId)    query['batch_id']     = `eq.${batchId}`
     if (batchIdStr) query['batch_id_str'] = `eq.${batchIdStr}`
 
@@ -36,14 +38,11 @@ export async function POST(req: NextRequest) {
     if (action === 'upsert') {
       const { batch_id, batch_id_str, dates, anchors, dc_generated_once, dc_regenerate, pushed } = body
 
-      const row: Record<string, any> = {
-        batch_id,
-        batch_id_str,
-        dc_generated_once: dc_generated_once ?? false,
-        dc_regenerate:     dc_regenerate     ?? false,
-        pushed:            pushed            ?? false,
-        updated_at:        new Date().toISOString(),
-      }
+      // flags only when sent — leaving one out keeps what is saved
+      const row: Record<string, any> = { batch_id, batch_id_str, updated_at: new Date().toISOString() }
+      if (dc_generated_once !== undefined) row.dc_generated_once = !!dc_generated_once
+      if (dc_regenerate     !== undefined) row.dc_regenerate     = !!dc_regenerate
+      if (pushed            !== undefined) row.pushed            = !!pushed
 
       // Map anchor dates: { S: '2026-08-04', D: '2026-08-07' }
       if (anchors) {

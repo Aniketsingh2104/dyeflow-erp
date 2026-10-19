@@ -7,20 +7,25 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
 import { dbSelect } from '@/lib/supabase'
 import { DATE_COL } from '@/lib/processCodes'
+import { isBatchFinished } from '@/lib/batchStatus'
+
+const sinceDays = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString()
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'snapshot', 'GET'); if (g.deny) return g.deny }
   try {
-    // Fetch all tables in parallel
+    // What the Report Agent needs, with no silent cap: everything still open,
+    // plus what finished recently (orders / batches 90 days, faulty / FOB 180).
+    const since90 = sinceDays(90), since180 = sinceDays(180)
     const [oRes, bRes, mRes, sRes, fobRes, faultyRes, pRes, dpRes] = await Promise.all([
-      dbSelect('orders', { order: 'created_at.desc', limit: '2000' },
+      dbSelect('orders', { order: 'created_at.desc', or: `(status.neq.done,updated_at.gte.${since90})` },
         'id,order_number,party,article,color,qty_kg,status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,created_at,supervisors(name),machines(name,capacity)'),
-      dbSelect('batches', { order: 'created_at.asc', limit: '10000' },
+      dbSelect('batches', { order: 'created_at.asc', or: `(status.not.in.(done,written-off),updated_at.gte.${since90})` },
         'id,batch_id,order_id,kg,status,current_process,process_route,fms_enter_at,fms_actual_dates,is_faulty,updated_at,machines(name)'),
       dbSelect('machines', { order: 'name.asc' }, 'id,name,capacity,status,machine_type'),
       dbSelect('supervisors', { order: 'name.asc' }, 'id,name'),
-      dbSelect('fob_records', { order: 'created_at.desc', limit: '500' }),
-      dbSelect('faulty_records', { order: 'created_at.desc', limit: '500' }),
+      dbSelect('fob_records', { order: 'created_at.desc', or: `(status.in.(open,sent,repairing),created_at.gte.${since180})` }),
+      dbSelect('faulty_records', { order: 'created_at.desc', or: `(status.in.(open,repairing),created_at.gte.${since180})` }),
       dbSelect('process_list', { order: 'display_order.asc', limit: '100' },
         'id,code,name,is_enabled,display_order,default_days'),
       dbSelect('batch_date_plans', {}, '*'),
@@ -105,7 +110,7 @@ export async function GET(req: NextRequest) {
         kg:                b.kg,
         status:            b.status,
         fmsCurrentProcess: b.current_process,
-        fmsDone:           b.status === 'done',
+        fmsDone:           isBatchFinished(b),
         fmsEnterAt:        b.fms_enter_at || {},
         fmsActualDates:    b.fms_actual_dates || {},
         isFaulty:          b.is_faulty,

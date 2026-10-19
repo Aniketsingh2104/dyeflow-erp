@@ -6,6 +6,7 @@
 // PHASE 10: All functions now accept an injected `db` snapshot from Supabase
 // instead of calling localStorage directly. getDb() is kept as a fallback.
 // ─────────────────────────────────────────────────────────────────────────────
+import { daysUntil as daysUntilIST } from '@/lib/istDate'
 
 export interface ReportResult {
   title: string
@@ -38,16 +39,15 @@ function fmtDT(s: string) {
   try { return new Date(s).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return s }
 }
 
+// whole days counted on India dates (an order due today is 0, not -1)
 function daysSince(d: string): number {
-  if (!d) return 0
-  const dt = new Date(d)
-  return isNaN(dt.getTime()) ? 0 : Math.floor((Date.now() - dt.getTime()) / 86400000)
+  const n = daysUntilIST(d)
+  return isNaN(n) ? 0 : -n
 }
 
 function daysUntil(d: string): number {
-  if (!d) return 999
-  const dt = new Date(d)
-  return isNaN(dt.getTime()) ? 999 : Math.floor((dt.getTime() - Date.now()) / 86400000)
+  const n = daysUntilIST(d)
+  return isNaN(n) ? 999 : n
 }
 
 /** Fallback: read from localStorage when no injected db is available */

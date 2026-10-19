@@ -12,7 +12,10 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const type = searchParams.get('type')
-    const query:Record<string,string> = { order:'created_at.desc', limit:'2000' }
+    // every open / sent / repairing FOB, plus the closed ones of the last
+    // 180 days (was: the newest 2,000, which could hide open ones)
+    const since = new Date(Date.now() - 180 * 86_400_000).toISOString()
+    const query:Record<string,string> = { order:'created_at.desc', or:`(status.in.(open,sent,repairing),created_at.gte.${since})` }
     if (type && type !== 'all') query['fob_type'] = `eq.${type}`
 
     const { data:records, error } = await dbSelect('fob_records', query,
@@ -156,8 +159,12 @@ export async function POST(req: NextRequest) {
 
   if (action === 'delete') {
     // Delete — admin only (POLICY in lib/access.ts)
-    const { error } = await sb('/fob_records', { method:'DELETE', params:{ id:`eq.${id}` } })
+    // only a finished (approved) FOB — an open / sent / repairing one still holds its batch
+    const { data, error } = await sb<any[]>('/fob_records', { method:'DELETE', params:{ id:`eq.${id}`, status:'eq.approved' } })
     if (error) return NextResponse.json({ ok:false, error }, { status:500 })
+    if (!Array.isArray(data) || !data.length) {
+      return NextResponse.json({ ok:false, stale:true, error:'Only an approved FOB can be deleted — approve or reprocess it first.' }, { status:409 })
+    }
     return NextResponse.json({ ok:true })
   }
 

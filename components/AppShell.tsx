@@ -8,6 +8,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. DARK MODE TOGGLE
@@ -100,7 +101,7 @@ function buildNotifications(): Notification[] {
   // ② Machines near/over capacity (≥80%)
   machines.forEach((m: any) => {
     const loadKg = allBatches
-      .filter((b: any) => b.machine === m.id && b.status !== 'done')
+      .filter((b: any) => b.machine === m.id && !isBatchFinished(b))
       .reduce((s: number, b: any) => s + (parseFloat(b.kg) || 0), 0)
     const pct = m.capacity ? Math.round((loadKg / m.capacity) * 100) : 0
     if (pct >= 80) {

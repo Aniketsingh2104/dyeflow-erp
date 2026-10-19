@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 function fmt(n: number) { return n.toLocaleString('en-IN', { maximumFractionDigits: 1 }) }
 function fmtDate(s: string) {
@@ -51,7 +52,7 @@ export default function PartyPage() {
         if (!batchByOrder[b.order_id]) batchByOrder[b.order_id] = []
         batchByOrder[b.order_id].push({
           batchId: b.batch_id, kg: b.kg, status: b.status,
-          fmsCurrentProcess: b.current_process, fmsDone: b.status === 'done',
+          fmsCurrentProcess: b.current_process, fmsDone: isBatchFinished(b),
         })
       }
 

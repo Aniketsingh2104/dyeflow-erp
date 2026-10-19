@@ -60,12 +60,46 @@ export default function AuditLogPage() {
   const [filterEntity, setFilterEntity] = useState('all')
   const [clearing,     setClearing]     = useState(false)
 
+  const [moreLeft,     setMoreLeft]     = useState(false)
+  const [loadingMore,  setLoadingMore]  = useState(false)
+  const PAGE = 2000
+
+  const toEntries = (rows: any[]): AuditEntry[] => rows.map((e: any) => ({
+          id:         e.id,
+          timestamp:  e.created_at,
+          user:       e.username || e.user || '-',
+          action:     e.action,
+          entityType: e.entity_type,
+          entityId:   e.entity_id,
+          field:      e.field,
+          oldValue:   e.old_value,
+          newValue:   e.new_value,
+          note:       e.note,
+        }))
+
+  // the next 2,000 entries older than the oldest one shown
+  const loadOlder = async () => {
+    const last = entries[entries.length - 1]
+    const oldest = last?.timestamp
+    if (!oldest) return
+    setLoadingMore(true)
+    try {
+      const data = await fetch(`/api/audit?limit=${PAGE}&before=${encodeURIComponent(oldest)}&before_id=${encodeURIComponent(last.id || '')}`, { cache: 'no-store' }).then(r => r.json())
+      if (data.ok) {
+        setEntries(prev => { const seen = new Set(prev.map(e => e.id)); return [...prev, ...toEntries(data.data).filter(e => !seen.has(e.id))] })
+        setMoreLeft(data.data.length >= PAGE)
+      }
+      else alert('Could not load older entries: ' + (data.error || 'Unknown error'))
+    } finally { setLoadingMore(false) }
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res  = await fetch('/api/audit?limit=2000', { cache: 'no-store' })
+      const res  = await fetch(`/api/audit?limit=${PAGE}`, { cache: 'no-store' })
       const data = await res.json()
       if (data.ok) {
+        setMoreLeft(data.data.length >= PAGE)
         setEntries(data.data.map((e: any) => ({
           id:         e.id,
           timestamp:  e.created_at,
@@ -216,6 +250,11 @@ export default function AuditLogPage() {
               )}
             </tbody>
           </table>
+          {moreLeft && (
+            <div style={{ textAlign: 'center', padding: 12 }}>
+              <button onClick={loadOlder} disabled={loadingMore}>{loadingMore ? 'Loading…' : '⬇ Load older entries'}</button>
+            </div>
+          )}
         </div>
       )}
     </div>

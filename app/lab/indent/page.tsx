@@ -139,7 +139,7 @@ export default function LabIndentPage() {
   // ── Issue actions ──────────────────────────────────────────────────────────
 
   const toggleIssue = async (issueId: string) => {
-    await labPost({ action: 'toggle_issue', id: issueId })
+    await labPost({ action: 'toggle_issue', id: issueId, solved: !issues.find((i: any) => i.id === issueId)?.solved })
     const res = await labApi({ type: 'issues' })
     if (res.ok) setIssues(res.data || [])
   }

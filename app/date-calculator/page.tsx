@@ -1,6 +1,8 @@
 'use client'
 
 import { canonicalCode } from '@/lib/processCodes'
+import { buildHolidaySet, sundayOffFrom } from '@/lib/workdays'
+import { todayIST } from '@/lib/istDate'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchProcessList } from '@/lib/processMap'
 
@@ -64,14 +66,7 @@ const fromDisplay = (s: string): string => {
   return ''
 }
 
-const buildHolidaySet = (holidays: any[]): Set<string> => {
-  const s = new Set<string>()
-  for (const h of holidays) {
-    const raw = h.holiday_date || h.date
-    if (raw) s.add(raw.slice(0,10))
-  }
-  return s
-}
+// Non-working days: lib/workdays.ts (Holiday Master + "Sunday is a holiday")
 
 // ── Engine helpers ────────────────────────────────────────────────────────────
 const nextWD = (d: Date, holidaySet: Set<string>, fwd = true): Date => {
@@ -254,6 +249,7 @@ export default function DateCalculatorPage() {
   const [rows,            setRows]            = useState<BatchRow[]>([])
   const [processDurations,setProcessDurations]= useState<ProcessDuration[]>([])
   const [holidays,        setHolidays]        = useState<any[]>([])
+  const [sundayOff,       setSundayOff]       = useState(true)
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
   const [showPDModal,     setShowPDModal]     = useState(false)
   const [tempDurations,   setTempDurations]   = useState<Record<string,{days:number;capacity:string}>>({})
@@ -277,14 +273,16 @@ export default function DateCalculatorPage() {
   const loadData = useCallback(async () => {
     setLoadStatus('loading')
     try {
-      const [oRes, bRes, dpRes, hRes, pdRes, procList] = await Promise.all([
+      const [oRes, bRes, dpRes, hRes, pdRes, procList, factoryRes] = await Promise.all([
         fetch('/api/orders',  { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/batches',{ cache:'no-store' }).then(r=>r.json()),
         fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/setup/holidays',      { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
         fetch('/api/setup/settings?key=processDurations',{ cache:'no-store' }).then(r=>r.json()).catch(()=>({value:[]})),
         fetchProcessList(),
+        fetch('/api/setup/settings?key=factory', { cache:'no-store' }).then(r=>r.json()).catch(()=>({value:null})),
       ])
+      setSundayOff(sundayOffFrom(factoryRes?.value))
 
       procList.forEach((p: any) => { _procNameCache[p.code] = p.name })
       setHolidays(hRes.data || [])
@@ -416,8 +414,8 @@ export default function DateCalculatorPage() {
   // ── Generate Dates ──────────────────────────────────────────────────────────
   const generateDates = async () => {
     const { dayMap, capMap } = buildMaps()
-    const holidaySet = buildHolidaySet(holidays)
-    const todayYMD   = new Date().toISOString().slice(0,10)
+    const holidaySet = buildHolidaySet(holidays, sundayOff)
+    const todayYMD   = todayIST()
 
     // Deep clone rows for engine
     const workRows = rows.map(r => ({
@@ -507,28 +505,12 @@ export default function DateCalculatorPage() {
     let cleared = 0
 
     await Promise.all(selectedRows.map(async row => {
-      // Step 1: Fetch fresh batches.date_calc_plan to get machine keys
-      let freshPlan: any = {}
-      try {
-        const r = await fetch(`/api/batches?id=${row.batchUUID}`, { cache:'no-store' }).then(x=>x.json())
-        freshPlan = r.data?.[0]?.date_calc_plan || {}
-      } catch {}
-
-      // Step 2: Keep ONLY machine keys, wipe everything else
-      const MACHINE_KEYS = ['byProcess','byProcessDates','planNumber','plannedDate']
-      const preserved: Record<string,any> = {}
-      for (const k of MACHINE_KEYS) {
-        if (freshPlan[k] !== undefined) preserved[k] = freshPlan[k]
-      }
-
-      // Step 3: Clear batches.date_calc_plan (keep machine keys only)
+      // Steps 1–3 in ONE server step (df_clear_dc_plan): the Date Calculator
+      // keys are wiped, the machine plan numbers stay — done in the database,
+      // so a plan number saved meanwhile on the machine sheet isn't undone
       const res1 = await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          action:'update', id: row.batchUUID,
-          date_calc_plan: Object.keys(preserved).length ? preserved : null,
-          dc_generated_once: false, dc_regenerate: false
-        })
+        body: JSON.stringify({ action:'clear_dc_plan', id: row.batchUUID })
       })
       const d1 = await res1.json()
       if (!d1.ok) console.error('Failed to clear batches:', d1.error)

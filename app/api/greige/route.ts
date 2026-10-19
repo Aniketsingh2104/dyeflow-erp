@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
+import { rpc, rpcFail } from '@/lib/rpc'
 import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
@@ -89,48 +90,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'entryId and a non-empty lots array are required' }, { status: 400 })
     }
 
-    // Lots already saved for this entry — re-saving keeps each lot's status and
-    // notes, and the original "lot done" time (it's only stamped the first time).
-    const [{ data: oldLots }, { data: entryRows }] = await Promise.all([
-      dbSelect('greige_lots', { entry_id: `eq.${entryId}` }, 'id,lot_number,status,notes'),
-      dbSelect('greige_entries', { id: `eq.${entryId}`, limit: '1' }, 'id,lot_done_at'),
-    ])
-    const byNumber: Record<string, any> = {}
-    for (const l of oldLots || []) byNumber[String(l.lot_number)] = l
-
-    const rows = lots.map((l: any) => {
-      const prev = byNumber[String(l.lotNumber)]
-      return {
-        entry_id:   entryId,
-        lot_number: l.lotNumber,
-        taka:       l.taka != null && l.taka !== '' ? parseInt(l.taka) : null,
-        kg:         l.kg   != null && l.kg   !== '' ? parseFloat(l.kg)  : null,
-        qty:        l.qty  != null && l.qty  !== '' ? parseFloat(l.qty) : null,
-        status:     prev?.status || 'active',
-        notes:      prev?.notes  ?? null,
-      }
-    })
-    // Add the new set first, then remove the old rows — if the insert fails
-    // nothing is lost.
-    const { data, error } = await sb('/greige_lots', {
-      method: 'POST', body: JSON.stringify(rows),
-      headers: { 'Prefer': 'return=representation' },
-    })
-    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    const oldIds = (oldLots || []).map((l: any) => l.id)
-    if (oldIds.length) {
-      const { error: delError } = await sb('/greige_lots', {
-        method: 'DELETE',
-        params: { id: `in.(${oldIds.join(',')})` },
-        headers: { 'Prefer': 'return=minimal' },
-      })
-      if (delError) return NextResponse.json({ ok: false, error: 'Lots saved, but old lots could not be removed: ' + delError }, { status: 500 })
-    }
-
-    if (!entryRows?.[0]?.lot_done_at) {
-      await dbUpdate('greige_entries', { id: entryId }, { lot_done_at: new Date().toISOString() })
-    }
-
+    // One database step (df_replace_lots): the entry is locked, its lots are
+    // replaced, each lot keeps its status and notes (by lot number) and the
+    // first "lot done" time stays. Two saves at once can't duplicate lots.
+    const clean = lots.map((l: any) => ({
+      lotNumber: l.lotNumber != null ? String(l.lotNumber) : null,
+      taka: l.taka != null && l.taka !== '' ? parseInt(l.taka) : null,
+      kg:   l.kg   != null && l.kg   !== '' ? parseFloat(l.kg)  : null,
+      qty:  l.qty  != null && l.qty  !== '' ? parseFloat(l.qty) : null,
+    }))
+    const r = await rpc<any[]>('df_replace_lots', { p_entry: entryId, p_lots: clean })
+    if (r.error) return rpcFail(r)
+    const data = r.data || []
     return NextResponse.json({ ok: true, data })
   }
 

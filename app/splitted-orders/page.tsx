@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> = {
   new:          { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'New'        },
@@ -279,7 +280,7 @@ export default function SplittedOrdersPage() {
                 ✓ Done
               </button>
             )}
-            {!row.is_done && row.status !== 'done' && row.status !== 'in-process' && (
+            {!isBatchFinished(row) && row.status !== 'in-process' && (
               <button className="xs"
                 style={{background:'var(--danger-light)',color:'var(--danger)',
                   border:'1px solid var(--danger)',cursor:'pointer'}}

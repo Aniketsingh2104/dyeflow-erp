@@ -6,6 +6,8 @@ import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
 import { usePermission, useSupervisorFilter } from '@/lib/permissions'
 import { AccessDenied } from '@/lib/AccessDenied'
+import { buildHolidaySet, plannedDateForNumber, sundayOffFrom } from '@/lib/workdays'
+import { todayIST } from '@/lib/istDate'
 
 // Helper functions
 const getShadeTypeByColor = (color: string): string => {
@@ -119,27 +121,10 @@ const formatDate = (dateStr: string) => {
   }
 }
 
-// holidaySet is now passed as parameter (loaded from Supabase, not localStorage)
-const addWorkingDays = (dateStr: string, daysToAdd: number, holidaySet: Set<string>): string => {
-  if (!dateStr || daysToAdd < 0) return dateStr
-  const date = new Date(dateStr)
-  let daysAdded = 0
-  while (daysAdded < daysToAdd) {
-    date.setDate(date.getDate() + 1)
-    const dateString = date.toISOString().slice(0, 10)
-    if (date.getDay() !== 0 && !holidaySet.has(dateString)) {
-      daysAdded++
-    }
-  }
-  return date.toISOString().slice(0, 10)
-}
-
-const getPlannedDateByNumber = (planNumber: number, baseDate: string, holidaySet: Set<string>): string => {
-  if (!planNumber || planNumber < 1) return ''
-  const dayOffset = Math.floor((planNumber - 1) / 3)
-  const base = baseDate || new Date().toISOString().slice(0, 10)
-  return addWorkingDays(base, dayOffset + 1, holidaySet)
-}
+// Working days: lib/workdays.ts (holidays + "Sunday is a holiday" setting —
+// the same rule the Date Calculator uses). 3 plan numbers per working day.
+const getPlannedDateByNumber = (planNumber: number, baseDate: string, holidaySet: Set<string>): string =>
+  plannedDateForNumber(planNumber, baseDate || todayIST(), holidaySet)
 
 // Column definitions
 const COLUMNS = [
@@ -303,13 +288,14 @@ export default function MachinePage() {
   const loadData = async () => {
     try {
       // Fetch machine, batches, and orders from Supabase APIs
-      const [machRes, batchRes, orderRes, procRes, holRes, repairRes] = await Promise.all([
+      const [machRes, batchRes, orderRes, procRes, holRes0, repairRes, factoryRes] = await Promise.all([
         fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
         fetch(`/api/holidays?machine_id=${machineId}`, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
         fetch('/api/repairing-orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch('/api/setup/settings?key=factory', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ value: null })),
       ])
       // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
       const repairPendingUUIDs = new Set(
@@ -324,12 +310,6 @@ export default function MachinePage() {
       const allOrders:    any[] = orderRes.data  || []
       const processes:    any[] = procRes.data   || []
 
-      // Build holiday set from Supabase (global + machine-specific)
-      const newHolidaySet = new Set<string>(
-        (holRes.data || []).map((h: any) => h.holiday_date?.slice(0, 10)).filter(Boolean)
-      )
-      setHolidaySet(newHolidaySet)
-
       // Resolve machine from URL param (could be UUID or name-slug)
       const foundMachine = machinesList.find((m: any) => {
         if (m.id === machineId) return true
@@ -339,6 +319,13 @@ export default function MachinePage() {
       })
 
       if (!foundMachine) { setMachine(null); return }
+
+      // Holiday set (global + this machine's own, plus Sundays when the
+      // factory setting says so) — lib/workdays.ts
+      const holRes = foundMachine.id === machineId ? holRes0
+        : await fetch(`/api/holidays?machine_id=${foundMachine.id}`, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] }))
+      const newHolidaySet = buildHolidaySet(holRes.data || [], sundayOffFrom(factoryRes?.value))
+      setHolidaySet(newHolidaySet)
       setMachine(foundMachine)
 
       // Build order lookup
@@ -356,8 +343,9 @@ export default function MachinePage() {
       const machineBatches: any[] = []
 
       for (const b of allBatches) {
-        // Skip repairing batches not yet split/full-split
-        if (b.status === 'repairing') continue
+        // Skip repairing batches not yet split/full-split, and written-off
+        // ones (finished — they must not take a plan number or a day slot)
+        if (b.status === 'repairing' || b.status === 'written-off') continue
         if (repairPendingUUIDs.has(b.id)) continue
 
         const o = oMap[b.order_id] || {}
@@ -426,7 +414,7 @@ export default function MachinePage() {
             plannedDate:    (() => {
               const num = b.date_calc_plan?.byProcess?.[displayProcess]
               if (!num) return ''
-              const baseDate = foundMachine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
+              const baseDate = foundMachine?.numbering_base_date?.slice(0,10) || todayIST()
               return getPlannedDateByNumber(num, baseDate, newHolidaySet)
             })(),
             shadeType,
@@ -441,81 +429,40 @@ export default function MachinePage() {
     }
   }
 
+  // ── Plan numbers are saved by the server (action 'plan_numbers'): it works
+  // out each planned date and merges the number into the batch's plan in the
+  // database, so two pages saving at once never undo each other.
+  const savePlanNumbers = async (body: Record<string, any>): Promise<{ ok: boolean; plans: Record<string, any>; error?: string }> => {
+    if (!machine?.id) return { ok: false, plans: {}, error: 'Machine not loaded' }
+    const res = await fetch('/api/batches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'plan_numbers', machine_id: machine.id, ...body }),
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    return { ok: !!res.ok, plans: res.plans || {}, error: res.error }
+  }
+
+  // Anchor dates for the Date Calculator (batch_date_plans) from the saved plans
+  const saveAnchors = async (plans: Record<string, any>) => {
+    await Promise.all(Object.entries(plans).map(([uuid, plan]: [string, any]) => {
+      const batchRow = batches.find(b => b.id === uuid)
+      const anchors: Record<string, string> = {}
+      for (const [code, isoDate] of Object.entries(plan?.byProcessDates || {})) {
+        if (isoDate) anchors[code] = String(isoDate).slice(0, 10)
+      }
+      if (!batchRow || !Object.keys(anchors).length) return null
+      return fetch('/api/date-plans', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_anchors', batch_id: uuid, batch_id_str: batchRow.batchId, anchors }),
+      }).catch(() => {})
+    }))
+  }
+
   const updatePlanNumber = async (batchUUID: string, processCode: string, value: string, _existingPlan: any) => {
     const n = parseInt(value, 10)
     const planNum = (!n || n < 1) ? null : n
-
-    // ALWAYS fetch fresh date_calc_plan from DB before merging
-    // This prevents stale React state from overwriting another process's number
-    let freshPlan: any = {}
-    try {
-      const r = await fetch(`/api/batches?id=${batchUUID}`, { cache: 'no-store' }).then(x => x.json())
-      freshPlan = r.data?.[0]?.date_calc_plan || {}
-    } catch {}
-
-    // Merge only this process's number into the fresh byProcess map
-    const byProcess = { ...(freshPlan.byProcess || {}) }
-    if (planNum) {
-      byProcess[processCode] = planNum
-    } else {
-      delete byProcess[processCode]
-    }
-
-    // Planned date per-process
-    const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
-    if (planNum) {
-      const _baseDate = machine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
-      byProcessDates[processCode] = getPlannedDateByNumber(planNum, _baseDate, holidaySet)
-    } else {
-      delete byProcessDates[processCode]
-    }
-
-    // Primary planNumber = earliest (min) across all process numbers
-    const allNums = Object.values(byProcess) as number[]
-    const primaryPlan = allNums.length > 0 ? Math.min(...allNums) : null
-    // Primary plannedDate = date of the earliest process
-    const primaryDate = primaryPlan
-      ? Object.entries(byProcess).reduce((earliest: any, [code, num]: any) => {
-          if (!earliest || num <= (byProcess as any)[earliest]) return code
-          return earliest
-        }, null)
-      : null
-    const plannedDate = primaryDate ? byProcessDates[primaryDate] : null
-    // Note: plannedDate displayed on screen is recalculated live from holidaySet in loadData
-    // This saved plannedDate is just for reference/backup
-    // Note: plannedDate displayed on screen is recalculated live from holidaySet in loadData
-    // This saved plannedDate is just for reference/backup
-
-    await fetch('/api/batches', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'update', id: batchUUID,
-        date_calc_plan: primaryPlan
-          ? { planNumber: primaryPlan, byProcess, byProcessDates, plannedDate }
-          : null
-      })
-    })
-
-    // Also save anchor dates to batch_date_plans table (used by Date Calculator)
-    if (planNum) {
-      const batchRow = batches.find(b => b.id === batchUUID)
-      if (batchRow) {
-        const anchors: Record<string, string> = {}
-        // Merge all existing byProcessDates into anchors
-        for (const [code, isoDate] of Object.entries(byProcessDates)) {
-          if (isoDate) anchors[code] = String(isoDate).slice(0, 10)
-        }
-        await fetch('/api/date-plans', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'update_anchors',
-            batch_id: batchUUID,
-            batch_id_str: batchRow.batchId,
-            anchors
-          })
-        }).catch(() => {})
-      }
-    }
+    const r = await savePlanNumbers({ set: [{ batch: batchUUID, code: processCode, num: planNum }] })
+    if (!r.ok) { alert('Plan number not saved: ' + (r.error || 'Unknown error')); loadData(); return }
+    if (planNum) await saveAnchors(r.plans)
     loadData()
   }
 
@@ -740,112 +687,30 @@ export default function MachinePage() {
     collabGroups: any[],
     skipBatchIds: string[]
   ) => {
-    // Get max existing plan number across all batch-process rows
-    const maxPlanNumber = Math.max(0, ...batches.map(b => b.planNumber || 0))
-    let currentPlanNumber = maxPlanNumber + 1
-    const baseDate = machine?.numbering_base_date?.slice(0,10) || new Date().toISOString().slice(0,10)
-
-    // Build map: batchUUID → { processCode → planNumber }
-    // We need to accumulate all assignments before saving
-    const planMap: Record<string, Record<string, number>> = {}
-
-    // helper to add assignment
-    const assignPlan = (batchRowKey: string, planNum: number) => {
-      // batchRowKey is like "DYE26-0004-B1-S" — extract UUID from batches state
-      const batchRow = batches.find(b => b.rowKey === batchRowKey || b.batchId === batchRowKey)
-      if (!batchRow) return
-      const uuid = batchRow.id  // Supabase UUID
-      const proc = batchRow.currentProcess
-      if (!planMap[uuid]) planMap[uuid] = {}
-      planMap[uuid][proc] = planNum
-    }
-
-    // Process collab groups — all batches in a group get SAME plan number
-    collabGroups.forEach((group: any) => {
-      group.batches.forEach((batch: any) => {
-        // batch.batchId in modal is the rowKey (e.g. DYE26-0004-B1-S)
-        assignPlan(batch.batchId, currentPlanNumber)
-      })
-      currentPlanNumber++
-    })
-
-    // Process single batches not in any group and not skipped
-    const inGroupKeys = new Set(collabGroups.flatMap((g: any) => g.batches.map((b: any) => b.batchId)))
-    const singleRows = batches.filter(b =>
-      !b.planNumber &&
-      !skipBatchIds.includes(b.rowKey) &&
-      !skipBatchIds.includes(b.batchId) &&
-      !inGroupKeys.has(b.rowKey) &&
-      !inGroupKeys.has(b.batchId) &&
-      b.status !== 'done'
-    )
-    // Deduplicate: process each unique batch UUID only once per process
-    const seenRowKeys = new Set<string>()
-    for (const b of singleRows) {
-      if (seenRowKeys.has(b.rowKey)) continue
-      seenRowKeys.add(b.rowKey)
-      assignPlan(b.rowKey, currentPlanNumber)
-      currentPlanNumber++
-    }
-
-    // Save to Supabase — one API call per unique batch UUID
-    // Fetch fresh plan for EACH batch before merging to avoid stale state cross-contamination
-    const saves = Object.entries(planMap).map(async ([uuid, procMap]) => {
-      let freshPlan: any = {}
-      try {
-        const r = await fetch(`/api/batches?id=${uuid}`, { cache: 'no-store' }).then(x => x.json())
-        freshPlan = r.data?.[0]?.date_calc_plan || {}
-      } catch {}
-      // Merge new assignments into fresh byProcess — won't overwrite other processes
-      const byProcess = { ...(freshPlan.byProcess || {}), ...procMap }
-      // Build per-process dates
-      const byProcessDates = { ...(freshPlan.byProcessDates || {}) }
-      for (const [code, num] of Object.entries(procMap)) {
-        byProcessDates[code] = getPlannedDateByNumber(num as number, baseDate, holidaySet)
+    // Each group (collab) gets ONE number, then every other unnumbered row its
+    // own — the numbers themselves are handed out by the server while this
+    // machine is locked (the next free ones after the highest on this machine).
+    const rowFor = (key: string) => batches.find(b => b.rowKey === key || b.batchId === key)
+    const groups: { batch: string; code: string }[][] = []
+    const used = new Set<string>()
+    for (const group of collabGroups) {
+      const g: { batch: string; code: string }[] = []
+      for (const item of group.batches || []) {
+        const row = rowFor(item.batchId)
+        if (!row || used.has(row.rowKey)) continue
+        used.add(row.rowKey); g.push({ batch: row.id, code: row.currentProcess })
       }
-      // Primary = earliest plan number across all processes
-      const allNums = Object.values(byProcess) as number[]
-      const primaryPlan = Math.min(...allNums)
-      // Primary date = date of earliest process
-      const primaryCode = Object.entries(byProcess).reduce((a: any, b: any) => b[1] <= byProcess[a] ? b[0] : a, Object.keys(byProcess)[0])
-      const plannedDate = byProcessDates[primaryCode] || getPlannedDateByNumber(primaryPlan, baseDate, holidaySet)
-      await fetch('/api/batches', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update', id: uuid,
-          date_calc_plan: { planNumber: primaryPlan, byProcess, byProcessDates, plannedDate },
-        }),
-      })
-    })
-
-    await Promise.all(saves)
-
-    // Save anchor dates to batch_date_plans for all numbered batches
-    const anchorSaves = Object.entries(planMap).map(async ([uuid, procMap]) => {
-      const batchRow = batches.find(b => b.id === uuid)
-      if (!batchRow) return
-      // Build anchors from all byProcessDates for this batch
-      let freshPlan: any = {}
-      try {
-        const r = await fetch(`/api/batches?id=${uuid}`, { cache: 'no-store' }).then(x => x.json())
-        freshPlan = r.data?.[0]?.date_calc_plan || {}
-      } catch {}
-      const anchors: Record<string, string> = {}
-      for (const [code, isoDate] of Object.entries(freshPlan.byProcessDates || {})) {
-        if (isoDate) anchors[code] = String(isoDate).slice(0, 10)
-      }
-      if (!Object.keys(anchors).length) return
-      return fetch('/api/date-plans', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action:       'update_anchors',
-          batch_id:     uuid,
-          batch_id_str: batchRow.batchId,
-          anchors       // JSONB: { S: '2026-08-04', D: '2026-08-07' }
-        })
-      }).catch(() => {})
-    })
-    await Promise.all(anchorSaves)
+      if (g.length) groups.push(g)
+    }
+    for (const b of batches) {
+      if (b.planNumber || b.status === 'done' || used.has(b.rowKey)) continue
+      if (skipBatchIds.includes(b.rowKey) || skipBatchIds.includes(b.batchId)) continue
+      used.add(b.rowKey); groups.push([{ batch: b.id, code: b.currentProcess }])
+    }
+    const members = batches.filter(b => b.currentProcess).map(b => ({ batch: b.id, code: b.currentProcess }))
+    const r = await savePlanNumbers({ auto: { members, groups } })
+    if (!r.ok) alert('Numbering not saved: ' + (r.error || 'Unknown error'))
+    else await saveAnchors(r.plans)
 
     await loadData()
     setShowCollabModal(false)
@@ -886,37 +751,14 @@ export default function MachinePage() {
 
   const clearNumbering = async () => {
     if (!confirm('Are you sure you want to clear all plan numbers for this machine?')) return
-    // Only the numbers of THIS machine's processes are removed. A batch that
-    // also has a number on another machine (e.g. SCQ here, Dyeing elsewhere)
-    // keeps that other number.
-    const procsByBatch: Record<string, Set<string>> = {}
-    for (const b of batches) {
-      if (!b.planNumber || !b.currentProcess) continue
-      ;(procsByBatch[b.id] ||= new Set()).add(b.currentProcess)
-    }
-    const failed: string[] = []
-    await Promise.all(Object.entries(procsByBatch).map(async ([uuid, procs]) => {
-      try {
-        const r = await fetch(`/api/batches?id=${uuid}`, { cache: 'no-store' }).then(x => x.json())
-        const fresh: any = r.data?.[0]?.date_calc_plan || {}
-        const byProcess: Record<string, number> = { ...(fresh.byProcess || {}) }
-        const byProcessDates: Record<string, string> = { ...(fresh.byProcessDates || {}) }
-        for (const code of procs) { delete byProcess[code]; delete byProcessDates[code] }
-        const left = Object.entries(byProcess)
-        let plan: any = null
-        if (left.length) {
-          const [firstCode, firstNum] = left.reduce((a, b) => (b[1] < a[1] ? b : a))
-          plan = { planNumber: firstNum, byProcess, byProcessDates, plannedDate: byProcessDates[firstCode] || null }
-        }
-        const res = await fetch('/api/batches', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: uuid, date_calc_plan: plan }),
-        }).then(x => x.json())
-        if (!res.ok) failed.push(res.error || uuid)
-      } catch (e: any) { failed.push(e?.message || uuid) }
-    }))
+    // Only the numbers of THIS machine's processes are removed (one server
+    // step) — a batch numbered on another machine keeps that number.
+    const set = batches.filter(b => b.planNumber && b.currentProcess)
+      .map(b => ({ batch: b.id, code: b.currentProcess, num: null }))
+    if (!set.length) { alert('Nothing to clear.'); return }
+    const r = await savePlanNumbers({ set })
     await loadData()
-    alert(failed.length ? `⚠ Cleared, but ${failed.length} batch(es) failed: ${failed.slice(0, 3).join(' · ')}` : '✅ Numbering cleared for this machine')
+    alert(r.ok ? '✅ Numbering cleared for this machine' : '⚠ Not cleared: ' + (r.error || 'Unknown error'))
   }
 
   const applyFilters = () => {

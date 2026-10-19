@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
+import { todayIST, daysUntil as daysUntilIST } from '@/lib/istDate'
 import { dbSelect } from '@/lib/supabase'
 import { FAULTY_PENDING_FILTER, FOB_PENDING_FILTER } from '@/lib/recordStatus'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 // Builds a compact AI context string from live Supabase data.
 // Equivalent to the old buildDbContext() but server-side, no localStorage.
@@ -13,13 +15,13 @@ function fmtDate(d: any) {
 }
 
 function today() {
-  return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })
+  return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
 }
 
+// days from today (India) to the date: 0 = due today, negative = overdue
 function daysUntil(d: string): number {
-  if (!d) return 999
-  const dt = new Date(d)
-  return isNaN(dt.getTime()) ? 999 : Math.floor((dt.getTime() - Date.now()) / 86400000)
+  const n = daysUntilIST(d)
+  return isNaN(n) ? 999 : n
 }
 
 export async function GET(req: NextRequest) {
@@ -66,14 +68,14 @@ export async function GET(req: NextRequest) {
 
     // Overdue = a batch that isn't done is past its planned dispatch date
     // (batch_date_plans.d_dispatch), or the order's own delivery date has passed
-    const todayStr = new Date().toISOString().slice(0, 10)
+    const todayStr = todayIST()
     const dispatchOf: Record<string, string> = {}
     for (const p of plansRes.data || []) if (p.d_dispatch) dispatchOf[p.batch_id] = String(p.d_dispatch).slice(0, 10)
     const overdue = orders.filter(o => {
       if (['done', 'new'].includes(o.status)) return false
       const d = String(o.delivery_date || '').slice(0, 10)
       if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < todayStr) return true
-      return (batchMap[o.id] || []).some((b: any) => b.status !== 'done' && dispatchOf[b.id] && dispatchOf[b.id] < todayStr)
+      return (batchMap[o.id] || []).some((b: any) => !isBatchFinished(b) && dispatchOf[b.id] && dispatchOf[b.id] < todayStr)
     })
 
     // Active orders
@@ -82,7 +84,7 @@ export async function GET(req: NextRequest) {
     // Machine loads
     const machineLoad: Record<string, { kg: number; count: number; orders: string[] }> = {}
     for (const b of batches) {
-      if (b.status === 'done') continue
+      if (isBatchFinished(b)) continue
       const mname = b.machines?.name || 'unknown'
       if (!machineLoad[mname]) machineLoad[mname] = { kg: 0, count: 0, orders: [] }
       machineLoad[mname].kg += parseFloat(b.kg) || 0

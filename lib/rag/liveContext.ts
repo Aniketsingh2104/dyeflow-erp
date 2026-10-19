@@ -12,6 +12,7 @@
  */
 import { dbSelect } from '@/lib/supabase'
 import { getLearnedDuration, getFaultyRisk, getFobRisk, getRecommendedMachine, getRecommendedRoute } from '@/lib/predictiveStats'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 // Process code/name pairs from the live process_list (kept in sync manually —
 // see knowledge_chunks.json glossary#process_codes for the fuller reference).
@@ -96,7 +97,7 @@ export async function getLiveSnapshot(): Promise<string> {
 
   const machineLoad: Record<string, { kg: number; count: number }> = {}
   for (const b of batches) {
-    if (b.status === 'done') continue
+    if (isBatchFinished(b)) continue
     const mname = b.machines?.name || 'unassigned'
     if (!machineLoad[mname]) machineLoad[mname] = { kg: 0, count: 0 }
     machineLoad[mname].kg += parseFloat(b.kg) || 0
@@ -235,7 +236,7 @@ ${held.map((o: any) => `  ${o.order_number} | ${o.party} | ${o.article || '-'} |
   // 5) Delay / overdue / stuck detection — batches past their process's default_days
   if (/overdue|delay|late|stuck|behind/.test(q)) {
     const [{ data: batches }, { data: orders }, { data: procs }] = await Promise.all([
-      dbSelect('batches', { status: 'neq.done', limit: '1000' }, 'id,batch_id,order_id,status,current_process,fms_enter_at'),
+      dbSelect('batches', { status: 'not.in.(done,written-off)', limit: '5000' }, 'id,batch_id,order_id,status,current_process,fms_enter_at'),
       dbSelect('orders', { limit: '1000' }, 'id,order_number,party,supervisors(name)'),
       dbSelect('process_list', {}, 'code,default_days'),
     ])

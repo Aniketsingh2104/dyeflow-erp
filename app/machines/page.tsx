@@ -3,6 +3,7 @@
 import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useState, useCallback } from 'react'
 import { getMachines, getBatches, getOrders, markProcessDone } from '@/lib/db'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 const BUILTIN_SHADE_RULES = [
   { keyword: 'white',   shadeGroup: 'White'  },
@@ -126,7 +127,7 @@ export default function MachinesPage() {
         }
 
         const activeKg = mb
-          .filter(b => b.status !== 'done')
+          .filter(b => !isBatchFinished(b))
           .reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
 
         data[mach.id] = { batches: mb, grouped, totalBatches: mb.length, activeKg }

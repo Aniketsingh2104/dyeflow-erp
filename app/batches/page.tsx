@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone } from '@/lib/db'
+import { isBatchFinished } from '@/lib/batchStatus'
 
 export default function BatchesPage() {
   const router = useRouter()
@@ -55,8 +56,8 @@ export default function BatchesPage() {
 
       setBatches(enriched)
       setStats({
-        pending:   enriched.filter(b => !b.current_process && b.status !== 'done').length,
-        inProcess: enriched.filter(b =>  b.current_process && b.status !== 'done').length,
+        pending:   enriched.filter(b => !b.current_process && !isBatchFinished(b)).length,
+        inProcess: enriched.filter(b =>  b.current_process && !isBatchFinished(b)).length,
         done:      enriched.filter(b => b.status === 'done').length,
       })
     } finally {

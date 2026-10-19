@@ -17,8 +17,17 @@ export async function GET(req: NextRequest) {
   }
 
   const query: Record<string, string> = {
-    order: 'created_at.desc',
+    order: 'created_at.desc,id.desc',
     limit: String(Math.min(limit, 2000)),
+  }
+  // "Load older": entries before this time (the oldest one already shown)
+  const before = searchParams.get('before')
+  // (passed on exactly — toISOString would cut the microseconds and skip rows)
+  // with before_id, rows sharing that exact time (one transaction) aren't skipped
+  const beforeId = searchParams.get('before_id')
+  if (before && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)?$/.test(before) && !isNaN(Date.parse(before))) {
+    if (beforeId && /^[0-9a-f-]{36}$/i.test(beforeId)) query['or'] = `(created_at.lt.${before},and(created_at.eq.${before},id.lt.${beforeId}))`
+    else query['created_at'] = `lt.${before}`
   }
   if (action) query['action']      = `eq.${action}`
   if (entity) query['entity_type'] = `eq.${entity}`

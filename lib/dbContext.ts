@@ -1,3 +1,4 @@
+import { daysUntil as daysUntilIST } from '@/lib/istDate'
 /**
  * lib/dbContext.ts — Supabase-backed context builders for AI assistant.
  * Phase 12: localStorage fallbacks removed. All context from /api/context or /api/batches.
@@ -47,9 +48,9 @@ export async function fetchAssignmentContext(article?: string): Promise<string> 
   try {
     const [mRes, bRes, sRes, oRes] = await Promise.all([
       fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/batches?limit=2000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches?active=1', { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json()),
     ])
     const machines: any[] = mRes.data || []
     const batches: any[] = bRes.data || []
@@ -108,14 +109,14 @@ export async function fetchDelayContext(): Promise<string> {
   try {
     const { contextText: anomalyText } = await fetchAnomalyContext()
 
-    const oRes = await fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json())
+    const oRes = await fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json())
     const orders: any[] = (oRes.data || []).filter((o: any) => o.status !== 'done')
     const now = Date.now()
     const withDate = orders.filter((o: any) => o.delivery_date)
     const noDate = orders.filter((o: any) => !o.delivery_date)
 
     const dateLines = withDate.map((o: any) => {
-      const daysLeft = Math.floor((new Date(o.delivery_date).getTime() - now) / 86400000)
+      const daysLeft = daysUntilIST(o.delivery_date)
       const routeLen = (o.process_route || []).length
       return `  ${o.order_number} | ${o.party} | delivery:${o.delivery_date} | days left:${daysLeft} | route steps:${routeLen} | status:${o.status}`
     })
@@ -155,7 +156,7 @@ export async function fetchDelayContext(): Promise<string> {
         .map((o: any) => {
           const estDays = daysByOrder[o.order_number]
           if (estDays == null) return null
-          const daysLeft = Math.floor((new Date(o.delivery_date).getTime() - now) / 86400000)
+          const daysLeft = daysUntilIST(o.delivery_date)
           const risk = estDays > daysLeft ? 'AT RISK' : 'ON TRACK'
           const conf = hasLearnedByOrder[o.order_number] ? 'has real learned data' : 'mostly factory defaults — low confidence'
           return `  ${o.order_number} | ${o.party} | est. total processing: ${estDays.toFixed(1)}d | days until delivery: ${daysLeft} | ${risk} (${conf})`
@@ -187,7 +188,7 @@ ${noDate.slice(0, 20).map((o: any) => `  ${o.order_number} | ${o.party} | status
  *  /api/predict call instead of one call per article. */
 export async function fetchFaultyRiskContext(): Promise<string> {
   try {
-    const oRes = await fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json())
+    const oRes = await fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json())
     const orders: any[] = oRes.data || []
     const articleCounts: Record<string, number> = {}
     for (const o of orders) {
@@ -223,7 +224,8 @@ export async function fetchCustomerContext(query: string): Promise<string> {
     const qUpper = q.toUpperCase()
     const qLower = q.toLowerCase()
 
-    const oRes = await fetch('/api/orders?limit=2000', { cache: 'no-store' }).then(r => r.json())
+    // all orders (finished ones too — a customer may ask about a delivered order)
+    const oRes = await fetch('/api/orders', { cache: 'no-store' }).then(r => r.json())
     const orders: any[] = oRes.data || []
     const matches = orders.filter((o: any) =>
       (o.order_number && o.order_number.toUpperCase().includes(qUpper)) ||
@@ -253,7 +255,7 @@ ${lines.join('\n')}`
 export async function fetchActionsContext(): Promise<string> {
   try {
     const [oRes, sRes] = await Promise.all([
-      fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
     ])
     const orders: any[] = oRes.data || []
@@ -281,8 +283,8 @@ export async function fetchSchedulerContext(): Promise<string> {
   try {
     const [mRes, bRes, oRes] = await Promise.all([
       fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/batches?limit=2000', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches?active=1', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json()),
     ])
     const machines: any[] = mRes.data || []
     const batches: any[] = (bRes.data || []).filter((b: any) => b.status !== 'done')
@@ -322,7 +324,7 @@ ${unassigned.map((b: any) => `  ${b.batch_id} | ${b.order?.party || '-'} | ${b.k
 /** Cost Estimator tab — real orders with process route length and qty, optionally filtered by order number. */
 export async function fetchCostContext(orderFilter?: string): Promise<string> {
   try {
-    const oRes = await fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json())
+    const oRes = await fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json())
     let orders: any[] = (oRes.data || []).filter((o: any) => o.status !== 'done')
 
     if (orderFilter && orderFilter.trim()) {
@@ -357,8 +359,8 @@ export interface AnomalyItem {
 export async function fetchAnomalyContext(): Promise<{ anomalies: AnomalyItem[]; contextText: string }> {
   try {
     const [bRes, oRes, pRes] = await Promise.all([
-      fetch('/api/batches?limit=2000&status=in-process', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/orders?limit=1000', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/batches?status=in-process', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders?active=1', { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
     ])
 
