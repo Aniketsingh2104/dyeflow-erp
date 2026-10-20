@@ -20,6 +20,9 @@ export function SubProdTag({ value }: { value?: string | null }) {
   return <span style={{ fontWeight: 500, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}> · {value}</span>
 }
 
+// Excel-like cell: always a box you can click and type in. Enter or ↓ saves and
+// moves to the next row's box, ↑ to the previous, Tab moves on, Esc puts the
+// old value back. Saved when you leave the box (blur) if it changed.
 export function SubProdEdit({ batchId, value, canEdit = true, onSaved, style }: {
   batchId: string                       // batches.id (uuid)
   value?: string | null
@@ -27,40 +30,50 @@ export function SubProdEdit({ batchId, value, canEdit = true, onSaved, style }: 
   onSaved?: (v: string | null) => void
   style?: React.CSSProperties
 }) {
-  const [editing, setEditing] = useState(false)
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
   const [shown, setShown] = useState<string | null>(value || null)
   const busy = useRef(false)
-  useEffect(() => { setShown(value || null); if (!editing) setText(value || '') }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+  const ref = useRef<HTMLInputElement>(null)
+  const cancelled = useRef(false)             // Esc: the blur that follows must not save
+  useEffect(() => { setShown(value || null); setText(value || '') }, [value])
 
   if (!canEdit) return <SubProdCell value={shown} style={style} />
-  if (!editing) {
-    return (
-      <span onClick={e => { e.stopPropagation(); setText(shown || ''); setEditing(true) }}
-        title="Click to change the Sub Prod No." style={{ cursor: 'pointer', borderBottom: '1px dashed var(--border-medium)', ...style }}>
-        <SubProdCell value={shown} />
-      </span>
-    )
-  }
-  const save = async () => {
-    if (busy.current) return
+
+  const save = async (): Promise<boolean> => {
+    if (busy.current) return false
     const next = text.trim().toUpperCase()
-    if (next === (shown || '')) { setEditing(false); return }
+    if (next === (shown || '')) return true
     busy.current = true; setSaving(true)
     const r = await saveSubProd(batchId, next)
     busy.current = false; setSaving(false)
-    if (r.cancelled) return                       // stay in the box, the user can change it
-    if (!r.ok) { alert('Sub Prod No. not saved: ' + (r.error || 'Unknown error')); return }
-    setShown(r.value ?? null); setEditing(false); onSaved?.(r.value ?? null)
+    if (r.cancelled) { setText(shown || ''); return false }
+    if (!r.ok) { alert('Sub Prod No. not saved: ' + (r.error || 'Unknown error')); setText(shown || ''); return false }
+    setShown(r.value ?? null); setText(r.value ?? ''); onSaved?.(r.value ?? null)
+    return true
   }
+  // the next / previous Sub Prod box on the page (same column, other rows)
+  const move = (dir: 1 | -1) => {
+    const all = Array.from(document.querySelectorAll<HTMLInputElement>('input[data-subprod]'))
+    const i = all.indexOf(ref.current!)
+    const to = all[i + dir]
+    if (to) { to.focus(); to.select() }
+  }
+  const empty = !text
   return (
-    <input autoFocus value={text} maxLength={SUB_PROD_MAX} disabled={saving} placeholder="e.g. P-5201-A"
+    <input ref={ref} data-subprod="1" value={text} maxLength={SUB_PROD_MAX} disabled={saving} placeholder="—"
+      title="Type the Sub Prod No. · Enter / ↓ next row · ↑ previous row"
       onClick={e => e.stopPropagation()}
+      onFocus={e => e.target.select()}
       onChange={e => setText(e.target.value.toUpperCase())}
-      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save() } if (e.key === 'Escape') { setEditing(false); setText(shown || '') } }}
-      onBlur={() => { if (!busy.current) save() }}
-      style={{ width: 110, padding: '3px 6px', fontSize: 12, border: '1px solid var(--accent)', borderRadius: 4,
-        background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); save().then(ok => { if (ok) move(1) }) }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); save().then(ok => { if (ok) move(-1) }) }
+        else if (e.key === 'Escape') { cancelled.current = true; setText(shown || ''); ref.current?.blur() }
+      }}
+      onBlur={() => { if (cancelled.current) { cancelled.current = false; setText(shown || ''); return } if (!busy.current) save() }}
+      style={{ width: 110, padding: '3px 6px', fontSize: 12, fontWeight: 600, borderRadius: 4,
+        border: '1px solid ' + (empty ? '#F59E0B' : 'var(--border-light)'), background: empty ? '#FFFBEB' : 'var(--bg-primary)',
+        color: 'var(--text-primary)', ...style }} />
   )
 }
