@@ -74,6 +74,7 @@ const COLUMNS = [
   { key: 'remarks', label: 'REMARKS', defaultWidth: 200, canHide: true },
   { key: 'supervisor', label: 'SUPERVISOR', defaultWidth: 120, canHide: true },
   { key: 'processName', label: 'PROCESS NAME', defaultWidth: 150, canHide: true },
+  { key: 'params', label: 'NOZZLE · PUMP · PRESS.', defaultWidth: 150, canHide: true },
   { key: 'plannedDate', label: 'PLANNED DATE', defaultWidth: 120, canHide: true },
   { key: 'planNumber', label: 'NO.', defaultWidth: 80, canHide: false },
   { key: 'faulty', label: 'FAULTY', defaultWidth: 80, canHide: true },
@@ -317,6 +318,10 @@ export default function MachinePage() {
           machineBatches.push({
             procDone,
             atThisProcess,
+            // machine settings saved by Auto Split (nozzle / pump rpm / pressure)
+            params:         b.process_params && b.process_params.nozzle
+              ? `${b.process_params.nozzle} · ${b.process_params.pumpRpm ?? '-'} rpm · ${b.process_params.pressure ?? '-'}`
+              : '',
             current_process: b.current_process,
             rowKey:         `${b.batch_id}-${displayProcess}`,   // unique per process
             batchId:        b.batch_id,

@@ -11,10 +11,15 @@ interface FactorySettings {
   phone: string
   /** Sundays are non-working days for the Date Calculator and machine sheets */
   sundayHoliday: boolean
+  /** Auto Split loading (lib/loading.ts) */
+  elongationPct: string
+  cycleTimeMin: string
+  maxLoadPct: string
 }
 
 const DEFAULTS: FactorySettings = {
   orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '', sundayHoliday: true,
+  elongationPct: '14', cycleTimeMin: '1.7', maxLoadPct: '90',
 }
 
 // Defined OUTSIDE the page component — a component defined inside render is a
@@ -52,6 +57,7 @@ export default function FactorySettingsPage() {
       const data = await res.json()
       if (data.ok && data.value) {
         const s = { ...DEFAULTS, ...data.value }
+        for (const k of ['elongationPct', 'cycleTimeMin', 'maxLoadPct'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
         setForm(s)
       }
     } finally { setLoading(false) }
@@ -65,6 +71,10 @@ export default function FactorySettingsPage() {
 
   const handleSave = async () => {
     const clean = { ...form }
+    for (const [k, lo, hi] of [['elongationPct', 0, 50], ['cycleTimeMin', 0.5, 10], ['maxLoadPct', 10, 100]] as const) {
+      const n = parseFloat(String(clean[k]))
+      if (!isFinite(n) || n < lo || n > hi) { alert(`${k === 'elongationPct' ? 'Elongation %' : k === 'cycleTimeMin' ? 'Cycle time' : 'Max machine load %'} must be between ${lo} and ${hi}.`); return }
+    }
     setSaving(true)
     try {
       const res = await fetch('/api/setup/settings', {
@@ -144,6 +154,19 @@ export default function FactorySettingsPage() {
             </span>
           </span>
         </label>
+      </div>
+
+      {/* Auto Split — machine loading */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Auto Split — Machine Loading</div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 14 }}>
+          Loading per batch = cycle time × reel speed × nozzles ÷ (39370 ÷ width ÷ GSM × (1 + elongation %)),
+          never more than machine size × max load %.
+        </div>
+        <Field label="Elongation (Hot length) %" value={form.elongationPct} onChange={v => handleChange('elongationPct', v)} placeholder="14" note="Default 14 %" />
+        <Field label="Cycle time (min)" value={form.cycleTimeMin} onChange={v => handleChange('cycleTimeMin', v)} placeholder="1.7" note="Default 1.7" />
+        <Field label="Max machine load %" value={form.maxLoadPct} onChange={v => handleChange('maxLoadPct', v)} placeholder="90" note="Default 90 % of the machine size (Capacity)" />
       </div>
 
       <div style={{ display: 'flex', gap: 10 }}>

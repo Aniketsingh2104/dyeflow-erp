@@ -9,6 +9,7 @@ import {
   getSupervisors, getCustomers, getMachines,
   createSplits, getCurrentUser,
 } from '@/lib/db'
+import AutoSplitModal from '@/components/AutoSplitModal'
 import { getProcessList } from '@/lib/db'
 
 // ── Column definitions ──────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ export default function OrdersPage() {
 
   // Priority drag
   const [priorityMode, setPriorityMode] = useState(false)
+  const [autoSplitOrder, setAutoSplitOrder] = useState<any>(null)
   const [dragIdx,      setDragIdx]      = useState<number | null>(null)
   const [dragOver,     setDragOver]     = useState<number | null>(null)
 
@@ -901,6 +903,11 @@ export default function OrdersPage() {
                           )
                           return (<>
                             <button className="xs primary edit-only" onClick={() => openSplitModal(order)}>Split</button>
+                            <button className="xs edit-only" title="Equal batches sized for the Dyeing machine (Machine calculation sheet)"
+                              style={{ background: '#0F766E', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                              onClick={() => setAutoSplitOrder(order)}>
+                              🧮 Auto Split
+                            </button>
                             <button className="xs edit-only"
                               style={{ background: '#7C3AED', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
                               onClick={() => doFullSplit(order)}
@@ -1076,6 +1083,12 @@ export default function OrdersPage() {
           onClose={() => setModal(null)}
           saving={saving}
         />
+      )}
+
+      {/* ── Auto Split (machine loading) ── */}
+      {autoSplitOrder && (
+        <AutoSplitModal order={autoSplitOrder} onClose={() => setAutoSplitOrder(null)}
+          onSaved={msg => { setAutoSplitOrder(null); showToast(msg); loadAll() }} />
       )}
 
       {/* ── Split modal ── */}

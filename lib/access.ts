@@ -64,6 +64,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
   batches: {
     GET: 'staff',
     create_splits: { edit: ['/orders', '/supervisor', '/split-order'] },
+    auto_split_preview: { edit: ['/orders', '/supervisor', '/split-order'] },
     full_split: { edit: ['/orders', '/supervisor'] },
     update: { edit: [...PLAN_PAGES, '/fms', '/supervisor', '/repairing-order', '/splitted-orders'] },
     process_done: { edit: FMS_PAGES },

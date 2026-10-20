@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 
-interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string; numbering_base_date?: string }
+interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string; numbering_base_date?: string; nozzles?: number | null; reel_speed?: number | null }
 
 const api = async (action: string, payload: Record<string, any> = {}) => {
   const res = await fetch('/api/machines', {
@@ -19,7 +19,7 @@ export default function MachineMasterPage() {
   const [loading,      setLoading]      = useState(true)
   const [showModal,    setShowModal]    = useState(false)
   const [importStatus, setImportStatus] = useState('')
-  const [form, setForm] = useState({ name: '', machine_type: '', capacity: 200 })
+  const [form, setForm] = useState({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' })
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -48,9 +48,10 @@ export default function MachineMasterPage() {
     const data = await api('create', {
       name: form.name.trim(), machine_type: form.machine_type.trim(),
       capacity: form.capacity, status: 'idle', is_active: true,
+      nozzles: parseInt(form.nozzles) || null, reel_speed: parseFloat(form.reel_speed) || null,
     })
     if (!data.ok) alert(`Failed: ${data.error}`)
-    else { setShowModal(false); setForm({ name: '', machine_type: '', capacity: 200 }); load() }
+    else { setShowModal(false); setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' }); load() }
   }
 
   const processImport = async (rows: any[][]) => {
@@ -147,7 +148,7 @@ export default function MachineMasterPage() {
           </div>
           <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
             borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-            onClick={() => { setForm({ name: '', machine_type: '', capacity: 200 }); setShowModal(true) }}>
+            onClick={() => { setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' }); setShowModal(true) }}>
             + Add Machine
           </button>
         </div>
@@ -155,7 +156,7 @@ export default function MachineMasterPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Machine Name','Type','Capacity (Kg)','Numbering Base Date','Status','Actions'].map(h => (
+                {['Machine Name','Type','Capacity (Kg)','Nozzles','Reel Speed (m/min)','Numbering Base Date','Status','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
                     color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
                     borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -164,9 +165,9 @@ export default function MachineMasterPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
               ) : machines.length === 0 ? (
-                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
                   No machines yet. Click "+ Add Machine" or upload Excel.
                 </td></tr>
               ) : (
@@ -181,6 +182,25 @@ export default function MachineMasterPage() {
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', fontSize: 13 }}>{m.capacity} Kg</td>
+                    {/* jet loading data for Auto Split (lib/loading.ts) — saved when you leave the box */}
+                    {(['nozzles', 'reel_speed'] as const).map(f => (
+                      <td key={f} style={{ padding: '12px 14px' }}>
+                        <input type="number" min="0" step={f === 'nozzles' ? 1 : 10} defaultValue={m[f] ?? ''}
+                          key={m.id + f + (m[f] ?? '')} placeholder="—"
+                          onBlur={async e => {
+                            const raw = e.target.value.trim()
+                            const v = raw === '' ? null : (f === 'nozzles' ? parseInt(raw) : parseFloat(raw))
+                            if (v === (m[f] ?? null)) return
+                            if (v !== null && (!isFinite(v) || v < 0)) { alert('Enter a number'); e.target.value = String(m[f] ?? ''); return }
+                            const r = await fetch('/api/machines', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ action: 'update', id: m.id, [f]: v }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
+                            if (!r.ok) alert('Not saved: ' + (r.error || 'Unknown error'))
+                            load()
+                          }}
+                          style={{ width: 80, fontSize: 12, padding: '3px 8px', border: '1px solid var(--border-medium)', borderRadius: 4,
+                            background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+                      </td>
+                    ))}
                     <td style={{ padding: '12px 14px' }}>
                       <input
                         type="date"
@@ -282,6 +302,14 @@ export default function MachineMasterPage() {
                 <label>Capacity (Kg)</label>
                 <input type="number" value={form.capacity} onChange={e => setForm({ ...form, capacity: parseInt(e.target.value) || 200 })}
                   placeholder="200" />
+              </div>
+              <div className="form-group">
+                <label>Nozzles (jets)</label>
+                <input type="number" value={form.nozzles} onChange={e => setForm({ ...form, nozzles: e.target.value })} placeholder="e.g. 2" />
+              </div>
+              <div className="form-group">
+                <label>Reel Speed (m/min)</label>
+                <input type="number" value={form.reel_speed} onChange={e => setForm({ ...form, reel_speed: e.target.value })} placeholder="e.g. 280" />
               </div>
             </div>
             <button className="primary" onClick={save} style={{ width: '100%', marginTop: 8 }}>✓ Save Machine</button>

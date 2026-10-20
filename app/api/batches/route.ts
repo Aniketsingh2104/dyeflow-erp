@@ -7,6 +7,7 @@ import { rpc, rpcFail } from '@/lib/rpc'
 import { loadHolidaySet } from '@/lib/holidays'
 import { plannedDateForNumber } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
+import { machineLoading, equalBatches, reelSpeedNeeded, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
 
 // Columns the generic "update" action may change (machine sheet numbering,
 // Date Calculator, supervisor pages). Where a batch IS (process / status /
@@ -59,7 +60,7 @@ export async function GET(req: NextRequest) {
     }
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,' +
+      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,process_machine_map,supervisor_id,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
@@ -82,6 +83,18 @@ export async function GET(req: NextRequest) {
 // Splitting is ADDITIVE: existing batches of an order are never deleted here.
 // Batch IDs are generated on the server so they always continue from the
 // highest number the order already has (B1, B2 … even after deletes).
+// only plain numbers / short texts from the Auto Split preview are kept
+function cleanParams(p: any): Record<string, any> | null {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null
+  const out: Record<string, any> = {}
+  for (const k of ['machine', 'nozzle', 'pumpRpm', 'cycle', 'pressure', 'width', 'gsm', 'mtrPerKg', 'hotLength', 'stdLoad', 'maxPerBatch', 'reelNeeded']) {
+    const v = p[k]
+    if (typeof v === 'number' && isFinite(v)) out[k] = v
+    else if (typeof v === 'string' && v.length <= 60) out[k] = v
+  }
+  return Object.keys(out).length ? out : null
+}
+
 async function getSplitContext(order_id: string) {
   const { data: orderRows, error: orderErr } = await dbSelect('orders',
     { id: `eq.${order_id}`, limit: '1' }, 'id,order_number,status,qty_kg,qty_mtr,no_of_taka,process_machines,process_route')
@@ -136,6 +149,68 @@ export async function POST(req: NextRequest) {
     if (payload.next_process) payload.next_process = canonicalCode(payload.next_process)
 
     // ── Split: ADD new batches to an order (never deletes existing ones) ─────
+    // ── Auto Split preview (the Machine calculation sheet) ──────────────────
+    // Sizes the batches for the order's Dyeing machine (or its SCQ / first
+    // machine process when there is no dyeing): equal batches, each no more
+    // than the machine's Loading Std Qty or size × 90 %. Nothing is saved —
+    // the page shows the preview and saves with create_splits.
+    if (action === 'auto_split_preview') {
+      const { order_id } = payload
+      if (!order_id) return NextResponse.json({ ok: false, error: 'order_id required' }, { status: 400 })
+      const ctx = await getSplitContext(order_id)
+      if (ctx.error || !ctx.order) return NextResponse.json({ ok: false, error: ctx.error }, { status: 400 })
+      const { data: oRows } = await dbSelect('orders', { id: `eq.${order_id}`, limit: '1' }, 'width,gsm')
+      const width = oRows?.[0]?.width, gsm = oRows?.[0]?.gsm
+      const route: string[] = (ctx.order.process_route || []).map((c: string) => canonicalCode(c))
+      const pm: Record<string, string[]> = {}
+      for (const [k, v] of Object.entries(ctx.order.process_machines || {})) pm[canonicalCode(k)] = (Array.isArray(v) ? v : [v]).filter(Boolean) as string[]
+      const SIZING_ORDER = ['D', 'S', 'S2', 'Add', 'Lev', 'Fix', 'Wash', 'Rc']
+      const code = SIZING_ORDER.find(c => route.includes(c) && pm[c]?.length)
+      if (!code) {
+        return NextResponse.json({ ok: false, error: `${ctx.order.order_number}: no Dyeing / SCQ machine is set — confirm the route with machines on the Supervisor page first.` }, { status: 400 })
+      }
+      const options = pm[code]
+      const machineId = payload.machine_id && options.includes(payload.machine_id) ? payload.machine_id : options[0]
+      const { data: mRows } = await dbSelect('machines', { id: `in.(${options.join(',')})` }, 'id,name,capacity,nozzles,reel_speed')
+      const machine = (mRows || []).find((m: any) => m.id === machineId)
+      if (!machine) return NextResponse.json({ ok: false, error: 'The machine set on this order was not found' }, { status: 400 })
+      const { data: setRows } = await dbSelect('settings', { key: 'in.(factory,nozzleTable)' }, 'key,value')
+      const factory = (setRows || []).find((r: any) => r.key === 'factory')?.value || {}
+      const table = (setRows || []).find((r: any) => r.key === 'nozzleTable')?.value
+      const settings = loadingSettingsFrom(factory)
+      const calc = machineLoading(width, gsm, machine, settings)
+      if (!calc.ok) return NextResponse.json({ ok: false, error: calc.error }, { status: 400 })
+      const nozzle = Array.isArray(table) ? nozzleFor(calc.gsm!, table as NozzleRow[]) : calc.nozzle
+
+      const qtyKg = parseFloat(ctx.order.qty_kg) || 0
+      const remKg = Math.max(0, Math.round((qtyKg - ctx.allocatedKg) * 100) / 100)
+      if (remKg < 0.5) return NextResponse.json({ ok: false, error: `${ctx.order.order_number} is already fully split.` }, { status: 400 })
+      const remMtr = Math.max(0, (parseFloat(ctx.order.qty_mtr) || 0) - ctx.allocatedMtr)
+      const remTaka = Math.max(0, (parseInt(ctx.order.no_of_taka) || 0) - ctx.allocatedTaka)
+      const kgs = equalBatches(remKg, calc.maxPerBatch!)
+      let mtrLeft = remMtr, takaLeft = remTaka
+      const batches = kgs.map((kg, i) => {
+        const last = i === kgs.length - 1
+        const share = remKg > 0 ? kg / remKg : 0
+        const mtr = last ? Math.round(mtrLeft * 10) / 10 : Math.round(remMtr * share * 10) / 10
+        const taka = last ? takaLeft : Math.floor(remTaka * share)
+        mtrLeft -= mtr; takaLeft -= taka
+        return { kg, mtr: mtr || null, taka: taka || null,
+          reelNeeded: reelSpeedNeeded(kg, calc.hotLength!, parseFloat(machine.nozzles) || 0, settings) }
+      })
+      const r2 = (x: number | null | undefined, d = 2) => x == null ? null : Math.round(x * 10 ** d) / 10 ** d
+      return NextResponse.json({ ok: true,
+        order: { id: order_id, order_number: ctx.order.order_number, qty_kg: qtyKg, allocated_kg: r2(ctx.allocatedKg), remaining_kg: remKg, width, gsm },
+        process: code,
+        machines: (mRows || []).map((m: any) => ({ id: m.id, name: m.name })).sort((a: any, b: any) => options.indexOf(a.id) - options.indexOf(b.id)),
+        machine: { id: machine.id, name: machine.name, capacity: parseFloat(machine.capacity) || null, nozzles: parseFloat(machine.nozzles) || null, reel_speed: parseFloat(machine.reel_speed) || null },
+        settings,
+        calc: { width: calc.width, gsm: calc.gsm, mtrPerKg: r2(calc.mtrPerKg, 3), hotLength: r2(calc.hotLength, 3),
+                stdLoad: r2(calc.stdLoad, 1), sizeLimit: r2(calc.sizeLimit, 1), maxPerBatch: r2(calc.maxPerBatch, 1), basis: calc.basis, note: calc.note || null },
+        params: nozzle ? { nozzle: nozzle.nozzle, pumpRpm: nozzle.pumpRpm, cycle: nozzle.cycle, pressure: nozzle.pressure } : null,
+        batches })
+    }
+
     if (action === 'create_splits') {
       const { order_id, batches, process_route } = payload
       if (!order_id || !batches?.length) {
@@ -178,6 +253,8 @@ export async function POST(req: NextRequest) {
         taka:          parseInt(b.taka)   || null,
         status:        'pending',
         process_route: route,  // save route on batch so machine page shows correct process
+        // Auto Split: the machine settings for this batch (nozzle / pump / pressure …)
+        process_params: cleanParams(b.process_params),
       }})
 
       const { data: created, error } = await sb<any[]>('/batches', {
