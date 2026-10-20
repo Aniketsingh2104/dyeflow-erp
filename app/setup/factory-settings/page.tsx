@@ -14,12 +14,13 @@ interface FactorySettings {
   /** Auto Split loading (lib/loading.ts) */
   elongationPct: string
   cycleTimeMin: string
+  minLoadPct: string
   maxLoadPct: string
 }
 
 const DEFAULTS: FactorySettings = {
   orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '', sundayHoliday: true,
-  elongationPct: '14', cycleTimeMin: '1.7', maxLoadPct: '90',
+  elongationPct: '14', cycleTimeMin: '1.7', minLoadPct: '60', maxLoadPct: '80',
 }
 
 // Defined OUTSIDE the page component — a component defined inside render is a
@@ -57,7 +58,7 @@ export default function FactorySettingsPage() {
       const data = await res.json()
       if (data.ok && data.value) {
         const s = { ...DEFAULTS, ...data.value }
-        for (const k of ['elongationPct', 'cycleTimeMin', 'maxLoadPct'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
+        for (const k of ['elongationPct', 'cycleTimeMin', 'minLoadPct', 'maxLoadPct'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
         setForm(s)
       }
     } finally { setLoading(false) }
@@ -71,10 +72,12 @@ export default function FactorySettingsPage() {
 
   const handleSave = async () => {
     const clean = { ...form }
-    for (const [k, lo, hi] of [['elongationPct', 0, 50], ['cycleTimeMin', 0.5, 10], ['maxLoadPct', 10, 100]] as const) {
+    const LABEL = { elongationPct: 'Elongation %', cycleTimeMin: 'Cycle time', minLoadPct: 'Min batch load %', maxLoadPct: 'Max batch load %' }
+    for (const [k, lo, hi] of [['elongationPct', 0, 50], ['cycleTimeMin', 0.5, 10], ['minLoadPct', 10, 100], ['maxLoadPct', 10, 100]] as const) {
       const n = parseFloat(String(clean[k]))
-      if (!isFinite(n) || n < lo || n > hi) { alert(`${k === 'elongationPct' ? 'Elongation %' : k === 'cycleTimeMin' ? 'Cycle time' : 'Max machine load %'} must be between ${lo} and ${hi}.`); return }
+      if (!isFinite(n) || n < lo || n > hi) { alert(`${LABEL[k]} must be between ${lo} and ${hi}.`); return }
     }
+    if (parseFloat(clean.minLoadPct) > parseFloat(clean.maxLoadPct)) { alert('Min batch load % must not be more than Max batch load %.'); return }
     setSaving(true)
     try {
       const res = await fetch('/api/setup/settings', {
@@ -161,12 +164,13 @@ export default function FactorySettingsPage() {
         borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Auto Split — Machine Loading</div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 14 }}>
-          Loading per batch = cycle time × reel speed × nozzles ÷ (39370 ÷ width ÷ GSM × (1 + elongation %)),
-          never more than machine size × max load %.
+          Batches are split equally so each one is between machine size × min load % and × max load %.
+          Loading Std Qty (cycle time × reel speed × nozzles ÷ hot length) is shown for information.
         </div>
         <Field label="Elongation (Hot length) %" value={form.elongationPct} onChange={v => handleChange('elongationPct', v)} placeholder="14" note="Default 14 %" />
         <Field label="Cycle time (min)" value={form.cycleTimeMin} onChange={v => handleChange('cycleTimeMin', v)} placeholder="1.7" note="Default 1.7" />
-        <Field label="Max machine load %" value={form.maxLoadPct} onChange={v => handleChange('maxLoadPct', v)} placeholder="90" note="Default 90 % of the machine size (Capacity)" />
+        <Field label="Min batch load %" value={form.minLoadPct} onChange={v => handleChange('minLoadPct', v)} placeholder="60" note="Default 60 % of the machine size (Capacity)" />
+        <Field label="Max batch load %" value={form.maxLoadPct} onChange={v => handleChange('maxLoadPct', v)} placeholder="80" note="Default 80 % of the machine size (Capacity)" />
       </div>
 
       <div style={{ display: 'flex', gap: 10 }}>

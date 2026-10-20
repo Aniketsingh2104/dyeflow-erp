@@ -7,7 +7,7 @@ import { rpc, rpcFail } from '@/lib/rpc'
 import { loadHolidaySet } from '@/lib/holidays'
 import { plannedDateForNumber } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
-import { machineLoading, equalBatches, reelSpeedNeeded, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
+import { machineLoading, rangeBatches, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
 
 // Columns the generic "update" action may change (machine sheet numbering,
 // Date Calculator, supervisor pages). Where a batch IS (process / status /
@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
 function cleanParams(p: any): Record<string, any> | null {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null
   const out: Record<string, any> = {}
-  for (const k of ['machine', 'nozzle', 'pumpRpm', 'cycle', 'pressure', 'width', 'gsm', 'mtrPerKg', 'hotLength', 'stdLoad', 'maxPerBatch', 'reelNeeded']) {
+  for (const k of ['machine', 'nozzle', 'pumpRpm', 'cycle', 'pressure', 'width', 'gsm', 'mtrPerKg', 'hotLength', 'stdLoad', 'minPerBatch', 'maxPerBatch', 'reelNeeded', 'cycleNeeded']) {
     const v = p[k]
     if (typeof v === 'number' && isFinite(v)) out[k] = v
     else if (typeof v === 'string' && v.length <= 60) out[k] = v
@@ -151,8 +151,9 @@ export async function POST(req: NextRequest) {
     // ── Split: ADD new batches to an order (never deletes existing ones) ─────
     // ── Auto Split preview (the Machine calculation sheet) ──────────────────
     // Sizes the batches for the order's Dyeing machine (or its SCQ / first
-    // machine process when there is no dyeing): equal batches, each no more
-    // than the machine's Loading Std Qty or size × 90 %. Nothing is saved —
+    // machine process when there is no dyeing): the fewest equal batches that
+    // each fall between machine size × 60 % and × 80 % (Factory Settings), or
+    // the split closest to that range (lib/loading.ts). Nothing is saved —
     // the page shows the preview and saves with create_splits.
     if (action === 'auto_split_preview') {
       const { order_id } = payload
@@ -187,7 +188,8 @@ export async function POST(req: NextRequest) {
       if (remKg < 0.5) return NextResponse.json({ ok: false, error: `${ctx.order.order_number} is already fully split.` }, { status: 400 })
       const remMtr = Math.max(0, (parseFloat(ctx.order.qty_mtr) || 0) - ctx.allocatedMtr)
       const remTaka = Math.max(0, (parseInt(ctx.order.no_of_taka) || 0) - ctx.allocatedTaka)
-      const kgs = equalBatches(remKg, calc.maxPerBatch!)
+      const kgs = rangeBatches(remKg, calc.minPerBatch, calc.maxPerBatch!)
+      const nz = parseFloat(machine.nozzles) || 0, reel = parseFloat(machine.reel_speed) || 0
       let mtrLeft = remMtr, takaLeft = remTaka
       const batches = kgs.map((kg, i) => {
         const last = i === kgs.length - 1
@@ -196,7 +198,8 @@ export async function POST(req: NextRequest) {
         const taka = last ? takaLeft : Math.floor(remTaka * share)
         mtrLeft -= mtr; takaLeft -= taka
         return { kg, mtr: mtr || null, taka: taka || null,
-          reelNeeded: reelSpeedNeeded(kg, calc.hotLength!, parseFloat(machine.nozzles) || 0, settings) }
+          reelNeeded: reelSpeedNeeded(kg, calc.hotLength!, nz, settings),
+          cycleNeeded: cycleNeeded(kg, calc.hotLength!, nz, reel) }
       })
       const r2 = (x: number | null | undefined, d = 2) => x == null ? null : Math.round(x * 10 ** d) / 10 ** d
       return NextResponse.json({ ok: true,
@@ -206,7 +209,8 @@ export async function POST(req: NextRequest) {
         machine: { id: machine.id, name: machine.name, capacity: parseFloat(machine.capacity) || null, nozzles: parseFloat(machine.nozzles) || null, reel_speed: parseFloat(machine.reel_speed) || null },
         settings,
         calc: { width: calc.width, gsm: calc.gsm, mtrPerKg: r2(calc.mtrPerKg, 3), hotLength: r2(calc.hotLength, 3),
-                stdLoad: r2(calc.stdLoad, 1), sizeLimit: r2(calc.sizeLimit, 1), maxPerBatch: r2(calc.maxPerBatch, 1), basis: calc.basis, note: calc.note || null },
+                stdLoad: r2(calc.stdLoad, 1), sizeMin: r2(calc.sizeMin, 1), sizeLimit: r2(calc.sizeLimit, 1),
+                minPerBatch: r2(calc.minPerBatch, 1), maxPerBatch: r2(calc.maxPerBatch, 1), maxCycle: maxCycleOf(nozzle), basis: calc.basis, note: calc.note || null },
         params: nozzle ? { nozzle: nozzle.nozzle, pumpRpm: nozzle.pumpRpm, cycle: nozzle.cycle, pressure: nozzle.pressure } : null,
         batches })
     }

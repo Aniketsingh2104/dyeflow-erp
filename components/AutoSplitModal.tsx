@@ -1,12 +1,13 @@
 'use client'
 // ⚡ Auto Split — the Machine calculation sheet on the Orders page.
 // The server works out equal batches for the order's Dyeing machine (or its
-// SCQ machine): each no more than the machine's Loading Std Qty or size × 90 %
-// (lib/loading.ts). Every batch can be changed here; a batch heavier than the
-// machine can take turns red. Nothing is saved until "Create batches" — and
+// SCQ machine): the fewest batches that each fall between machine size × 60 %
+// and × 80 % (lib/loading.ts). Every batch can be changed here. Check column:
+// green in the range, amber outside it, red over the machine size or when the
+// load needs a longer cycle than the nozzle table allows (e.g. 2.0 min). Nothing is saved until "Create batches" — and
 // then through the normal split checks (create_splits).
 import { useCallback, useEffect, useState } from 'react'
-import { reelSpeedNeeded } from '@/lib/loading'
+import { reelSpeedNeeded, cycleNeeded } from '@/lib/loading'
 
 interface Row { kg: string; mtr: string; taka: string }
 
@@ -41,9 +42,28 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
   const remaining = data?.order?.remaining_kg ?? 0
   const over = total > remaining + 0.5
   const maxPer = data?.calc?.maxPerBatch ?? Infinity
+  const minPer: number | null = data?.calc?.minPerBatch ?? null
+  const maxCycle: number = data?.calc?.maxCycle ?? 2
   const hot = data?.calc?.hotLength ?? 0
   const nozzles = data?.machine?.nozzles ?? 0
   const reelMax = data?.machine?.reel_speed ?? null
+  const cap: number | null = data?.machine?.capacity ?? null
+
+  // green = in the range · amber = outside it (allowed) · red = over the machine size / cycle too long
+  const check = (kg: number): { level: 'ok' | 'warn' | 'bad'; text: string } => {
+    if (!(kg > 0)) return { level: 'ok', text: '' }
+    const cyc = cycleNeeded(kg, hot, nozzles, reelMax || 0)
+    const parts: string[] = []
+    if (cap) parts.push(`${Math.round(kg / cap * 100)}%`)
+    if (cyc != null) parts.push(`cycle ${cyc.toFixed(2)} min`)
+    const tail = parts.length ? ' · ' + parts.join(' · ') : ''
+    if (cap && kg > cap + 0.5) return { level: 'bad', text: `Over machine size ${cap} Kg${tail}` }
+    if (cyc != null && cyc > maxCycle + 0.005) return { level: 'bad', text: `Too heavy — needs cycle ${cyc.toFixed(2)} min (max ${maxCycle})${cap ? ` · ${Math.round(kg / cap * 100)}%` : ''}` }
+    if (!cap && kg > maxPer + 0.5) return { level: 'bad', text: `Too heavy — max ${maxPer} Kg${tail}` }
+    if (minPer != null && kg < minPer - 0.5) return { level: 'warn', text: `Under ${data.settings.minLoadPct}%${tail}` }
+    if (minPer != null && kg > maxPer + 0.5) return { level: 'warn', text: `Over ${data.settings.maxLoadPct}%${tail}` }
+    return { level: 'ok', text: `OK${tail}` }
+  }
 
   const setRow = (i: number, k: keyof Row, v: string) => setRows(prev => prev.map((r, j) => j === i ? { ...r, [k]: v } : r))
   const addRow = () => setRows(prev => [...prev, { kg: '', mtr: '', taka: '' }])
@@ -66,8 +86,9 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
             process_params: {
               machine: data.machine.name, ...params,
               width: data.calc.width, gsm: data.calc.gsm, mtrPerKg: data.calc.mtrPerKg, hotLength: data.calc.hotLength,
-              stdLoad: data.calc.stdLoad ?? undefined, maxPerBatch: data.calc.maxPerBatch,
+              stdLoad: data.calc.stdLoad ?? undefined, minPerBatch: data.calc.minPerBatch ?? undefined, maxPerBatch: data.calc.maxPerBatch,
               reelNeeded: (() => { const x = reelSpeedNeeded(num(r.kg), hot, nozzles, data.settings); return x == null ? undefined : Math.round(x) })(),
+              cycleNeeded: (() => { const x = cycleNeeded(num(r.kg), hot, nozzles, reelMax || 0); return x == null ? undefined : Math.round(x * 100) / 100 })(),
             },
           })) }) })
         .then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
@@ -112,9 +133,10 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
                 {data.machine.capacity ? `${data.machine.capacity} Kg` : 'no size'} · {data.machine.nozzles ?? '?'} nozzle(s) · {data.machine.reel_speed ?? '?'} m/min
               </div>
             </div>
-            <Info label="Loading Std Qty" value={data.calc.stdLoad != null ? `${data.calc.stdLoad} Kg` : '—'} sub={`cycle ${data.settings.cycleTimeMin} min`} />
-            <Info label={`Size × ${data.settings.maxLoadPct}%`} value={data.calc.sizeLimit != null ? `${data.calc.sizeLimit} Kg` : '—'} />
-            <Info label="Max per batch" value={`${data.calc.maxPerBatch} Kg`} strong />
+            <Info label="Loading Std Qty" value={data.calc.stdLoad != null ? `${data.calc.stdLoad} Kg` : '—'} sub={`info only · at cycle ${data.settings.cycleTimeMin} min`} />
+            <Info label="Batch range" strong
+              value={data.calc.minPerBatch != null ? `${data.calc.minPerBatch} – ${data.calc.maxPerBatch} Kg` : `up to ${data.calc.maxPerBatch} Kg`}
+              sub={data.calc.minPerBatch != null ? `${data.settings.minLoadPct}–${data.settings.maxLoadPct}% of ${data.machine.capacity} Kg` : 'by reel speed (no machine size)'} />
             {data.params && <Info label="Nozzle · Pump · Pressure" value={`${data.params.nozzle} · ${data.params.pumpRpm} rpm · ${data.params.pressure}`} sub={`cycle ${data.params.cycle} min`} />}
           </div>
           {data.calc.note && (
@@ -133,19 +155,15 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const kg = num(r.kg)
-                const need = reelSpeedNeeded(kg, hot, nozzles, data.settings)
-                const heavy = kg > maxPer + 0.5
+                const c = check(num(r.kg))
                 return (
-                  <tr key={i} style={{ background: heavy ? 'var(--danger-light)' : undefined }}>
+                  <tr key={i} style={{ background: c.level === 'bad' ? 'var(--danger-light)' : c.level === 'warn' ? '#FEF3C7' : undefined }}>
                     <td style={cell}>B{i + 1}</td>
                     <td style={cell}><input type="number" value={r.kg} onChange={e => setRow(i, 'kg', e.target.value)} style={inp} /></td>
                     <td style={cell}><input type="number" value={r.mtr} onChange={e => setRow(i, 'mtr', e.target.value)} style={inp} /></td>
                     <td style={cell}><input type="number" value={r.taka} onChange={e => setRow(i, 'taka', e.target.value)} style={{ ...inp, width: 70 }} /></td>
-                    <td style={{ ...cell, color: heavy ? 'var(--danger)' : 'var(--success)', fontWeight: 600 }}>
-                      {heavy
-                        ? (need != null && reelMax ? `Too heavy — needs ${Math.round(need)} m/min, machine max ${reelMax}` : `Too heavy — max ${maxPer} Kg`)
-                        : (need != null ? `OK · ${Math.round(need)} m/min` : 'OK')}
+                    <td style={{ ...cell, color: c.level === 'bad' ? 'var(--danger)' : c.level === 'warn' ? '#92400E' : 'var(--success)', fontWeight: 600 }}>
+                      {c.text}
                     </td>
                     <td style={cell}>{rows.length > 1 && <button className="xs danger" onClick={() => removeRow(i)}>✕</button>}</td>
                   </tr>

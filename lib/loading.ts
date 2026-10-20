@@ -1,20 +1,25 @@
 // Machine loading — the "Machine calculation sheet" in code.
 //   Mtr/Kg          = 39370 ÷ Width(") ÷ GSM
 //   Hot length      = Mtr/Kg × (1 + elongation %)          (elongation 14 %, Factory Settings)
-//   Loading Std Qty = cycle time × reel speed × nozzles ÷ hot length   (cycle 1.7 min)
-//   Max per batch   = the lower of Loading Std Qty and machine size × max load % (90 %)
-//   Reel speed needed for a load = (load ÷ nozzles) × hot length ÷ cycle time
-// Example: 58", 165 GSM, LJET-30 (280 m/min, 2 nozzles, 500 kg) → 4.11 m/kg,
-// hot 4.69, std 203 kg, size limit 450 → 203 kg per batch.
+//   Batch range     = machine size × min load % … size × max load %   (60 % … 80 %, Factory Settings)
+//   Batches         = the fewest equal batches that each fall in the range; when no
+//                     equal split fits, the split closest to the range (ties → fewer batches)
+//   Loading Std Qty = cycle time × reel speed × nozzles ÷ hot length   (information only —
+//                     used for the range only when the machine has no size)
+//   Cycle needed    = (load ÷ nozzles) × hot length ÷ reel speed   (red above the nozzle table's
+//                     upper cycle, e.g. 2.0 of "1.5-2.0")
+// Example: 405 Kg on a 250 Kg machine → range 150–200 Kg → 2 batches 202 + 203
+// (3 × 135 would be 15 Kg under the range, 2 × 202.5 only 2.5 Kg over).
 
-export interface LoadingSettings { elongationPct: number; cycleTimeMin: number; maxLoadPct: number }
-export const DEFAULT_LOADING: LoadingSettings = { elongationPct: 14, cycleTimeMin: 1.7, maxLoadPct: 90 }
+export interface LoadingSettings { elongationPct: number; cycleTimeMin: number; minLoadPct: number; maxLoadPct: number }
+export const DEFAULT_LOADING: LoadingSettings = { elongationPct: 14, cycleTimeMin: 1.7, minLoadPct: 60, maxLoadPct: 80 }
 
 export function loadingSettingsFrom(factory: any): LoadingSettings {
   const num = (v: any, d: number) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : d }
   return {
     elongationPct: num(factory?.elongationPct, DEFAULT_LOADING.elongationPct),
     cycleTimeMin:  num(factory?.cycleTimeMin,  DEFAULT_LOADING.cycleTimeMin),
+    minLoadPct:    num(factory?.minLoadPct,    DEFAULT_LOADING.minLoadPct),
     maxLoadPct:    num(factory?.maxLoadPct,    DEFAULT_LOADING.maxLoadPct),
   }
 }
@@ -50,10 +55,12 @@ export interface LoadingResult {
   error?: string
   width?: number; gsm?: number
   mtrPerKg?: number; hotLength?: number
-  stdLoad?: number | null          // by reel speed × nozzles (null: machine has no reel speed / nozzles)
+  stdLoad?: number | null          // by reel speed × nozzles — information (null: machine has no reel speed / nozzles)
+  sizeMin?: number | null          // machine size × min load %
   sizeLimit?: number | null        // machine size × max load %
-  maxPerBatch?: number
-  basis?: 'reel' | 'size' | 'both'
+  minPerBatch?: number | null      // bottom of the batch range (null: machine has no size)
+  maxPerBatch?: number             // top of the batch range
+  basis?: 'size' | 'reel'
   note?: string
   nozzle?: NozzleRow | null
 }
@@ -70,13 +77,29 @@ export function machineLoading(widthRaw: any, gsmRaw: any, m: MachineLoadData, s
   if (stdLoad === null && sizeLimit === null) {
     return { ok: false, error: `${m.name} has no size and no reel speed / nozzles — fill them in Setup → Machine Master.` }
   }
-  const maxPerBatch = Math.min(...[stdLoad, sizeLimit].filter((x): x is number => x !== null))
-  const basis = stdLoad !== null && sizeLimit !== null ? (stdLoad <= sizeLimit ? 'reel' : 'size') : stdLoad !== null ? 'reel' : 'size'
+  // the machine size decides; the reel speed decides only when there is no size
+  const sizeMin = size > 0 ? size * s.minLoadPct / 100 : null
+  const maxPerBatch = sizeLimit ?? (stdLoad as number)
+  const minPerBatch = sizeMin
+  const basis = sizeLimit !== null ? 'size' : 'reel'
   return {
-    ok: true, width, gsm, mtrPerKg, hotLength, stdLoad, sizeLimit, maxPerBatch, basis,
-    note: stdLoad === null ? 'no reel speed / nozzles — machine size only' : sizeLimit === null ? 'no machine size — reel speed only' : undefined,
+    ok: true, width, gsm, mtrPerKg, hotLength, stdLoad, sizeMin, sizeLimit, minPerBatch, maxPerBatch, basis,
+    note: sizeLimit === null ? 'no machine size — the batch limit is the reel speed only' : stdLoad === null ? 'no reel speed / nozzles — the cycle time can\'t be checked' : undefined,
     nozzle: nozzleFor(gsm),
   }
+}
+
+/** Upper cycle time of the nozzle row ("1.5-2.0" → 2.0); 2.0 when unknown */
+export function maxCycleOf(row: NozzleRow | null | undefined): number {
+  const nums = String(row?.cycle ?? '').match(/\d+(\.\d+)?/g)
+  const n = nums ? Math.max(...nums.map(Number)) : NaN
+  return isFinite(n) && n > 0 ? n : 2
+}
+
+/** cycle time (min) a load needs on this machine at its full reel speed */
+export function cycleNeeded(kg: number, hotLength: number, nozzles: number, reelSpeed: number): number | null {
+  if (!(nozzles > 0) || !(hotLength > 0) || !(reelSpeed > 0) || !(kg > 0)) return null
+  return (kg / nozzles) * hotLength / reelSpeed
 }
 
 /** reel speed (m/min) a load needs on this machine */
@@ -85,13 +108,35 @@ export function reelSpeedNeeded(kg: number, hotLength: number, nozzles: number, 
   return (kg / nozzles) * hotLength / s.cycleTimeMin
 }
 
-/** Equal batches, whole kg, the last one takes the remainder.
- *  650 kg, max 203 → 4 batches: 162, 162, 162, 164 */
-export function equalBatches(totalKg: number, maxPerBatch: number): number[] {
-  if (!(totalKg > 0) || !(maxPerBatch > 0)) return []
-  const n = Math.max(1, Math.ceil(totalKg / maxPerBatch - 1e-9))
+/** n equal batches, whole kg, the last one takes the remainder.  650 kg, 4 → 162, 162, 162, 164 */
+export function splitInto(totalKg: number, n: number): number[] {
+  if (!(totalKg > 0) || !(n >= 1)) return []
   const each = Math.floor(totalKg / n)
   const out = Array(n).fill(each)
   out[n - 1] = Math.round((totalKg - each * (n - 1)) * 100) / 100
   return out
+}
+
+/** Equal batches no heavier than maxPerBatch (no range).  650 kg, max 203 → 162, 162, 162, 164 */
+export function equalBatches(totalKg: number, maxPerBatch: number): number[] {
+  if (!(totalKg > 0) || !(maxPerBatch > 0)) return []
+  return splitInto(totalKg, Math.max(1, Math.ceil(totalKg / maxPerBatch - 1e-9)))
+}
+
+/** The fewest equal batches that each fall in min…max; when none fits, the
+ *  number of batches whose size is closest to the range (a tie → fewer batches).
+ *  405 kg, 150–200 → 2 (202, 203);  600 → 3 × 200;  650 → 4 (162…164);  120 → 1 × 120 */
+export function rangeBatches(totalKg: number, minPerBatch: number | null | undefined, maxPerBatch: number): number[] {
+  if (!(totalKg > 0) || !(maxPerBatch > 0)) return []
+  const min = minPerBatch && minPerBatch > 0 && minPerBatch <= maxPerBatch ? minPerBatch : 0
+  if (!min) return equalBatches(totalKg, maxPerBatch)
+  let best = 1, bestGap = Infinity
+  const upTo = Math.min(500, Math.ceil(totalKg / min) + 1)
+  for (let n = 1; n <= upTo; n++) {
+    const each = totalKg / n
+    const gap = each > maxPerBatch ? each - maxPerBatch : each < min ? min - each : 0
+    if (gap < bestGap - 1e-9) { best = n; bestGap = gap }
+    if (gap === 0) break
+  }
+  return splitInto(totalKg, best)
 }
