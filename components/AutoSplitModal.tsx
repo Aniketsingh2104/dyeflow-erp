@@ -1,16 +1,20 @@
 'use client'
 // ⚡ Auto Split — the Machine calculation sheet on the Orders page.
-// The server works out equal batches for the order's Dyeing machine (or its
-// SCQ machine): the fewest batches that each fall between machine size × 60 %
-// and × 80 % (lib/loading.ts). Every batch can be changed here. Check column:
-// green in the range, amber outside it, red over the machine size or when the
-// load needs a longer cycle than the nozzle table allows (e.g. 2.0 min). Nothing is saved until "Create batches" — and
-// then through the normal split checks (create_splits).
+// The server works out the batches for the order's Dyeing machine(s) (or its
+// SCQ machine): equal batches between machine size × 60 % and × 80 %; when the
+// supervisor picked several machines the largest is filled at 80 % first and
+// the rest goes to the next one (lib/loading.ts). Every batch's Kg and machine
+// can be changed here. Check column: green in the range, amber outside it,
+// red over the machine size or when the load needs a longer cycle than the
+// nozzle table allows (e.g. 2.0 min). Nothing is saved until "Create batches"
+// — and then through the normal split checks (create_splits).
 import { useCallback, useEffect, useState } from 'react'
 import { reelSpeedNeeded, cycleNeeded } from '@/lib/loading'
 import { cleanSubProd, subProdFromRemarks } from '@/lib/subProd'
 
-interface Row { kg: string; mtr: string; taka: string; sub: string }
+interface Row { kg: string; mtr: string; taka: string; sub: string; machineId: string }
+interface Mach { id: string; name: string; capacity: number | null; nozzles: number | null; reel_speed: number | null; ok: boolean; error: string | null
+  stdLoad: number | null; minPerBatch: number | null; maxPerBatch: number | null; note: string | null }
 
 export default function AutoSplitModal({ order, onClose, onSaved }: {
   order: { id: string; order_number?: string }
@@ -20,22 +24,20 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState('')
   const [rows, setRows] = useState<Row[]>([])
-  const [machineId, setMachineId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const load = useCallback(async (mid?: string) => {
+  const load = useCallback(async () => {
     setLoading(true); setError('')
     const j = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'auto_split_preview', order_id: order.id, ...(mid ? { machine_id: mid } : {}) }) })
+      body: JSON.stringify({ action: 'auto_split_preview', order_id: order.id }) })
       .then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
     setLoading(false)
     if (!j.ok) { setError(j.error || 'Could not work out the batches'); setData(null); return }
     setData(j)
-    setMachineId(j.machine.id)
-    // an imported order's "Sub Prod: P-xxxx-A" goes into batch 1 of its first split; a machine change keeps what was typed
-    setRows(prev => j.batches.map((b: any, i: number) => ({ kg: String(b.kg), mtr: b.mtr != null ? String(b.mtr) : '', taka: b.taka != null ? String(b.taka) : '',
-      sub: prev[i]?.sub ?? (i === 0 && !(j.order.allocated_kg > 0) ? (subProdFromRemarks(j.order.remarks) || '') : '') })))
+    // an imported order's "Sub Prod: P-xxxx-A" goes into batch 1 of its first split
+    setRows(j.batches.map((b: any, i: number) => ({ kg: String(b.kg), mtr: b.mtr != null ? String(b.mtr) : '', taka: b.taka != null ? String(b.taka) : '',
+      machineId: b.machine_id, sub: i === 0 && !(j.order.allocated_kg > 0) ? (subProdFromRemarks(j.order.remarks) || '') : '' })))
   }, [order.id])
 
   useEffect(() => { load() }, [load])
@@ -44,32 +46,30 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
   const total = rows.reduce((t, r) => t + num(r.kg), 0)
   const remaining = data?.order?.remaining_kg ?? 0
   const over = total > remaining + 0.5
-  const maxPer = data?.calc?.maxPerBatch ?? Infinity
-  const minPer: number | null = data?.calc?.minPerBatch ?? null
   const maxCycle: number = data?.calc?.maxCycle ?? 2
   const hot = data?.calc?.hotLength ?? 0
-  const nozzles = data?.machine?.nozzles ?? 0
-  const reelMax = data?.machine?.reel_speed ?? null
-  const cap: number | null = data?.machine?.capacity ?? null
+  const machines: Mach[] = data?.machines || []
+  const machOf = (id: string): Mach | undefined => machines.find(m => m.id === id) || machines.find(m => m.ok)
 
   // green = in the range · amber = outside it (allowed) · red = over the machine size / cycle too long
-  const check = (kg: number): { level: 'ok' | 'warn' | 'bad'; text: string } => {
-    if (!(kg > 0)) return { level: 'ok', text: '' }
-    const cyc = cycleNeeded(kg, hot, nozzles, reelMax || 0)
+  const check = (kg: number, m?: Mach): { level: 'ok' | 'warn' | 'bad'; text: string } => {
+    if (!(kg > 0) || !m) return { level: 'ok', text: '' }
+    if (!m.ok) return { level: 'warn', text: m.error || 'no machine data' }
+    const cap = m.capacity, cyc = cycleNeeded(kg, hot, m.nozzles || 0, m.reel_speed || 0)
     const parts: string[] = []
     if (cap) parts.push(`${Math.round(kg / cap * 100)}%`)
     if (cyc != null) parts.push(`cycle ${cyc.toFixed(2)} min`)
     const tail = parts.length ? ' · ' + parts.join(' · ') : ''
     if (cap && kg > cap + 0.5) return { level: 'bad', text: `Over machine size ${cap} Kg${tail}` }
     if (cyc != null && cyc > maxCycle + 0.005) return { level: 'bad', text: `Too heavy — needs cycle ${cyc.toFixed(2)} min (max ${maxCycle})${cap ? ` · ${Math.round(kg / cap * 100)}%` : ''}` }
-    if (!cap && kg > maxPer + 0.5) return { level: 'bad', text: `Too heavy — max ${maxPer} Kg${tail}` }
-    if (minPer != null && kg < minPer - 0.5) return { level: 'warn', text: `Under ${data.settings.minLoadPct}%${tail}` }
-    if (minPer != null && kg > maxPer + 0.5) return { level: 'warn', text: `Over ${data.settings.maxLoadPct}%${tail}` }
+    if (!cap && m.maxPerBatch != null && kg > m.maxPerBatch + 0.5) return { level: 'bad', text: `Too heavy — max ${m.maxPerBatch} Kg${tail}` }
+    if (m.minPerBatch != null && kg < m.minPerBatch - 0.5) return { level: 'warn', text: `Under ${data.settings.minLoadPct}%${tail}` }
+    if (m.maxPerBatch != null && kg > m.maxPerBatch + 0.5) return { level: 'warn', text: `Over ${data.settings.maxLoadPct}%${tail}` }
     return { level: 'ok', text: `OK${tail}` }
   }
 
   const setRow = (i: number, k: keyof Row, v: string) => setRows(prev => prev.map((r, j) => j === i ? { ...r, [k]: v } : r))
-  const addRow = () => setRows(prev => [...prev, { kg: '', mtr: '', taka: '', sub: '' }])
+  const addRow = () => setRows(prev => [...prev, { kg: '', mtr: '', taka: '', sub: '', machineId: prev[prev.length - 1]?.machineId || machines[0]?.id || '' }])
   const removeRow = (i: number) => setRows(prev => prev.filter((_, j) => j !== i))
 
   const save = async () => {
@@ -82,36 +82,43 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
       const params = data.params || {}
       const send = (allowDuplicate: boolean) => fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'create_splits', order_id: order.id, ...(allowDuplicate ? { allow_duplicate: true } : {}),
-          batches: list.map(r => ({
-            kg: num(r.kg), mtr: num(r.mtr) || null, taka: parseInt(r.taka) || null,
-            sub_prod_no: cleanSubProd(r.sub),
-            machine_id: data.machine.id,
-            process_machine_map: { [data.process]: data.machine.id },
-            process_params: {
-              machine: data.machine.name, ...params,
-              width: data.calc.width, gsm: data.calc.gsm, mtrPerKg: data.calc.mtrPerKg, hotLength: data.calc.hotLength,
-              stdLoad: data.calc.stdLoad ?? undefined, minPerBatch: data.calc.minPerBatch ?? undefined, maxPerBatch: data.calc.maxPerBatch,
-              reelNeeded: (() => { const x = reelSpeedNeeded(num(r.kg), hot, nozzles, data.settings); return x == null ? undefined : Math.round(x) })(),
-              cycleNeeded: (() => { const x = cycleNeeded(num(r.kg), hot, nozzles, reelMax || 0); return x == null ? undefined : Math.round(x * 100) / 100 })(),
-            },
-          })) }) })
+          batches: list.map(r => {
+            const m = machOf(r.machineId)!
+            const kg = num(r.kg)
+            const rn = reelSpeedNeeded(kg, hot, m.nozzles || 0, data.settings), cn = cycleNeeded(kg, hot, m.nozzles || 0, m.reel_speed || 0)
+            return {
+              kg, mtr: num(r.mtr) || null, taka: parseInt(r.taka) || null,
+              sub_prod_no: cleanSubProd(r.sub),
+              machine_id: m.id,
+              process_machine_map: { [data.process]: m.id },
+              process_params: {
+                machine: m.name, ...params,
+                width: data.calc.width, gsm: data.calc.gsm, mtrPerKg: data.calc.mtrPerKg, hotLength: data.calc.hotLength,
+                stdLoad: m.stdLoad ?? undefined, minPerBatch: m.minPerBatch ?? undefined, maxPerBatch: m.maxPerBatch ?? undefined,
+                reelNeeded: rn == null ? undefined : Math.round(rn),
+                cycleNeeded: cn == null ? undefined : Math.round(cn * 100) / 100,
+              },
+            }
+          }) }) })
         .then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
       let res = await send(false)
       if (!res.ok && res.duplicate) {
         if (!confirm(`Sub Prod No. already used:\n${res.error}\n\nSave anyway?`)) return
         res = await send(true)
       }
-      if (!res.ok) { alert('Not split: ' + (res.error || 'Unknown error')); if (res.stale) load(machineId); return }
-      onSaved(`✓ ${data.order.order_number}: ${res.data?.length || list.length} batch(es) created on ${data.machine.name}`)
+      if (!res.ok) { alert('Not split: ' + (res.error || 'Unknown error')); if (res.stale) load(); return }
+      const names = [...new Set(list.map(r => machOf(r.machineId)?.name).filter(Boolean))]
+      onSaved(`✓ ${data.order.order_number}: ${res.data?.length || list.length} batch(es) created on ${names.join(' + ')}`)
     } finally { setSaving(false) }
   }
 
   const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border-light)', fontSize: 12 }
   const inp: React.CSSProperties = { width: 90, padding: '4px 6px', fontSize: 12 }
+  const multi = machines.length > 1
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 820 }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ maxWidth: 920 }} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <span className="modal-title">⚡ Auto Split — {data?.order?.order_number || order.order_number || ''}</span>
           <button className="small" onClick={onClose}>✕</button>
@@ -129,30 +136,31 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
             <Info label="Order" value={`${data.order.qty_kg} Kg · ${data.order.remaining_kg} Kg left`} />
             <Info label="Width × GSM" value={`${data.calc.width}" × ${data.calc.gsm}`} sub={`order: ${data.order.width || '-'} / ${data.order.gsm || '-'}`} />
             <Info label="Mtr / Kg → Hot length" value={`${data.calc.mtrPerKg} → ${data.calc.hotLength}`} sub={`elongation ${data.settings.elongationPct}%`} />
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 10px' }}>
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                Machine ({data.process === 'D' ? 'Dyeing' : data.process})
-              </div>
-              {data.machines.length > 1 ? (
-                <select value={machineId} onChange={e => load(e.target.value)} style={{ fontSize: 12, marginTop: 2, width: '100%' }}>
-                  {data.machines.map((m: any, i: number) => <option key={m.id} value={m.id}>{`Machine ${i + 1}: ${m.name}`}</option>)}
-                </select>
-              ) : <div style={{ fontWeight: 700 }}>{data.machine.name}</div>}
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                {data.machine.capacity ? `${data.machine.capacity} Kg` : 'no size'} · {data.machine.nozzles ?? '?'} nozzle(s) · {data.machine.reel_speed ?? '?'} m/min
-              </div>
-            </div>
-            <Info label="Loading Std Qty" value={data.calc.stdLoad != null ? `${data.calc.stdLoad} Kg` : '—'} sub={`info only · at cycle ${data.settings.cycleTimeMin} min`} />
-            <Info label="Batch range" strong
-              value={data.calc.minPerBatch != null ? `${data.calc.minPerBatch} – ${data.calc.maxPerBatch} Kg` : `up to ${data.calc.maxPerBatch} Kg`}
-              sub={data.calc.minPerBatch != null ? `${data.settings.minLoadPct}–${data.settings.maxLoadPct}% of ${data.machine.capacity} Kg` : 'by reel speed (no machine size)'} />
             {data.params && <Info label="Nozzle · Pump · Pressure" value={`${data.params.nozzle} · ${data.params.pumpRpm} rpm · ${data.params.pressure}`} sub={`cycle ${data.params.cycle} min`} />}
           </div>
-          {data.calc.note && (
-            <div style={{ fontSize: 12, color: '#92400E', background: '#FEF3C7', padding: '6px 10px', borderRadius: 6, marginBottom: 10 }}>
-              ⚠ {data.machine.name}: {data.calc.note}. Fill it in Setup → Machine Master for an exact load.
+
+          {/* the machine(s) the supervisor picked for this process, with their batch range */}
+          <div style={{ background: 'var(--accent-light)', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 }}>
+              Machine{multi ? 's' : ''} ({data.process === 'D' ? 'Dyeing' : data.process}) · batch range {data.settings.minLoadPct}–{data.settings.maxLoadPct}% of size
+              {multi && <span style={{ fontWeight: 500, textTransform: 'none' }}> — the largest is filled at {data.settings.maxLoadPct}% first, the rest goes to the next</span>}
             </div>
-          )}
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12 }}>
+              {machines.map(m => (
+                <div key={m.id}>
+                  <strong>{m.name}</strong>{' '}
+                  {m.ok
+                    ? <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{m.minPerBatch != null ? `${m.minPerBatch} – ${m.maxPerBatch} Kg` : `up to ${m.maxPerBatch} Kg`}</span>
+                    : <span style={{ color: 'var(--danger)' }}>not used</span>}
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                    {m.capacity ? `${m.capacity} Kg` : 'no size'} · {m.nozzles ?? '?'} nozzle(s) · {m.reel_speed ?? '?'} m/min
+                    {m.stdLoad != null ? ` · std ${m.stdLoad} Kg (info)` : ''}
+                    {(m.note || m.error) ? ` · ⚠ ${m.note || m.error}` : ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
             <thead>
@@ -160,12 +168,14 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
                 <th style={{ ...cell, textAlign: 'left' }}>Batch</th><th style={{ ...cell, textAlign: 'left' }}>Kg</th>
                 <th style={{ ...cell, textAlign: 'left' }}>Mtr</th><th style={{ ...cell, textAlign: 'left' }}>Taka</th>
                 <th style={{ ...cell, textAlign: 'left' }}>Sub Prod No.</th>
+                <th style={{ ...cell, textAlign: 'left' }}>Machine</th>
                 <th style={{ ...cell, textAlign: 'left' }}>Check</th><th style={cell}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const c = check(num(r.kg))
+                const m = machOf(r.machineId)
+                const c = check(num(r.kg), m)
                 return (
                   <tr key={i} style={{ background: c.level === 'bad' ? 'var(--danger-light)' : c.level === 'warn' ? '#FEF3C7' : undefined }}>
                     <td style={cell}>B{i + 1}</td>
@@ -173,6 +183,13 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
                     <td style={cell}><input type="number" value={r.mtr} onChange={e => setRow(i, 'mtr', e.target.value)} style={inp} /></td>
                     <td style={cell}><input type="number" value={r.taka} onChange={e => setRow(i, 'taka', e.target.value)} style={{ ...inp, width: 70 }} /></td>
                     <td style={cell}><input type="text" value={r.sub} maxLength={30} placeholder="P-5201-A" onChange={e => setRow(i, 'sub', e.target.value.toUpperCase())} style={{ ...inp, width: 100 }} /></td>
+                    <td style={cell}>
+                      {multi ? (
+                        <select value={m?.id || ''} onChange={e => setRow(i, 'machineId', e.target.value)} style={{ fontSize: 12, padding: '3px 4px', maxWidth: 170 }}>
+                          {machines.map(x => <option key={x.id} value={x.id} disabled={!x.ok}>{x.name}</option>)}
+                        </select>
+                      ) : <span style={{ fontWeight: 600 }}>{m?.name || '—'}</span>}
+                    </td>
                     <td style={{ ...cell, color: c.level === 'bad' ? 'var(--danger)' : c.level === 'warn' ? '#92400E' : 'var(--success)', fontWeight: 600 }}>
                       {c.text}
                     </td>
@@ -198,11 +215,11 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
   )
 }
 
-function Info({ label, value, sub, strong }: { label: string; value: string; sub?: string; strong?: boolean }) {
+function Info({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div style={{ background: strong ? 'var(--accent-light)' : 'var(--bg-secondary)', borderRadius: 8, padding: '8px 10px' }}>
+    <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 10px' }}>
       <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 700 }}>{label}</div>
-      <div style={{ fontWeight: 700, color: strong ? 'var(--accent)' : 'var(--text-primary)' }}>{value}</div>
+      <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{sub}</div>}
     </div>
   )

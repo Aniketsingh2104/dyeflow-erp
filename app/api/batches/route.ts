@@ -8,7 +8,7 @@ import { loadHolidaySet } from '@/lib/holidays'
 import { plannedDateForNumber } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
 import { cleanSubProd } from '@/lib/subProd'
-import { machineLoading, rangeBatches, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
+import { machineLoading, planAcrossMachines, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
 
 // Columns the generic "update" action may change (machine sheet numbering,
 // Date Calculator, supervisor pages). Where a batch IS (process / status /
@@ -178,7 +178,8 @@ export async function POST(req: NextRequest) {
     // Sizes the batches for the order's Dyeing machine (or its SCQ / first
     // machine process when there is no dyeing): the fewest equal batches that
     // each fall between machine size × 60 % and × 80 % (Factory Settings), or
-    // the split closest to that range (lib/loading.ts). Nothing is saved —
+    // the split closest to that range; with several machines picked, the
+    // largest is filled first (lib/loading.ts). Nothing is saved —
     // the page shows the preview and saves with create_splits.
     if (action === 'auto_split_preview') {
       const { order_id } = payload
@@ -196,16 +197,23 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: `${ctx.order.order_number}: no Dyeing / SCQ machine is set — confirm the route with machines on the Supervisor page first.` }, { status: 400 })
       }
       const options = pm[code]
-      const machineId = payload.machine_id && options.includes(payload.machine_id) ? payload.machine_id : options[0]
       const { data: mRows } = await dbSelect('machines', { id: `in.(${options.join(',')})` }, 'id,name,capacity,nozzles,reel_speed')
-      const machine = (mRows || []).find((m: any) => m.id === machineId)
-      if (!machine) return NextResponse.json({ ok: false, error: 'The machine set on this order was not found' }, { status: 400 })
+      const picked = options.map(id => (mRows || []).find((m: any) => m.id === id)).filter(Boolean)
+      if (!picked.length) return NextResponse.json({ ok: false, error: 'The machine set on this order was not found' }, { status: 400 })
       const { data: setRows } = await dbSelect('settings', { key: 'in.(factory,nozzleTable)' }, 'key,value')
       const factory = (setRows || []).find((r: any) => r.key === 'factory')?.value || {}
       const table = (setRows || []).find((r: any) => r.key === 'nozzleTable')?.value
       const settings = loadingSettingsFrom(factory)
-      const calc = machineLoading(width, gsm, machine, settings)
-      if (!calc.ok) return NextResponse.json({ ok: false, error: calc.error }, { status: 400 })
+      const r2 = (x: number | null | undefined, d = 2) => x == null ? null : Math.round(x * 10 ** d) / 10 ** d
+
+      // every picked machine with its batch range; the ones with no usable data are listed with a note
+      const mach = picked.map((m: any) => {
+        const calc = machineLoading(width, gsm, m, settings)
+        return { m, calc, capacity: parseFloat(m.capacity) || null, nozzles: parseFloat(m.nozzles) || 0, reel: parseFloat(m.reel_speed) || 0 }
+      })
+      const usable = mach.filter(x => x.calc.ok)
+      if (!usable.length) return NextResponse.json({ ok: false, error: mach[0].calc.error }, { status: 400 })
+      const calc = usable[0].calc
       const nozzle = Array.isArray(table) ? nozzleFor(calc.gsm!, table as NozzleRow[]) : calc.nozzle
 
       const qtyKg = parseFloat(ctx.order.qty_kg) || 0
@@ -213,29 +221,39 @@ export async function POST(req: NextRequest) {
       if (remKg < 0.5) return NextResponse.json({ ok: false, error: `${ctx.order.order_number} is already fully split.` }, { status: 400 })
       const remMtr = Math.max(0, (parseFloat(ctx.order.qty_mtr) || 0) - ctx.allocatedMtr)
       const remTaka = Math.max(0, (parseInt(ctx.order.no_of_taka) || 0) - ctx.allocatedTaka)
-      const kgs = rangeBatches(remKg, calc.minPerBatch, calc.maxPerBatch!)
-      const nz = parseFloat(machine.nozzles) || 0, reel = parseFloat(machine.reel_speed) || 0
+
+      // Several machines: the largest is filled at its max first, the rest goes
+      // to the next (lib/loading.ts planAcrossMachines). One machine: equal
+      // batches in its range. ?machine_id=… → that one machine only.
+      const only = payload.machine_id ? usable.filter(x => x.m.id === payload.machine_id) : []
+      const order_ = (only.length ? only : usable).slice().sort((a, b) => (b.calc.maxPerBatch || 0) - (a.calc.maxPerBatch || 0))
+      const planned = planAcrossMachines(remKg, order_.map(x => ({ min: x.calc.minPerBatch ?? null, max: x.calc.maxPerBatch! })))
       let mtrLeft = remMtr, takaLeft = remTaka
-      const batches = kgs.map((kg, i) => {
-        const last = i === kgs.length - 1
-        const share = remKg > 0 ? kg / remKg : 0
+      const batches = planned.map((b, i) => {
+        const x = order_[b.machine]
+        const last = i === planned.length - 1
+        const share = remKg > 0 ? b.kg / remKg : 0
         const mtr = last ? Math.round(mtrLeft * 10) / 10 : Math.round(remMtr * share * 10) / 10
         const taka = last ? takaLeft : Math.floor(remTaka * share)
         mtrLeft -= mtr; takaLeft -= taka
-        return { kg, mtr: mtr || null, taka: taka || null,
-          reelNeeded: reelSpeedNeeded(kg, calc.hotLength!, nz, settings),
-          cycleNeeded: cycleNeeded(kg, calc.hotLength!, nz, reel) }
+        return { kg: b.kg, mtr: mtr || null, taka: taka || null, machine_id: x.m.id,
+          reelNeeded: reelSpeedNeeded(b.kg, calc.hotLength!, x.nozzles, settings),
+          cycleNeeded: cycleNeeded(b.kg, calc.hotLength!, x.nozzles, x.reel) }
       })
-      const r2 = (x: number | null | undefined, d = 2) => x == null ? null : Math.round(x * 10 ** d) / 10 ** d
+      const machineOut = (x: typeof mach[number]) => ({
+        id: x.m.id, name: x.m.name, capacity: x.capacity, nozzles: x.nozzles || null, reel_speed: x.reel || null,
+        ok: x.calc.ok, error: x.calc.ok ? null : x.calc.error,
+        stdLoad: r2(x.calc.stdLoad, 1), sizeMin: r2(x.calc.sizeMin, 1), sizeLimit: r2(x.calc.sizeLimit, 1),
+        minPerBatch: r2(x.calc.minPerBatch, 1), maxPerBatch: r2(x.calc.maxPerBatch, 1), note: x.calc.note || null,
+      })
       return NextResponse.json({ ok: true,
         order: { id: order_id, order_number: ctx.order.order_number, qty_kg: qtyKg, allocated_kg: r2(ctx.allocatedKg), remaining_kg: remKg, width, gsm, remarks: oRows?.[0]?.remarks || null },
         process: code,
-        machines: (mRows || []).map((m: any) => ({ id: m.id, name: m.name })).sort((a: any, b: any) => options.indexOf(a.id) - options.indexOf(b.id)),
-        machine: { id: machine.id, name: machine.name, capacity: parseFloat(machine.capacity) || null, nozzles: parseFloat(machine.nozzles) || null, reel_speed: parseFloat(machine.reel_speed) || null },
+        machines: mach.map(machineOut),            // in the order the supervisor picked them
+        machine: machineOut(order_[0]),             // the largest usable one (first in the plan)
         settings,
-        calc: { width: calc.width, gsm: calc.gsm, mtrPerKg: r2(calc.mtrPerKg, 3), hotLength: r2(calc.hotLength, 3),
-                stdLoad: r2(calc.stdLoad, 1), sizeMin: r2(calc.sizeMin, 1), sizeLimit: r2(calc.sizeLimit, 1),
-                minPerBatch: r2(calc.minPerBatch, 1), maxPerBatch: r2(calc.maxPerBatch, 1), maxCycle: maxCycleOf(nozzle), basis: calc.basis, note: calc.note || null },
+        calc: { width: calc.width, gsm: calc.gsm, mtrPerKg: r2(calc.mtrPerKg, 3), hotLength: r2(calc.hotLength, 3), maxCycle: maxCycleOf(nozzle),
+                stdLoad: r2(order_[0].calc.stdLoad, 1), minPerBatch: r2(order_[0].calc.minPerBatch, 1), maxPerBatch: r2(order_[0].calc.maxPerBatch, 1) },
         params: nozzle ? { nozzle: nozzle.nozzle, pumpRpm: nozzle.pumpRpm, cycle: nozzle.cycle, pressure: nozzle.pressure } : null,
         batches })
     }

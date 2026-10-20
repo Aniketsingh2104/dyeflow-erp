@@ -140,3 +140,57 @@ export function rangeBatches(totalKg: number, minPerBatch: number | null | undef
   }
   return splitInto(totalKg, best)
 }
+
+/** One batch of a plan across several machines */
+export interface PlanBatch { kg: number; machine: number }   // machine = index into the machines list given
+
+/** Batches across several machines (the supervisor picked more than one):
+ *  the LARGEST machine is filled at its max (80 %) first, what is left goes to
+ *  the next machine, and so on. When a remainder would not fit the next
+ *  machine's 60–80 % range, the plan with the fewest out-of-range batches wins
+ *  (ties → fewer batches → the big machine filled fullest first), so 305 kg on
+ *  250 + 100 kg machines becomes 152 + 153 on the big one (both in range)
+ *  rather than 200 + 105.  Machines come in largest-first order; min null =
+ *  no lower limit.  270 kg → [200 on #0, 70 on #1];  480 → [200, 200 on #0, 80 on #1] */
+export function planAcrossMachines(totalKg: number, machines: { min: number | null; max: number }[]): PlanBatch[] {
+  if (!(totalKg > 0) || !machines.length) return []
+  const rangeOf = (kg: number, m: { min: number | null; max: number }) => kg > m.max + 0.5 || (m.min != null && kg < m.min - 0.5) ? 1 : 0
+  // fewest out-of-range batches → fewest batches → the big machine filled fullest first
+  // (200 + 200 + 80 beats 160 × 3) → more kg on the bigger machine
+  const score = (p: PlanBatch[]) => {
+    const amber = p.reduce((t, b) => t + rangeOf(b.kg, machines[b.machine]), 0)
+    const onEarly = p.reduce((t, b) => t + b.kg * (machines.length - b.machine), 0)
+    return [amber, p.length, ...p.map(b => -b.kg), -onEarly]
+  }
+  const better = (a: PlanBatch[], b: PlanBatch[] | null) => {
+    if (!b) return true
+    const sa = score(a), sb = score(b)
+    for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return sa[i] < sb[i]
+    return false
+  }
+  const memo = new Map<string, PlanBatch[]>()
+  const plan = (kg: number, i: number): PlanBatch[] => {
+    const key = `${kg}|${i}`
+    if (memo.has(key)) return memo.get(key)!
+    const m = machines[i]
+    let best: PlanBatch[] | null = null
+    // everything left on this machine, equal batches in its range
+    const all = rangeBatches(kg, m.min, m.max).map(k => ({ kg: k, machine: i }))
+    if (better(all, best)) best = all
+    if (i + 1 < machines.length) {
+      // nothing on this machine → the rest decide
+      const skip = plan(kg, i + 1)
+      if (better(skip, best)) best = skip
+      // k full batches here (at max), the remainder on the smaller machines
+      const full = Math.floor(m.max)
+      for (let k = 1; k * full < kg - 0.5 && k <= 50; k++) {
+        const rest = Math.round((kg - k * full) * 100) / 100
+        const cand = [...Array(k).fill(0).map(() => ({ kg: full, machine: i })), ...plan(rest, i + 1)]
+        if (better(cand, best)) best = cand
+      }
+    }
+    memo.set(key, best!)
+    return best!
+  }
+  return plan(Math.round(totalKg * 100) / 100, 0)
+}
