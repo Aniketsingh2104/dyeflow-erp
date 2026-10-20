@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { dbSelect, dbSelectIn, sb } from "@/lib/supabase"
 import { canonicalCode } from "@/lib/processCodes"
 import { guard } from "@/lib/access"
+import { ensureTail } from '@/lib/routeTail'
 
 export async function GET(req: NextRequest) {
   const g = await guard(req, 'repair-assign', 'GET')
@@ -101,7 +102,8 @@ export async function POST(req: NextRequest) {
     if (!ro || (repair_id && ro.id !== repair_id)) {
       return NextResponse.json({ ok: false, stale: true, error: "This batch is no longer waiting in repair. Refresh the page." }, { status: 409 })
     }
-    const route = (process_route as string[]).map(c => canonicalCode(c)).filter(Boolean)
+    // a route always ends (Qa →) Packing → Dispatch — lib/routeTail.ts
+    const route = ensureTail((process_route as string[]).map(c => canonicalCode(c)).filter(Boolean))
     const { data: rows, error: bErr } = await sb<any[]>("/batches", {
       method: "PATCH",
       params: { id: `eq.${batch_id}`, status: "eq.repairing" },

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { workRoute, TAIL_CODES } from '@/lib/routeTail'
 
 interface RouteTemplate { id: string; name: string; route: string[]; steps: any[]; updated_at: string }
 interface ProcessDef    { id: string; code: string; name: string; is_enabled: boolean; display_order: number }
@@ -25,10 +26,11 @@ export default function ProcessRouteMasterPage() {
       fetch('/api/processes',       { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/article-routes',  { cache: 'no-store' }).then(r => r.json()),
     ])
-    setTemplates(tRes.data || [])
+    setTemplates((tRes.data || []).map((t: RouteTemplate) => ({ ...t, route: workRoute(t.route || t.steps?.map((s: any) => s.processCode) || []) })))
     setProcessList(
       (pRes.data || [])
-        .filter((p: ProcessDef) => p.is_enabled)
+        // QA / Packing / Dispatch are added by the system — not picked in a template
+        .filter((p: ProcessDef) => p.is_enabled && !(TAIL_CODES as readonly string[]).includes(p.code))
         .sort((a: ProcessDef, b: ProcessDef) => a.display_order - b.display_order)
     )
     setArticleMap(aRes.map || {})
@@ -46,7 +48,7 @@ export default function ProcessRouteMasterPage() {
   const openEdit = (t: RouteTemplate) => {
     setEditingId(t.id)
     setFormName(t.name)
-    setFormRoute(t.route || t.steps?.map((s: any) => s.processCode) || [])
+    setFormRoute(workRoute(t.route || t.steps?.map((s: any) => s.processCode) || []))
     setShowModal(true)
   }
 
@@ -60,7 +62,7 @@ export default function ProcessRouteMasterPage() {
     setSaving(true)
 
     const name   = formName.trim()
-    const route  = formRoute
+    const route  = workRoute(formRoute)
     const steps  = route.map(code => ({ processCode: code, name: procNameMap[code] || code }))
     const isEdit = !!editingId
 

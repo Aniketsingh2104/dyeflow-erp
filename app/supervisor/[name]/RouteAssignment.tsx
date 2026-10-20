@@ -8,12 +8,13 @@ import {
 } from './route-helpers'
 import { sameCode, canonicalCode } from '@/lib/processCodes'
 import { articleForMaster } from '@/lib/articleMatch'
+import { workRoute, fullRoute, routeHasQa } from '@/lib/routeTail'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 
 // ── Route to pre-fill, per article (app/api/route-suggest): Master → Master
 // by article code → history. Every row on the page asks; the asks are
 // gathered and sent as ONE request.
-type Suggestion = { route: string[] | null; source: 'master' | 'master-code' | 'history' | null; matched: string | null; count: number; machines: Record<string, string> }
+type Suggestion = { route: string[] | null; qa?: boolean; source: 'master' | 'master-code' | 'history' | null; matched: string | null; count: number; machines: Record<string, string> }
 const suggestCache = new Map<string, Promise<Suggestion | null>>()
 let pending: { article: string; resolve: (s: Suggestion | null) => void }[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -136,16 +137,19 @@ function buildRouteOptions(db: any, article?: string, extra: { codes: string[]; 
   // the order's own saved route and the route pre-filled from the Master come
   // first (so they can always be selected, even if no template has them)
   const seen = new Set<string>()
+  // routes are shown WITHOUT QA / Packing / Dispatch — those are added on Confirm
   for (const x of extra) {
-    const codes = (x.codes || []).filter(Boolean)
+    const codes = workRoute(x.codes)
     const key = routeKeyOf(codes)
     if (!codes.length || seen.has(key)) continue
     seen.add(key)
     options.push({ name: `${codes.join('/')}  [${x.label}]`, steps: codes.map(code => ({ processCode: code, name: processNames[code] || code })) })
   }
-  for (const rt of (db.processRouteMaster || [])) {
-    if (!rt.name || !(rt.steps || []).length) continue
-    const key = routeKeyOf((rt.steps || []).map((s: any) => s.processCode))
+  for (const rt0 of (db.processRouteMaster || [])) {
+    const work = workRoute((rt0.steps || []).map((s: any) => s.processCode))
+    if (!rt0.name || !work.length) continue
+    const rt = { ...rt0, steps: (rt0.steps || []).filter((s: any) => work.includes(canonicalCode(s.processCode))) }
+    const key = routeKeyOf(work)
     if (seen.has(key)) continue
     seen.add(key)
     options.push(rt)
@@ -158,7 +162,7 @@ function buildRouteOptions(db: any, article?: string, extra: { codes: string[]; 
     if (!orderedArticles.includes(a)) orderedArticles.push(a)
   }
   for (const a of orderedArticles) {
-    const codes: string[] = Array.isArray(articleMap[a]) ? articleMap[a] : []
+    const codes: string[] = workRoute(Array.isArray(articleMap[a]) ? articleMap[a] : [])
     if (!codes.length) continue
     const routeKey = codes.join('/')
     if (seen.has(routeKeyOf(codes))) continue
@@ -183,6 +187,8 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   const [lockReason,          setLockReason]          = useState('')
   const [suggestion,          setSuggestion]          = useState<Suggestion | null | undefined>(undefined)  // undefined = still looking
   const [saveToMaster,        setSaveToMaster]        = useState(true)
+  // QA before Packing → Dispatch: from the Master for this article (or the saved route)
+  const [qa,                  setQa]                  = useState(false)
   const [isAdmin,             setIsAdmin]             = useState(false)
 
   // ── Confirmed check — top of render ───────────────────────────────────────
@@ -220,6 +226,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         label: suggestion.source === 'history' ? 'history' : `Master: ${suggestion.matched}` })
       const opts = buildRouteOptions(db, order.article, extra)
       setRouteOptions(opts)
+      setQa(savedRoute.length ? routeHasQa(savedRoute) : !!suggestion?.qa)
       if (!isConfirmed || editMode) initializeTemplate(db, opts)
     }
   }, [db, order.id, editMode, suggestion])
@@ -261,7 +268,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     const existingRoute = order.process_route || order.processRoute
     // 1. the order's own saved route  2. the route from the Master / history
     if (defaultIdx < 0 && Array.isArray(existingRoute) && existingRoute.length) {
-      defaultIdx = opts.findIndex(rt => routeKeyOf((rt.steps || []).map((s: any) => s.processCode)) === routeKeyOf(existingRoute))
+      defaultIdx = opts.findIndex(rt => routeKeyOf((rt.steps || []).map((s: any) => s.processCode)) === routeKeyOf(workRoute(existingRoute)))
     }
     if (defaultIdx < 0 && suggestion?.route?.length) {
       const key = routeKeyOf(suggestion.route)
@@ -323,7 +330,9 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     }
     const rt = routeOptions[selectedTemplateIdx]
     if (!rt) return
-    const codes = rt.steps.map((s: any) => s.processCode)
+    // the work route picked here + (QA →) Packing → Dispatch
+    const workCodes = workRoute(rt.steps.map((s: any) => s.processCode))
+    const codes = fullRoute(workCodes, qa)
 
     // Build process_machines: { processCode: [machineId1, machineId2?] }
     // also determine primary machine_id (first machine of first required process)
@@ -394,7 +403,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       // admin: the article had no Master route → keep this one in the Master
       if (offerMaster && saveToMaster && order.article) {
         const m = await fetch('/api/article-routes', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'upsert', article: articleForMaster(order.article), route: codes }) })
+          body: JSON.stringify({ action: 'upsert', article: articleForMaster(order.article), route: workCodes, qa_required: qa }) })
           .then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
         if (!m.ok) alert('Route confirmed, but not saved to the Master: ' + (m.error || 'Unknown error'))
         else suggestCache.delete(String(order.article).trim())
@@ -508,10 +517,19 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       ) : !suggestion?.route?.length && selectedTemplateIdx < 0 ? (
         <div style={{ fontSize: '10px', color: '#DC2626', margin: '2px 0 6px' }}>No Master route for this article — pick one</div>
       ) : null}
+      {selectedTemplateIdx >= 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '11px', margin: '0 0 6px', color: '#374151' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontWeight: 600 }}
+            title="Ticked from the Master for this article — change it for this order if needed">
+            <input type="checkbox" checked={qa} onChange={e => setQa(e.target.checked)} /> QA
+          </label>
+          <span style={{ color: '#6B7280' }}>then {qa ? 'QA → ' : ''}Packing → Dispatch (added automatically)</span>
+        </div>
+      )}
       {offerMaster && selectedTemplateIdx >= 0 && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: '#374151', margin: '0 0 6px', cursor: 'pointer' }}>
           <input type="checkbox" checked={saveToMaster} onChange={e => setSaveToMaster(e.target.checked)} />
-          Also save to Master for "{articleForMaster(order.article)}"
+          Also save to Master for "{articleForMaster(order.article)}" (route{qa ? ' + QA' : ''})
         </label>
       )}
 

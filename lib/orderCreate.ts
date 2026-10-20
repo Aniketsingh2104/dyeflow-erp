@@ -3,6 +3,7 @@
  * write (server only). Used by /api/orders and by approving a party sheet row.
  */
 import { dbSelect, dbInsert, sb, auditLog } from '@/lib/supabase'
+import { ensureTail } from '@/lib/routeTail'
 
 /** Columns a page may set on an order. Anything else the browser sends
  *  (id, order_number, created_at, created_by …) is dropped. */
@@ -50,6 +51,8 @@ export async function nextOrderNumber(): Promise<{ number: string | null; error:
 export async function createOrder(input: Record<string, any>, label?: string,
   opts: { orderNumber?: string } = {}): Promise<{ data: any; error: string | null }> {
   const payload = cleanOrderFields(input)
+  // a route always ends (Qa →) Packing → Dispatch — lib/routeTail.ts
+  if (Array.isArray(payload.process_route)) payload.process_route = ensureTail(payload.process_route)
   if (!String(payload.party || '').trim()) return { data: null, error: 'Party is required' }
   if (payload.status && !ORDER_STATUSES.includes(payload.status)) return { data: null, error: `Unknown status "${payload.status}"` }
 

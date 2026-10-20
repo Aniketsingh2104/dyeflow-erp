@@ -11,17 +11,19 @@ import { guard } from '@/lib/access'
 import { dbSelect, dbSelectAll } from '@/lib/supabase'
 import { articleKey, matchMaster, MasterRule } from '@/lib/articleMatch'
 import { canonicalCode } from '@/lib/processCodes'
+import { workRoute, routeHasQa } from '@/lib/routeTail'
 
 let masterCache: { at: number; rules: Map<string, MasterRule> } | null = null
 async function masterRules(): Promise<Map<string, MasterRule>> {
   if (masterCache && Date.now() - masterCache.at < 60_000) return masterCache.rules
-  const { data, error } = await dbSelectAll<any>('article_process_routes', { order: 'updated_at.desc' }, 'article,route')
+  const { data, error } = await dbSelectAll<any>('article_process_routes', { order: 'updated_at.desc' }, 'article,route,qa_required')
   if (error) throw new Error(error)
   const rules = new Map<string, MasterRule>()
   for (const r of data || []) {
-    const route = (Array.isArray(r.route) ? r.route : String(r.route || '').split('/')).map((c: string) => canonicalCode(String(c).trim())).filter(Boolean)
+    const raw = Array.isArray(r.route) ? r.route : String(r.route || '').split('/')
+    const route = workRoute(raw)
     const k = articleKey(r.article)
-    if (k && route.length && !rules.has(k)) rules.set(k, { article: r.article, route })   // newest first
+    if (k && route.length && !rules.has(k)) rules.set(k, { article: r.article, route, qa: !!r.qa_required || routeHasQa(raw) })   // newest first
   }
   masterCache = { at: Date.now(), rules }
   return rules
@@ -45,7 +47,7 @@ async function history(article: string) {
   }
   const route = top(rows.map((r: any) => String(r.process_route || '').trim()))
   const v = {
-    route: route ? { codes: route.value.split('/').map(c => canonicalCode(c.trim())).filter(Boolean), count: route.count } : null,
+    route: route ? { codes: workRoute(route.value.split('/')), count: route.count } : null,
     dyeing: top(rows.map((r: any) => String(r.dyeing_machine || '').trim()))?.value || null,
     scq:    top(rows.map((r: any) => String(r.scq_machine || '').trim()))?.value || null,
   }
@@ -86,10 +88,10 @@ export async function POST(req: NextRequest) {
         const d = resolveMachine(hist.dyeing, active); if (d) machinesBy.D = d
         const s = resolveMachine(hist.scq, active); if (s) { machinesBy.S = s; machinesBy.S2 = s }
         out[a] = m
-          ? { route: m.rule.route, source: m.how, matched: m.rule.article, count: 0, machines: machinesBy }
+          ? { route: m.rule.route, qa: !!m.rule.qa, source: m.how, matched: m.rule.article, count: 0, machines: machinesBy }
           : hist.route?.codes.length
-            ? { route: hist.route.codes, source: 'history', matched: a, count: hist.route.count, machines: machinesBy }
-            : { route: null, source: null, matched: null, count: 0, machines: machinesBy }
+            ? { route: hist.route.codes, qa: false, source: 'history', matched: a, count: hist.route.count, machines: machinesBy }
+            : { route: null, qa: false, source: null, matched: null, count: 0, machines: machinesBy }
       }))
     }
     return NextResponse.json({ ok: true, data: out })

@@ -7,6 +7,7 @@ import { createOrder, cleanOrderFields, ORDER_STATUSES } from '@/lib/orderCreate
 import { canonicalCode } from '@/lib/processCodes'
 import { deriveMachineMap } from '@/lib/machineMap'
 import { rpc, rpcFail } from '@/lib/rpc'
+import { ensureTail } from '@/lib/routeTail'
 
 const sameJson = (a: any, b: any) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
@@ -84,7 +85,8 @@ export async function POST(req: NextRequest) {
     // An empty route and "no route" count as the same.
     const routeOf = (r: any): string[] => Array.isArray(r) ? r.map((c: string) => canonicalCode(c)).filter(Boolean) : []
     const machinesOf = (m: any) => (m && typeof m === 'object' && Object.keys(m).length ? m : null)
-    const newRoute = 'process_route' in patch ? routeOf(patch.process_route) : routeOf(before.process_route)
+    // a route always ends (Qa →) Packing → Dispatch — lib/routeTail.ts
+    const newRoute = 'process_route' in patch ? ensureTail(routeOf(patch.process_route)) : routeOf(before.process_route)
     const newMachines = 'process_machines' in patch ? machinesOf(patch.process_machines) : machinesOf(before.process_machines)
     const routeChanged = !sameJson(newRoute, routeOf(before.process_route))
     const machinesChanged = !sameJson(newMachines, machinesOf(before.process_machines))

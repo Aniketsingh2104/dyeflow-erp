@@ -142,7 +142,8 @@ function runEngine(
     return dateToYMD(cur)
   }
 
-  const TAIL = ['Qa', 'Packing', 'Dispatch', 'FinalDispatch']
+  // QA is planned only when the batch's route has it (some articles skip QA)
+  const TAIL = ['Packing', 'Dispatch', 'FinalDispatch']
   let generated = 0, pushed = 0, skipped = 0
   const generatedIds: string[] = []
 

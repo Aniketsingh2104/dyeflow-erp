@@ -8,6 +8,7 @@ import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
+import { workRoute, routeHasQa } from '@/lib/routeTail'
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'article-routes', 'GET'); if (g.deny) return g.deny }
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
   const query: Record<string, string> = { order: 'article.asc' }
   if (article) query['article'] = `eq.${article.trim().toLowerCase()}`
 
-  const { data, error } = await dbSelect('article_process_routes', query, 'id,article,route,updated_at')
+  const { data, error } = await dbSelect('article_process_routes', query, 'id,article,route,qa_required,updated_at')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
 
   // Also return as a flat map { article: route[] } for backward compat
@@ -36,8 +37,12 @@ export async function POST(req: NextRequest) {
 
   // ── Upsert one rule ──────────────────────────────────────────────────────
   if (action === 'upsert') {
-    const { article, route } = body
-    if (!article?.trim() || !Array.isArray(route) || !route.length) {
+    const { article } = body
+    // the Master keeps the work route (H/D/F) + whether the article needs QA;
+    // Packing / Dispatch are always added when a route is confirmed
+    const route = workRoute(body.route)
+    const qa = typeof body.qa_required === 'boolean' ? body.qa_required : (routeHasQa(body.route) || undefined)
+    if (!article?.trim() || !route.length) {
       return NextResponse.json({ ok: false, error: 'article and route[] required' }, { status: 400 })
     }
 
@@ -49,13 +54,14 @@ export async function POST(req: NextRequest) {
       const { error } = await dbUpdate(
         'article_process_routes',
         { id: existing[0].id },
-        { route, updated_at: new Date().toISOString() }
+        { route, ...(qa !== undefined ? { qa_required: qa } : {}), updated_at: new Date().toISOString() }
       )
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     } else {
       const { error } = await dbInsert('article_process_routes', {
         article: article.trim().toLowerCase(),
         route,
+        qa_required: !!qa,
       })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     }
@@ -69,12 +75,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'rules[] required' }, { status: 400 })
     }
 
+    // every row carries qa_required (PostgREST bulk rows need the same keys):
+    // given → as given; else QA in the imported route → true; else false
     const rows = rules
-      .filter(r => r.article && Array.isArray(r.route) && r.route.length)
+      .filter(r => r.article && workRoute(r.route).length)
       .map(r => ({
-        article:    String(r.article).trim().toLowerCase(),
-        route:      r.route,
-        updated_at: new Date().toISOString(),
+        article:     String(r.article).trim().toLowerCase(),
+        route:       workRoute(r.route),
+        qa_required: typeof r.qa_required === 'boolean' ? r.qa_required : routeHasQa(r.route),
+        updated_at:  new Date().toISOString(),
       }))
 
     if (!rows.length) return NextResponse.json({ ok: false, error: 'No valid rules found' }, { status: 400 })
@@ -87,6 +96,15 @@ export async function POST(req: NextRequest) {
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true, upserted: rows.length })
+  }
+
+  // ── QA on / off for one rule (the QA checkbox in the Master) ─────────────
+  if (action === 'set_qa') {
+    const { id } = body
+    if (!id || typeof body.qa_required !== 'boolean') return NextResponse.json({ ok: false, error: 'id and qa_required required' }, { status: 400 })
+    const { error } = await dbUpdate('article_process_routes', { id }, { qa_required: body.qa_required, updated_at: new Date().toISOString() })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true })
   }
 
   // ── Delete one rule ──────────────────────────────────────────────────────

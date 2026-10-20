@@ -20,7 +20,7 @@ export function articleForMaster(s: string | null | undefined): string {
   return String(s || '').replace(/\([^)]*\)/g, ' ').replace(/\(.*$/, ' ').replace(/\s+/g, ' ').trim()
 }
 
-export interface MasterRule { article: string; route: string[] }
+export interface MasterRule { article: string; route: string[]; qa?: boolean }
 
 /**
  * 1. same article (cleaned)              → 'master'

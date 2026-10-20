@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { workRoute, routeHasQa, TAIL_CODES } from '@/lib/routeTail'
 
 interface ProcessDef { id: string; code: string; name: string; is_enabled: boolean; display_order: number }
 
@@ -14,12 +15,14 @@ const post = (body: any) => fetch('/api/article-routes', {
 export default function ProcessMachineMasterPage() {
   const [rules,        setRules]        = useState<Record<string, string[]>>({})
   const [ruleIds,      setRuleIds]      = useState<Record<string, string>>({})
+  // QA needed for this article? (QA → Packing → Dispatch are added on Confirm)
+  const [qaMap,        setQaMap]        = useState<Record<string, boolean>>({})
   const [processList,  setProcessList]  = useState<ProcessDef[]>([])
   const [articles,     setArticles]     = useState<string[]>([])
   const [loading,      setLoading]      = useState(true)
   const [showModal,    setShowModal]    = useState(false)
   const [editingArt,   setEditingArt]   = useState('')
-  const [form,         setForm]         = useState({ article: '', processRoute: [] as string[] })
+  const [form,         setForm]         = useState({ article: '', processRoute: [] as string[], qa: false })
   const [importStatus, setImportStatus] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -33,10 +36,13 @@ export default function ProcessMachineMasterPage() {
     if (!mapRes.ok) { alert('Could not load the rules: ' + (mapRes.error || 'Unknown error')) }
     const map: Record<string, string[]> = {}
     const ids: Record<string, string> = {}
-    for (const r of (mapRes.data || [])) { map[r.article] = r.route || []; ids[r.article] = r.id }
+    const qas: Record<string, boolean> = {}
+    for (const r of (mapRes.data || [])) { map[r.article] = workRoute(r.route || []); ids[r.article] = r.id; qas[r.article] = !!r.qa_required || routeHasQa(r.route) }
     setRules(map)
     setRuleIds(ids)
-    setProcessList((pRes.data || []).filter((p: ProcessDef) => p.is_enabled).sort((a: ProcessDef, b: ProcessDef) => a.display_order - b.display_order))
+    setQaMap(qas)
+    // QA / Packing / Dispatch are not picked here — the system adds them
+    setProcessList((pRes.data || []).filter((p: ProcessDef) => p.is_enabled && !(TAIL_CODES as readonly string[]).includes(p.code)).sort((a: ProcessDef, b: ProcessDef) => a.display_order - b.display_order))
     const supMap = (supRes.ok && supRes.value) ? supRes.value : {}
     setArticles([...new Set([...Object.keys(map), ...Object.keys(supMap).map(a => a.trim().toLowerCase())])])
     setLoading(false)
@@ -55,15 +61,16 @@ export default function ProcessMachineMasterPage() {
 
   const openAdd = (art?: string) => {
     setEditingArt(art || '')
-    const existing = art && rules[art.trim().toLowerCase()] ? rules[art.trim().toLowerCase()] : []
-    setForm({ article: art || '', processRoute: Array.isArray(existing) ? existing : [] })
+    const key = (art || '').trim().toLowerCase()
+    const existing = art && rules[key] ? rules[key] : []
+    setForm({ article: art || '', processRoute: Array.isArray(existing) ? existing : [], qa: !!qaMap[key] })
     setShowModal(true)
   }
 
   const save = async () => {
     if (!form.article.trim()) { alert('Enter article name.'); return }
     if (!form.processRoute.length) { alert('Select at least one process.'); return }
-    const res = await post({ action: 'upsert', article: form.article.trim(), route: form.processRoute })
+    const res = await post({ action: 'upsert', article: form.article.trim(), route: form.processRoute, qa_required: form.qa })
     if (!res.ok) { alert('Not saved: ' + (res.error || 'Unknown error')); return }
     setShowModal(false)
     load()
@@ -78,6 +85,14 @@ export default function ProcessMachineMasterPage() {
     load()
   }
 
+  const toggleQa = async (art: string) => {
+    const id = ruleIds[art]; if (!id) return
+    const next = !qaMap[art]
+    setQaMap(prev => ({ ...prev, [art]: next }))       // shows straight away
+    const res = await post({ action: 'set_qa', id, qa_required: next })
+    if (!res.ok) { setQaMap(prev => ({ ...prev, [art]: !next })); alert('QA not saved: ' + (res.error || 'Unknown error')) }
+  }
+
   const handleJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -87,7 +102,7 @@ export default function ProcessMachineMasterPage() {
     reader.onload = async (ev) => {
       try {
         const json = JSON.parse(ev.target?.result as string)
-        const list: { article: string; route: string[] }[] = []
+        const list: { article: string; route: string[]; qa_required?: boolean }[] = []
         let added = 0, skipped = 0
         for (const [art, data] of Object.entries(json)) {
           if (!art || !data) { skipped++; continue }
@@ -97,7 +112,9 @@ export default function ProcessMachineMasterPage() {
           else if ((data as any).r || (data as any).route) {
             route = ((data as any).r || (data as any).route).split('/').map((c: string) => c.trim()).filter(Boolean)
           }
-          if (route.length) { list.push({ article: art, route }); added++ } else skipped++
+          // QA: "qa": true in the file, or QA inside the route
+          const qaGiven = typeof (data as any)?.qa === 'boolean' ? (data as any).qa : typeof (data as any)?.qaRequired === 'boolean' ? (data as any).qaRequired : undefined
+          if (workRoute(route).length) { list.push({ article: art, route, ...(qaGiven !== undefined ? { qa_required: qaGiven } : {}) }); added++ } else skipped++
         }
         if (!list.length) { setImportStatus('❌ No rules found in the file.'); return }
         const res = await post({ action: 'bulk_upsert', rules: list })
@@ -124,7 +141,7 @@ export default function ProcessMachineMasterPage() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>📄 Import Intelligence from JSON</div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Upload <code>article_process_routes.json</code> — format: <code>{'"Article": ["C", "D", "F"]'}</code>
+            Upload <code>article_process_routes.json</code> — format: <code>{'"Article": ["C", "D", "F"]'}</code> or <code>{'"Article": { "processRoute": ["D","F"], "qa": true }'}</code>
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
@@ -157,7 +174,7 @@ export default function ProcessMachineMasterPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-secondary)', zIndex: 5 }}>
               <tr>
-                {['Article','Default Process Route','Actions'].map(h => (
+                {['Article','Default Process Route','QA','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
                     color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
                     borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -166,9 +183,9 @@ export default function ProcessMachineMasterPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={3} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
               ) : ruleEntries.length === 0 ? (
-                <tr><td colSpan={3} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
                   No rules. Upload JSON or click "+ Add Rule".
                 </td></tr>
               ) : (
@@ -188,6 +205,10 @@ export default function ProcessMachineMasterPage() {
                           ))}
                         </div>
                       ) : <span style={{ color: 'var(--text-tertiary)' }}>-</span>}
+                    </td>
+                    <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                      <input type="checkbox" checked={!!qaMap[art]} onChange={() => toggleQa(art)}
+                        title="This article needs QA (QA → Packing → Dispatch)" style={{ width: 'auto', cursor: 'pointer' }} />
                     </td>
                     <td style={{ padding: '11px 14px', whiteSpace: 'nowrap' }}>
                       <button className="xs" onClick={() => openAdd(art)} style={{ marginRight: 6 }}>Edit</button>
@@ -258,6 +279,13 @@ export default function ProcessMachineMasterPage() {
                   ))
                 )}
               </div>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              <input type="checkbox" checked={form.qa} onChange={e => setForm({ ...form, qa: e.target.checked })} style={{ width: 'auto' }} />
+              This article needs QA
+            </label>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 14 }}>
+              Every batch ends {form.qa ? 'QA → ' : ''}Packing → Dispatch — added automatically, don't pick them above.
             </div>
             <button className="primary" onClick={save} style={{ width: '100%' }}>✓ Save Rule</button>
           </div>
