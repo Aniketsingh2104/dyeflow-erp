@@ -1044,15 +1044,18 @@ export default function MachinePage() {
                         )
                       }
                       
-                      if (col.key === 'remarks') {
+                      // long texts wrap inside the column, so the column can be dragged narrower
+                      if (col.key === 'remarks' || col.key === 'typeOfFinish' || col.key === 'typeOfPacking') {
                         return (
                           <td key={col.key} style={{ 
                             ...tdStyle, 
+                            width: `${width}px`,
                             maxWidth: `${width}px`,
                             whiteSpace: 'normal',
-                            wordWrap: 'break-word'
+                            wordWrap: 'break-word',
+                            ...(col.key !== 'remarks' ? { fontSize: '10px' } : {})
                           }}>
-                            {batch.remarks || '-'}
+                            {batch[col.key] || '-'}
                           </td>
                         )
                       }
@@ -1074,7 +1077,7 @@ export default function MachinePage() {
                         return <td key={col.key} style={{ ...tdStyle, fontWeight: 600, width: `${width}px` }}>{batch.kg}</td>
                       }
                       
-                      if (['labNo', 'lotNo', 'challanNo', 'typeOfFinish', 'typeOfPacking'].includes(col.key)) {
+                      if (['labNo', 'lotNo', 'challanNo'].includes(col.key)) {
                         return <td key={col.key} style={{ ...tdStyle, fontSize: '10px', width: `${width}px` }}>{batch[col.key] || '-'}</td>
                       }
                       
