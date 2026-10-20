@@ -8,7 +8,6 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { isBatchFinished } from '@/lib/batchStatus'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. DARK MODE TOGGLE
@@ -66,112 +65,14 @@ interface Notification {
   urgent: boolean
 }
 
-function buildNotifications(): Notification[] {
-  if (typeof window === 'undefined') return []
-  const raw = localStorage.getItem('dyeflow_db')
-  if (!raw) return []
-
-  const db = JSON.parse(raw)
-  const orders: any[]   = db.orders       || []
-  const machines: any[] = db.machines     || []
-  const faulty: any[]   = db.faultyRecords|| []
-  const supervisors: any[] = db.supervisors || []
-  const allBatches = orders.flatMap((o: any) =>
-    (o.splits || []).map((b: any) => ({ ...b, machine: b.machine || o.machine }))
-  )
-  const now = new Date()
-  const notes: Notification[] = []
-
-  // ① Overdue orders
-  const overdue = orders.filter((o: any) => {
-    if (['done','new'].includes(o.status)) return false
-    const d = o.plannedDates?.['Dispatch'] || ''
-    return d && new Date(d) < now
-  })
-  if (overdue.length > 0) {
-    notes.push({
-      id: 'overdue', type: 'overdue', urgent: true,
-      title: `${overdue.length} Overdue Order${overdue.length > 1 ? 's' : ''}`,
-      body: overdue.slice(0, 3).map((o: any) => o.orderNumber).join(', ') +
-            (overdue.length > 3 ? ` +${overdue.length - 3} more` : ''),
-      link: '/orders',
-    })
-  }
-
-  // ② Machines near/over capacity (≥80%)
-  machines.forEach((m: any) => {
-    const loadKg = allBatches
-      .filter((b: any) => b.machine === m.id && !isBatchFinished(b))
-      .reduce((s: number, b: any) => s + (parseFloat(b.kg) || 0), 0)
-    const pct = m.capacity ? Math.round((loadKg / m.capacity) * 100) : 0
-    if (pct >= 80) {
-      notes.push({
-        id: `cap-${m.id}`, type: 'capacity', urgent: pct >= 95,
-        title: `${m.name} at ${pct}% capacity`,
-        body: `${Math.round(loadKg)} / ${m.capacity} Kg loaded`,
-        link: '/machines',
-      })
-    }
-  })
-
-  // ③ Open faulty batches
-  const openFaulty = faulty.filter((r: any) => r.status === 'open')
-  if (openFaulty.length > 0) {
-    notes.push({
-      id: 'faulty', type: 'faulty', urgent: true,
-      title: `${openFaulty.length} Open Faulty Batch${openFaulty.length > 1 ? 'es' : ''}`,
-      body: openFaulty.slice(0, 2).map((r: any) => r.batchId || r.orderNo).join(', '),
-      link: '/faulty',
-    })
-  }
-
-  // ④ Supervisor inbox overload (≥5 assigned orders)
-  supervisors.forEach((s: any) => {
-    const inbox = orders.filter((o: any) =>
-      o.status === 'assigned' &&
-      (o.supervisor || '').toLowerCase() === (s.name || '').toLowerCase()
-    ).length
-    if (inbox >= 5) {
-      notes.push({
-        id: `inbox-${s.id || s.name}`, type: 'inbox', urgent: inbox >= 10,
-        title: `${s.name} — ${inbox} orders in inbox`,
-        body: 'Supervisor inbox is getting large',
-        link: `/supervisor/${encodeURIComponent(s.id || s.name)}`,
-      })
-    }
-  })
-
-  // ⑤ Orders on hold
-  const held = orders.filter((o: any) => o.status === 'hold')
-  if (held.length > 0) {
-    notes.push({
-      id: 'hold', type: 'hold', urgent: false,
-      title: `${held.length} Order${held.length > 1 ? 's' : ''} on Hold`,
-      body: held.slice(0, 3).map((o: any) => o.orderNumber).join(', '),
-      link: '/orders',
-    })
-  }
-
-  // ⑥ Repairing orders with pending/in-repair status
-  const repairingOrders: any[] = db.repairingOrders || []
-  const pendingRepairs = repairingOrders.filter((r: any) =>
-    r.status === 'Pending' || r.status === 'In Repair'
-  )
-  if (pendingRepairs.length > 0) {
-    const highPriority = pendingRepairs.filter((r: any) =>
-      r.priority === 'Critical' || r.priority === 'High'
-    )
-    notes.push({
-      id: 'repair', type: 'repair', urgent: highPriority.length > 0,
-      title: `${pendingRepairs.length} Repairing Order${pendingRepairs.length > 1 ? 's' : ''} Pending`,
-      body: highPriority.length > 0
-        ? `${highPriority.length} high priority · ` + pendingRepairs.slice(0, 2).map((r: any) => r.batchId).join(', ')
-        : pendingRepairs.slice(0, 3).map((r: any) => r.batchId).join(', '),
-      link: '/repairing-order',
-    })
-  }
-
-  return notes
+// built on the server from the database (app/api/notices)
+async function fetchNotifications(): Promise<Notification[]> {
+  try {
+    const r = await fetch('/api/notices', { cache: 'no-store' })
+    if (!r.ok) return []
+    const j = await r.json()
+    return j?.ok ? (j.data || []) : []
+  } catch { return [] }
 }
 
 const TYPE_ICON: Record<string, string>  = { overdue: '⏰', capacity: '⚙', faulty: '⚠️', inbox: '📬', hold: '⏸', repair: '🔧' }
@@ -182,11 +83,14 @@ export function NotificationCenter() {
   const [notes, setNotes] = useState<Notification[]>([])
   const ref = useRef<HTMLDivElement>(null)
 
-  const refresh = useCallback(() => setNotes(buildNotifications()), [])
+  const refresh = useCallback(() => {
+    if (document.visibilityState === 'hidden') return
+    fetchNotifications().then(setNotes)
+  }, [])
 
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, 30_000)
+    const t = setInterval(refresh, 120_000)
     window.addEventListener('dyeflow-db-updated', refresh)
     return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', refresh) }
   }, [refresh])

@@ -8,6 +8,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { pageAccess } from '@/lib/pageAccess'
 
 export interface PagePerm {
   view: boolean
@@ -103,36 +104,16 @@ export const STATIC_PAGES: PageDef[] = [
   { path: '/setup/colour-chemical-master',label: 'Colour Chemical Master',  group: 'Setup' },
   { path: '/setup/shade-master',          label: 'Shade Master',            group: 'Setup' },
   { path: '/setup/holiday-master',        label: 'Holiday Master',          group: 'Setup' },
-  { path: '/pc',                          label: 'PC Overview',             group: 'PC' },
   { path: '/mobile',                      label: 'Mobile / Floor View',     group: 'Other' },
 ]
 
 export function buildPageList(): PageDef[] {
-  const pages: PageDef[] = [...STATIC_PAGES]
-  if (typeof window === 'undefined') return pages
-  try {
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return pages
-    const db = JSON.parse(raw)
-    for (const m of (db.machines || [])) {
-      const slug = (m.id || m.name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
-      if (!slug) continue
-      pages.push({ path: `/machines/${slug}`, label: m.name || m.id, group: 'Machines', dynamic: true })
-    }
-    for (const p of (db.processList || [])) {
-      if (!p.enabled && !p.is_enabled) continue
-      pages.push({ path: `/fms/${p.code}`, label: `FMS — ${p.code} · ${p.name}`, group: 'FMS', dynamic: true })
-    }
-    for (const s of (db.supervisors || [])) {
-      const idSlug = encodeURIComponent(s.id || s.name || '')
-      if (!idSlug) continue
-      pages.push({ path: `/supervisor/${idSlug}`, label: `Supervisor — ${s.name}`, group: 'Supervisors', dynamic: true })
-    }
-  } catch { /* ignore */ }
-  return pages
+  // (the old browser copy of the database is gone — machines, FMS and
+  // supervisors come from the server in fetchPageList)
+  return [...STATIC_PAGES]
 }
 
-/** Async version: fetches dynamic pages from Supabase APIs, falls back to localStorage */
+/** Fetches the dynamic pages (machines, FMS, supervisors) from the server */
 export async function fetchPageList(): Promise<PageDef[]> {
   const pages: PageDef[] = [...STATIC_PAGES]
   try {
@@ -250,10 +231,11 @@ export interface PermResult {
   loading:   boolean
 }
 
-export function usePermission(path: string): PermResult {
+export function usePermission(path: string | string[]): PermResult {
   const [result, setResult] = useState<PermResult>({
-    canView: true, canEdit: true, canDelete: true, isAdmin: true, loading: true,
+    canView: false, canEdit: false, canDelete: false, isAdmin: false, loading: true,
   })
+  const key = Array.isArray(path) ? path.join('|') : path
   useEffect(() => {
     const compute = () => {
       const user = getActiveUserRecord()
@@ -265,9 +247,14 @@ export function usePermission(path: string): PermResult {
         setResult({ canView: true, canEdit: true, canDelete: true, isAdmin: true, loading: false })
         return
       }
-      const perms    = user.permissions || DEFAULT_USER_PERMISSIONS
-      const pagePerm = perms.pages[path] || EMPTY_PERM
-      setResult({ canView: pagePerm.view, canEdit: pagePerm.edit, canDelete: pagePerm.delete, isAdmin: false, loading: false })
+      if (user.role === 'party') {
+        setResult({ canView: false, canEdit: false, canDelete: false, isAdmin: false, loading: false })
+        return
+      }
+      // same matching as the server (lib/pageAccess.ts ↔ lib/access.ts hasPage)
+      const perms = user.permissions || DEFAULT_USER_PERMISSIONS
+      const a = pageAccess(perms.pages, key.split('|'), false)
+      setResult({ canView: a.view, canEdit: a.edit, canDelete: a.delete, isAdmin: false, loading: false })
     }
     compute()
     window.addEventListener('dyeflow-db-updated', compute)
@@ -276,7 +263,7 @@ export function usePermission(path: string): PermResult {
       window.removeEventListener('dyeflow-db-updated', compute)
       window.removeEventListener('storage', compute)
     }
-  }, [path])
+  }, [key])
   return result
 }
 

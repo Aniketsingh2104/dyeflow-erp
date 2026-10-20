@@ -19,6 +19,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   const [orders, setOrders] = useState<any[]>([])  
   const [faultyBatches, setFaultyBatches] = useState<any[]>([])
   const [fullSupervisorName, setFullSupervisorName] = useState('')
+  const [supNotFound, setSupNotFound] = useState(false)
   const [stats, setStats] = useState({ inbox: 0, faulty: 0 })
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(50)
@@ -79,16 +80,17 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     let resolvedId   = decodedSlug
     try {
       // Resolve supervisor name/id
-      const supRes = await fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json())
+      const supRes = await fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ ok: false }))
+      if (!supRes.ok) { alert('Could not load supervisors: ' + (supRes.error || 'network error') + ' — refresh the page.'); return }
       const supervisors: any[] = supRes.data || []
-      const byId = supervisors.find((s: any) => s.id === decodedSlug)
-      if (byId) { resolvedName = byId.name; resolvedId = byId.id }
-      else {
-        const byName = supervisors.find((s: any) =>
-          (s.name || '').toLowerCase().includes(decodedSlug.toLowerCase())
-        )
-        if (byName) { resolvedName = byName.name; resolvedId = byName.id }
-      }
+      // exact id, else exact name (case / spaces ignored) — "Raj" no longer
+      // opens "Rajesh"; nothing found → a "not found" screen, not a broken query
+      const want = decodedSlug.trim().toLowerCase()
+      const sup = supervisors.find((s: any) => s.id === decodedSlug)
+        || supervisors.find((s: any) => String(s.name || '').trim().toLowerCase() === want)
+      if (!sup) { setSupNotFound(true); setFullSupervisorName(decodedSlug); return }
+      setSupNotFound(false)
+      resolvedName = sup.name; resolvedId = sup.id
       setFullSupervisorName(resolvedName)
 
       // Fetch orders from Supabase
@@ -301,25 +303,15 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     if (!sup) { alert('Supervisor not found.'); return }
     setRepairSaving(true)
     try {
-      await fetch('/api/batches', {
+      const res = await fetch('/api/batches', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update', id: repairAssignModal.id, supervisor_id: sup.id })
-      })
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      if (!res.ok) { alert('Not reassigned: ' + (res.error || 'Unknown error')); return }
       showRepairToast(`✓ Reassigned to ${supervisorName}`)
       setRepairAssignModal(null)
       loadData()
     } finally { setRepairSaving(false) }
-  }
-
-  const updateFaultyStatus = async (repairId: string, status: string) => {
-    const patch: any = { status }
-    if (status === 'In Repair') patch.repair_start_date = new Date().toISOString()
-    if (status === 'Completed')  patch.repair_completed_date = new Date().toISOString()
-    await fetch('/api/faulty', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', id: repairId, ...patch })
-    }).catch(() => {})
-    loadData()
   }
 
   const getSupervisorColor = () => {
@@ -479,6 +471,18 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   }
 
   // Guard: if user is restricted to a specific supervisor and this page is for a different one, deny access
+  if (supNotFound) {
+    return (
+      <div className="content">
+        <div className="card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Supervisor not found</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No supervisor called "{decodedSlug}". Pick one from the Supervisors menu.</div>
+        </div>
+      </div>
+    )
+  }
+
   if (supervisorFilter && fullSupervisorName &&
     supervisorFilter.toLowerCase() !== fullSupervisorName.toLowerCase()) {
     return <AccessDenied pageName={`Supervisor — ${fullSupervisorName}`} />

@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
+import PageGuard from '@/components/PageGuard'
 import Navigation from '@/components/Navigation'
 import { saveUiSession, clearUiSession } from '@/lib/clientSession'
 
@@ -120,7 +121,7 @@ export default function DbProvider({ children }: { children: React.ReactNode }) 
     <>
       <Navigation />
       <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-        {children}
+        <PageGuard>{children}</PageGuard>
       </div>
     </>
   )

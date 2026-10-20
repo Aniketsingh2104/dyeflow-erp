@@ -22,6 +22,7 @@ interface ImportedOrder {
   typeOfFinish?:   string
   typeOfPacking?:  string
   remarks?:   string
+  deliveryDate?: string
 }
 
 export default function ImportPage() {
@@ -56,11 +57,14 @@ export default function ImportPage() {
       reader.onload = e => {
         try {
           const data = e.target?.result; if (!data) { reject(new Error('Failed to read file')); return }
-          const wb   = XLSX.read(data, { type: 'array' })
+          // cellDates: a cell formatted as a date arrives as a date, not a serial number
+          const wb   = XLSX.read(data, { type: 'array', cellDates: true })
           const ws   = wb.Sheets[wb.SheetNames[0]]
           if (!ws) { reject(new Error('No sheets found')); return }
           const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false })
-          resolve(rows.map(row => row.map((cell: any) => String(cell || '').trim())))
+          const ymdOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          resolve(rows.map(row => row.map((cell: any) =>
+            cell instanceof Date ? (isNaN(cell.getTime()) ? '' : ymdOf(cell)) : String(cell ?? '').trim())))
         } catch (err: any) { reject(new Error('Failed to parse Excel: ' + err.message)) }
       }
       reader.onerror = () => reject(new Error('Failed to read file'))
@@ -86,27 +90,53 @@ export default function ImportPage() {
   const processAndSave = async (rows: string[][]) => {
     if (!rows.length) throw new Error('File is empty')
 
-    const headers  = rows[0].map(h => h.toLowerCase().replace(/\s+/g, '').trim())
+    // headers compared without spaces / dots / dashes: "Challan No." = "challanno"
+    const norm = (h: string) => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+    const headers  = rows[0].map(norm)
     const dataRows = rows.slice(1)
 
-    // Column name aliases
-    const alias: Record<string, string> = {
-      'labno': 'labno', 'lotno': 'lotno', 'challannumber': 'challanno', 'challanno': 'challanno',
-      'qtykg': 'qtykg', 'qtymtr': 'qtymtr', 'nooftaka': 'nooftaka',
-      'typeoffinish': 'typeoffinish', 'typeofpacking': 'typeofpacking',
-      'subparty': 'subparty', 'salesperson': 'salesperson', 'holdapproval': 'holdapproval', 'holdreason': 'holdreason',
+    // Every name a column may have (the template's own names come first).
+    // Only exact matches — "qty" must not grab the "qtymtr" column.
+    const ALIASES: Record<string, string[]> = {
+      party:         ['party', 'partyname', 'customer', 'customername'],
+      subparty:      ['subparty', 'subpartyname'],
+      salesperson:   ['salesperson', 'salesman', 'sales'],
+      article:       ['article', 'articleno', 'articlename', 'quality'],
+      blend:         ['blend'],
+      width:         ['width'],
+      gsm:           ['gsm'],
+      color:         ['color', 'colour', 'shade', 'colorname', 'colourname'],
+      labno:         ['labno', 'lab', 'labnumber'],
+      lotno:         ['lotno', 'lot', 'lotnumber'],
+      challanno:     ['challanno', 'challannumber', 'challan'],
+      qtykg:         ['qtykg', 'kg', 'qty', 'quantity', 'quantitykg', 'weight'],
+      qtymtr:        ['qtymtr', 'mtr', 'meter', 'meters', 'metre', 'metres', 'qtymeter'],
+      nooftaka:      ['nooftaka', 'taka', 'takas', 'notaka'],
+      typeoffinish:  ['typeoffinish', 'finish', 'finishtype'],
+      typeofpacking: ['typeofpacking', 'packing', 'packingtype'],
+      remarks:       ['remarks', 'remark', 'notes', 'note'],
+      deliverydate:  ['deliverydate', 'delivery', 'duedate'],
     }
-
-    const find = (key: string): number => {
-      const idx = headers.indexOf(key); if (idx >= 0) return idx
-      const aliasKey = alias[key]; if (aliasKey) { const i = headers.indexOf(aliasKey); if (i >= 0) return i }
-      return headers.findIndex(h => h.includes(key))
+    const colIdx: Record<string, number> = {}
+    for (const [key, names] of Object.entries(ALIASES)) {
+      colIdx[key] = -1
+      for (const n of names) { const i = headers.indexOf(n); if (i >= 0) { colIdx[key] = i; break } }
     }
-
-    // Map to column indices
-    const col = (k: string) => find(k)
     const get = (row: string[], k: string): string => {
-      const i = col(k); return i >= 0 ? (row[i] || '') : ''
+      const i = colIdx[k]; return i >= 0 ? String(row[i] ?? '').trim() : ''
+    }
+    // "1,200" → 1200 (Excel / Indian number formats)
+    const num = (v: string): number => { const n = parseFloat(String(v || '').replace(/[,\s]/g, '')); return isNaN(n) ? 0 : n }
+    // delivery date as yyyy-mm-dd (dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd)
+    const ymd = (v: string): string | null => {
+      const t = String(v || '').trim(); if (!t) return null
+      let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`
+      m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/); if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+      return null
+    }
+
+    if (colIdx.party < 0 && colIdx.article < 0 && colIdx.color < 0) {
+      throw new Error('No party, article or colour column found. Headers read: ' + rows[0].slice(0, 12).join(', '))
     }
 
     const imported: ImportedOrder[] = []
@@ -129,43 +159,61 @@ export default function ImportPage() {
         labNo:          get(row, 'labno')        || undefined,
         lotNo:          get(row, 'lotno')        || undefined,
         challanNo:      get(row, 'challanno')    || undefined,
-        qtyKg:          parseFloat(get(row, 'qtykg')    || '0') || 0,
-        qtyMtr:         parseFloat(get(row, 'qtymtr')   || '0') || undefined,
-        noOfTaka:       parseInt(  get(row, 'nooftaka') || '0') || undefined,
+        qtyKg:          num(get(row, 'qtykg')),
+        qtyMtr:         num(get(row, 'qtymtr')) || undefined,
+        noOfTaka:       Math.round(num(get(row, 'nooftaka'))) || undefined,
         typeOfFinish:   get(row, 'typeoffinish') || undefined,
         typeOfPacking:  get(row, 'typeofpacking')|| undefined,
         remarks:        get(row, 'remarks')      || undefined,
+        deliveryDate:   ymd(get(row, 'deliverydate')) || undefined,
       })
     }
 
     if (!imported.length) throw new Error('No valid data found. Ensure the file has party, article, or color columns.')
 
-    // Save each order to Supabase via /api/orders
-    let saved = 0; const errors: string[] = []
+    // Duplicate guard: a row whose challan no. + party is already an order
+    // (or appears twice in this file) is skipped, not imported again.
+    const dupKey = (party: string, challan?: string) => challan ? `${party.trim().toLowerCase()}|${challan.trim().toLowerCase()}` : ''
+    const existing = new Set<string>()
+    const exRes = await fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ ok: false }))
+    if (!exRes.ok) throw new Error('Could not check for orders already imported — nothing was imported. Try again.')
+    for (const o of exRes.data || []) { const k = dupKey(o.party || '', o.challan_no || ''); if (k) existing.add(k) }
+
+    let saved = 0; const errors: string[] = []; const skipped: string[] = []
+    const importedAt = new Date().toISOString()
     for (const order of imported) {
+      const k = dupKey(order.party, order.challanNo)
+      if (k && existing.has(k)) { skipped.push(`${order.party} · challan ${order.challanNo}`); continue }
       try {
         const res  = await fetch('/api/orders', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action:       'create',
-            party:        order.party,
-            article:      order.article,
-            color:        order.color,
-            blend:        order.blend        || null,
-            qty_kg:       order.qtyKg        || 0,
-            challan_no:   order.challanNo    || null,
-            remarks:      [
-              order.remarks,
-              order.labNo    ? `Lab: ${order.labNo}`        : null,
-              order.lotNo    ? `Lot: ${order.lotNo}`        : null,
-              order.subParty ? `SubParty: ${order.subParty}`: null,
-            ].filter(Boolean).join(' · ') || null,
-            status:       'new',
+            action:          'create',
+            party:           order.party,
+            sub_party:       order.subParty      || null,
+            sales_person:    order.salesPerson   || null,
+            article:         order.article,
+            color:           order.color,
+            blend:           order.blend         || null,
+            width:           order.width         || null,
+            gsm:             order.gsm           || null,
+            lab_no:          order.labNo         || null,
+            lot_no:          order.lotNo         || null,
+            challan_no:      order.challanNo     || null,
+            qty_kg:          order.qtyKg         || 0,
+            qty_mtr:         order.qtyMtr        || 0,
+            no_of_taka:      order.noOfTaka      || 0,
+            type_of_finish:  order.typeOfFinish  || null,
+            type_of_packing: order.typeOfPacking || null,
+            delivery_date:   order.deliveryDate  || null,
+            remarks:         order.remarks       || null,
+            imported_at:     importedAt,
+            status:          'new',
           }),
         })
         const data = await res.json()
-        if (data.ok) saved++
+        if (data.ok) { saved++; if (k) existing.add(k) }
         else errors.push(`${order.party}/${order.article}: ${data.error}`)
       } catch (e: any) {
         errors.push(`${order.party}: ${e.message}`)
@@ -175,6 +223,8 @@ export default function ImportPage() {
     setResult({
       imported:   saved,
       failed:     errors.length,
+      skipped:    skipped.length,
+      skippedList: skipped.slice(0, 5),
       errors:     errors.slice(0, 5),
       headers:    headers.slice(0, 10),
       preview:    imported.slice(0, 5),
@@ -185,46 +235,55 @@ export default function ImportPage() {
   }
 
   const handleDownloadTemplate = () => {
-    const headers = ['party','subparty','salesperson','article','blend','width','gsm','color','labno','lotno','challannumber','qtykg','qtymtr','nooftaka','typeoffinish','typeofpacking','remarks']
-    const example = ['Rajesh Fabrics','Sub Party A','John Doe','Cotton Fabric','100% Cotton','44','200','Navy Blue','L-2001','LOT-445','CH-1001','500','1200','60','Matt','Roll','Sample order']
+    const headers = ['party','subparty','salesperson','article','blend','width','gsm','color','labno','lotno','challannumber','qtykg','qtymtr','nooftaka','typeoffinish','typeofpacking','deliverydate','remarks']
+    const example = ['Rajesh Fabrics','Sub Party A','John Doe','Cotton Fabric','100% Cotton','44','200','Navy Blue','L-2001','LOT-445','CH-1001','500','1200','60','Matt','Roll','25/11/2026','Sample order']
     const blob = new Blob([[headers, example].map(r => r.join(',')).join('\n')], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'dyeflow_import_template.csv'; a.click()
   }
 
   const handleDownloadExcelTemplate = () => {
-    const headers = ['party','subparty','salesperson','article','blend','width','gsm','color','labno','lotno','challannumber','qtykg','qtymtr','nooftaka','typeoffinish','typeofpacking','remarks']
-    const example = ['Rajesh Fabrics','Sub Party A','John Doe','Cotton Fabric','100% Cotton','44','200','Navy Blue','L-2001','LOT-445','CH-1001','500','1200','60','Matt','Roll','Sample order']
+    const headers = ['party','subparty','salesperson','article','blend','width','gsm','color','labno','lotno','challannumber','qtykg','qtymtr','nooftaka','typeoffinish','typeofpacking','deliverydate','remarks']
+    const example = ['Rajesh Fabrics','Sub Party A','John Doe','Cotton Fabric','100% Cotton','44','200','Navy Blue','L-2001','LOT-445','CH-1001','500','1200','60','Matt','Roll','25/11/2026','Sample order']
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headers, example]), 'Orders')
     XLSX.writeFile(wb, 'dyeflow_import_template.xlsx')
   }
 
+  // Your own template is kept in THIS browser only (base64, max ~2 MB —
+  // browser storage is small). A file that doesn't fit is refused with a
+  // message instead of leaving the upload spinner running.
+  const TEMPLATE_MAX = 2 * 1024 * 1024
   const handleTemplateUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]; if (!f) return
+    const f = e.target.files?.[0]; e.target.value = ''; if (!f) return
     if (!f.name.match(/\.(xlsx|xls)$/i)) { alert('Please upload an Excel file (.xlsx or .xls)'); return }
+    if (f.size > TEMPLATE_MAX) { alert(`"${f.name}" is too big to keep in the browser (max 2 MB).`); return }
     setTemplateFile(f); setUploadingTemplate(true)
     const reader = new FileReader()
     reader.onload = ev => {
-      const data = ev.target?.result
-      if (data) {
-        // Store template in localStorage (browser-local preference, not app data)
-        localStorage.setItem('dyeflow_import_template', JSON.stringify({
-          name: f.name, data: Array.from(new Uint8Array(data as ArrayBuffer))
-        }))
+      try {
+        const bytes = new Uint8Array(ev.target?.result as ArrayBuffer)
+        let bin = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+        localStorage.setItem('dyeflow_import_template', JSON.stringify({ name: f.name, b64: btoa(bin) }))
         alert(`✓ Template "${f.name}" saved for this browser.`)
-      }
-      setUploadingTemplate(false)
+      } catch (err: any) {
+        alert('Template not saved: ' + (err?.name === 'QuotaExceededError' ? 'the browser has no room for it.' : (err?.message || 'unknown error')))
+      } finally { setUploadingTemplate(false) }
     }
+    reader.onerror = () => { setUploadingTemplate(false); alert('Could not read the file.') }
     reader.readAsArrayBuffer(f)
   }
 
   const handleDownloadSavedTemplate = () => {
-    const saved = localStorage.getItem('dyeflow_import_template')
+    let saved: string | null = null
+    try { saved = localStorage.getItem('dyeflow_import_template') } catch {}
     if (!saved) { alert('No custom template uploaded yet.'); return }
     try {
-      const { name, data } = JSON.parse(saved)
-      const blob = new Blob([new Uint8Array(data)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click()
+      const t = JSON.parse(saved)
+      // new format: base64; old format: an array of byte numbers
+      const bytes = t.b64 ? Uint8Array.from(atob(t.b64), c => c.charCodeAt(0)) : new Uint8Array(t.data || [])
+      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = t.name || 'template.xlsx'; a.click()
     } catch { alert('Failed to download template') }
   }
 
@@ -292,7 +351,13 @@ export default function ImportPage() {
               <div style={{ fontSize: 14, fontWeight: 600, color: result.failed > 0 ? '#92400E' : '#065F46' }}>
                 {result.imported} order{result.imported !== 1 ? 's' : ''} imported to Supabase
                 {result.failed > 0 && ` · ${result.failed} failed`}
+                {result.skipped > 0 && ` · ${result.skipped} skipped (already imported)`}
               </div>
+              {result.skippedList?.length > 0 && (
+                <div style={{ fontSize: 12, color: '#92400E', marginTop: 4 }}>
+                  Skipped (same party + challan no. already exists): {result.skippedList.join(' · ')}{result.skipped > result.skippedList.length ? ' …' : ''}
+                </div>
+              )}
               {result.errors?.length > 0 && (
                 <div style={{ fontSize: 12, color: '#92400E', marginTop: 4 }}>
                   Errors: {result.errors.join(' · ')}

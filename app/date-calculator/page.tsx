@@ -5,11 +5,14 @@ import { buildHolidaySet, sundayOffFrom } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchProcessList } from '@/lib/processMap'
+import { isBatchFinished } from '@/lib/batchStatus'
+import { usePageEdit } from '@/components/PageGuard'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface BatchRow {
   batchId:     string   // e.g. DYE26-0004-B1
   batchUUID:   string   // Supabase UUID
+  orderId:     string   // orders.id
   kg:          number
   color:       string
   orderNumber: string
@@ -66,6 +69,17 @@ const fromDisplay = (s: string): string => {
   return ''
 }
 
+// A typed cell is saved only when it is empty or a real date (dd/mm/yyyy):
+// half-typed values like "1/1" stay on screen (red) and are never sent.
+const validTyped = (s: string): string | null => {
+  const t = (s || '').trim()
+  if (!t) return ''
+  const ymd = fromDisplay(t)
+  if (!ymd) return null
+  const d = ymdToDate(ymd)
+  return d && dateToYMD(d) === ymd ? ymd : null
+}
+
 // Non-working days: lib/workdays.ts (Holiday Master + "Sunday is a holiday")
 
 // ── Engine helpers ────────────────────────────────────────────────────────────
@@ -90,7 +104,7 @@ function runEngine(
   capMap: Record<string, number>,
   holidaySet: Set<string>,
   todayYMD: string
-): { generated: number; pushed: number; skipped: number } {
+): { generated: number; pushed: number; skipped: number; generatedIds: string[] } {
   // loadMap: proc → { YYYY-MM-DD → kg } — tracks committed capacity
   const loadMap: Record<string, Record<string, number>> = {}
 
@@ -130,6 +144,7 @@ function runEngine(
 
   const TAIL = ['Qa', 'Packing', 'Dispatch', 'FinalDispatch']
   let generated = 0, pushed = 0, skipped = 0
+  const generatedIds: string[] = []
 
   for (const row of rows) {
     if (row.dcGeneratedOnce && !row.dcRegenerate) { skipped++; continue }
@@ -239,9 +254,10 @@ function runEngine(
     row.dcGeneratedOnce = true
     row.dcRegenerate    = false
     generated++
+    generatedIds.push(row.batchUUID)
   }
 
-  return { generated, pushed, skipped }
+  return { generated, pushed, skipped, generatedIds }
 }
 
 // ── Page Component ────────────────────────────────────────────────────────────
@@ -254,6 +270,12 @@ export default function DateCalculatorPage() {
   const [showPDModal,     setShowPDModal]     = useState(false)
   const [tempDurations,   setTempDurations]   = useState<Record<string,{days:number;capacity:string}>>({})
   const [saveStatus,      setSaveStatus]      = useState<'idle'|'saving'|'saved'>('idle')
+  const [saveError,       setSaveError]       = useState('')
+  // only ONE row shows input boxes (24 per row × every batch was very slow)
+  const [editingId,       setEditingId]       = useState<string | null>(null)
+  const [drafts,          setDrafts]          = useState<Record<string, string>>({})
+  const [generating,      setGenerating]      = useState(false)
+  const { canEdit } = usePageEdit()
   const [loadStatus,      setLoadStatus]      = useState<'loading'|'ready'|'error'>('loading')
   const pendingSaves = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
@@ -331,6 +353,7 @@ export default function DateCalculatorPage() {
         batchRows.push({
           batchId:     b.batch_id || b.id,
           batchUUID:   b.id,
+          orderId:     b.order_id || '',
           kg:          parseFloat(b.kg) || 0,
           color:       o.color || '',
           orderNumber: o.order_number || '',
@@ -354,12 +377,14 @@ export default function DateCalculatorPage() {
           .map((r: any) => r.batch_id)
           .filter(Boolean)
       )
-      // Exclude: repairing status + pending repair batches (not yet split)
-      const batchStatusMap: Record<string, string> = {}
-      for (const b of batches) batchStatusMap[b.id] = b.status
+      // Exclude: repairing status + pending repair batches (not yet split),
+      // and finished batches (done / written-off) — nothing left to plan
+      const batchById: Record<string, any> = {}
+      for (const b of batches) batchById[b.id] = b
       const filteredRows = batchRows.filter(r =>
         r.route.length > 0 &&
-        batchStatusMap[r.batchUUID] !== 'repairing' &&
+        batchById[r.batchUUID]?.status !== 'repairing' &&
+        !isBatchFinished(batchById[r.batchUUID]) &&
         !repairPendingUUIDs.has(r.batchUUID)
       )
       setRows(filteredRows)
@@ -377,28 +402,42 @@ export default function DateCalculatorPage() {
     const key = row.batchUUID
     if (pendingSaves.current[key]) clearTimeout(pendingSaves.current[key])
     pendingSaves.current[key] = setTimeout(async () => {
-      await fetch('/api/date-plans', {
+      const res = await fetch('/api/date-plans', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'upsert', batch_id: row.batchUUID, batch_id_str: row.batchId,
-          dates: row.dates, anchors: row.anchors,
+          dates: row.dates,
           dc_generated_once: row.dcGeneratedOnce, dc_regenerate: row.dcRegenerate, pushed: row.pushed,
         })
-      }).catch(() => {})
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
       delete pendingSaves.current[key]
+      if (!res.ok) setSaveError(`${row.batchId} not saved: ${res.error || 'Unknown error'}`)
+      else setSaveError(prev => prev.startsWith(row.batchId + ' ') ? '' : prev)
     }, 400)
   }, [])
 
   const handleDateChange = (rowIdx: number, proc: string, value: string) => {
+    const row0 = rows[rowIdx]; if (!row0) return
+    const dkey = `${row0.batchUUID}|${proc}`
+    const ymd = validTyped(value)
+    if (ymd === null) { setDrafts(prev => ({ ...prev, [dkey]: value })); return }   // still typing
+    setDrafts(prev => { const n = { ...prev }; delete n[dkey]; return n })
     setRows(prev => {
       const updated = [...prev]
       const row = { ...updated[rowIdx], dates: { ...updated[rowIdx].dates } }
-      const ymd = fromDisplay(value) || value
-      row.dates[proc] = ymd
+      row.dates[proc] = ymd          // '' = cleared (saved as empty)
       updated[rowIdx] = row
       persistRow(row)
       return updated
     })
+  }
+
+  // leaving a cell with a half-typed date puts the saved value back
+  const handleDateBlur = (row: BatchRow, proc: string) => {
+    const dkey = `${row.batchUUID}|${proc}`
+    if (drafts[dkey] === undefined) return
+    setDrafts(prev => { const n = { ...prev }; delete n[dkey]; return n })
+    setSaveError(`${row.batchId} ${proc}: "${drafts[dkey]}" is not a date (use dd/mm/yyyy) — not saved`)
   }
 
   const handleRegenerateToggle = (rowIdx: number, checked: boolean) => {
@@ -412,7 +451,10 @@ export default function DateCalculatorPage() {
   }
 
   // ── Generate Dates ──────────────────────────────────────────────────────────
+  // Only the rows the engine really generated are saved — in one bulk call —
+  // and the real result (saved / failed) is shown.
   const generateDates = async () => {
+    if (generating) return
     const { dayMap, capMap } = buildMaps()
     const holidaySet = buildHolidaySet(holidays, sundayOff)
     const todayYMD   = todayIST()
@@ -423,76 +465,86 @@ export default function DateCalculatorPage() {
     }))
 
     const result = runEngine(workRows, dayMap, capMap, holidaySet, todayYMD)
-    setRows(workRows)
+    const genSet = new Set(result.generatedIds)
+    const toSave = workRows.filter(r => genSet.has(r.batchUUID))
+    if (!toSave.length) {
+      alert(`Nothing to generate.\nSkipped: ${result.skipped} (already generated — tick RE-GEN to redo — or no machine anchor date yet)`)
+      return
+    }
 
-    // Save all generated rows to batch_date_plans
+    setGenerating(true)
     setSaveStatus('saving')
-    await Promise.all(workRows.map(row =>
-      fetch('/api/date-plans', {
+    try {
+      const res = await fetch('/api/date-plans', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'upsert', batch_id: row.batchUUID, batch_id_str: row.batchId,
-          dates: row.dates, anchors: row.anchors,
+        body: JSON.stringify({ action: 'bulk_upsert', rows: toSave.map(row => ({
+          batch_id: row.batchUUID, batch_id_str: row.batchId, dates: row.dates,
           dc_generated_once: row.dcGeneratedOnce, dc_regenerate: row.dcRegenerate, pushed: row.pushed,
-        })
-      }).catch(() => {})
-    ))
-
-    // Also save to orders.planned_dates
-    await savePlannedDatesToOrders(workRows, false)
-    setSaveStatus('saved')
-    setTimeout(() => setSaveStatus('idle'), 3000)
-    alert(`✓ Done!\nGenerated: ${result.generated} · Pushed: ${result.pushed} · Skipped: ${result.skipped}`)
+        })) })
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      if (!res.ok) {
+        setSaveStatus('idle')
+        alert('Generated dates were NOT saved: ' + (res.error || 'Unknown error') + '\nNothing was changed — try again.')
+        return
+      }
+      setRows(workRows)
+      // the orders' planned dates follow (only the orders of these batches)
+      const ord = await savePlannedDatesToOrders(toSave, false)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+      alert(`✓ Generated and saved: ${result.generated} batch(es)` +
+        (result.pushed ? ` (${result.pushed} pushed forward from today)` : '') +
+        `\nSkipped: ${result.skipped}` +
+        (ord.error ? `\n\n⚠ Orders' planned dates not saved: ${ord.error}` : `\nOrders updated: ${ord.updated}`))
+    } finally {
+      setGenerating(false)
+    }
   }
 
   // ── Save to orders ──────────────────────────────────────────────────────────
-  const savePlannedDatesToOrders = async (sourceRows = rows, showAlert = true) => {
+  // orders.planned_dates = for each process the LATEST date over the order's
+  // batches (the order is ready for a step when its last batch is); Dispatch
+  // = the latest date of all when no batch has its own Dispatch date.
+  const savePlannedDatesToOrders = async (sourceRows = rows, showAlert = true): Promise<{ updated: number; error: string }> => {
     setSaveStatus('saving')
     try {
-      const orderPlans: Record<string,Record<string,string>> = {}
-      for (const row of sourceRows) {
-        const orderId = rows.find(r => r.batchId === row.batchId)?.batchUUID || ''
-        // We need order ID — get from batch lookup
-      }
-
-      // Simpler: group by orderNumber from rows
-      const orderMap: Record<string, string> = {}
+      const touched = new Set(sourceRows.map(r => r.orderId).filter(Boolean))
       const orderPlanMap: Record<string, Record<string,string>> = {}
-      for (const row of sourceRows) {
-        if (!row.dates || !Object.keys(row.dates).length) continue
-        // Find order UUID via orderNumber — we'll use a fresh fetch
-      }
-
-      // Fetch orders to get IDs
-      const oRes = await fetch('/api/orders', { cache:'no-store' }).then(r=>r.json())
-      for (const o of (oRes.data || [])) orderMap[o.order_number] = o.id
-
-      for (const row of sourceRows) {
-        const oId = orderMap[row.orderNumber]; if (!oId) continue
-        if (!orderPlanMap[oId]) orderPlanMap[oId] = {}
+      // every batch of each touched order (not only the ones just generated)
+      const latest = new Map(sourceRows.map(r => [r.batchUUID, r]))
+      const all = rows.map(r => latest.get(r.batchUUID) || r)
+      for (const r of sourceRows) if (!rows.some(x => x.batchUUID === r.batchUUID)) all.push(r)
+      for (const row of all) {
+        if (!touched.has(row.orderId)) continue
+        const plan = orderPlanMap[row.orderId] || (orderPlanMap[row.orderId] = {})
         for (const [proc, ymd] of Object.entries(row.dates)) {
-          if (ymd) orderPlanMap[oId][proc] = ymd
+          if (ymd && (!plan[proc] || ymd > plan[proc])) plan[proc] = ymd
         }
-        if (!orderPlanMap[oId]['Dispatch']) {
-          const isos = Object.values(orderPlanMap[oId]).filter(Boolean).sort()
-          if (isos.length) orderPlanMap[oId]['Dispatch'] = isos[isos.length-1]
+      }
+      for (const plan of Object.values(orderPlanMap)) {
+        if (!plan['Dispatch']) {
+          const isos = Object.values(plan).filter(Boolean).sort()
+          if (isos.length) plan['Dispatch'] = isos[isos.length-1]
         }
       }
 
-      const updates = Object.entries(orderPlanMap).map(([id, planned_dates]) => ({ id, planned_dates }))
-      if (!updates.length) { if (showAlert) alert('No planned dates to save.'); return }
+      const updates = Object.entries(orderPlanMap)
+        .filter(([, planned_dates]) => Object.keys(planned_dates).length)
+        .map(([id, planned_dates]) => ({ id, planned_dates }))
+      if (!updates.length) { setSaveStatus('idle'); if (showAlert) alert('No planned dates to save.'); return { updated: 0, error: '' } }
 
-      const res = await fetch('/api/orders', {
+      const data = await fetch('/api/orders', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update_planned_dates', updates })
-      })
-      const data = await res.json()
+      }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
       if (!data.ok) throw new Error(data.error || 'Save failed')
       setSaveStatus('saved')
       if (showAlert) alert(`✅ Saved planned dates to ${updates.length} orders.`)
+      return { updated: updates.length, error: '' }
     } catch (err: any) {
       setSaveStatus('idle')
       if (showAlert) alert('Save failed: ' + err.message)
+      return { updated: 0, error: err.message }
     }
   }
 
@@ -503,6 +555,7 @@ export default function DateCalculatorPage() {
 
     const selectedRows = rows.filter(r => selectedBatches.has(r.batchId))
     let cleared = 0
+    const failed: string[] = []
 
     await Promise.all(selectedRows.map(async row => {
       // Steps 1–3 in ONE server step (df_clear_dc_plan): the Date Calculator
@@ -512,8 +565,8 @@ export default function DateCalculatorPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'clear_dc_plan', id: row.batchUUID })
       })
-      const d1 = await res1.json()
-      if (!d1.ok) console.error('Failed to clear batches:', d1.error)
+      const d1 = await res1.json().catch(() => ({ ok: false, error: 'Network error' }))
+      if (!d1.ok) { failed.push(`${row.batchId}: ${d1.error}`); return }
 
       // Step 4: Clear batch_date_plans d_* columns directly via Supabase API
       // Use update_anchors action but with empty dates to reset dc flags
@@ -521,15 +574,16 @@ export default function DateCalculatorPage() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'clear', batch_id: row.batchUUID })
       })
-      const d2 = await res2.json()
-      if (!d2.ok) console.error('Failed to clear date-plans:', d2.error)
+      const d2 = await res2.json().catch(() => ({ ok: false, error: 'Network error' }))
+      if (!d2.ok) { failed.push(`${row.batchId}: ${d2.error}`); return }
 
       cleared++
     }))
 
     setSelectedBatches(new Set())
     await loadData()
-    alert(`✓ Cleared Date Calculator dates for ${cleared} batch(es).`)
+    alert(`✓ Cleared Date Calculator dates for ${cleared} batch(es).` +
+      (failed.length ? `\n\n⚠ ${failed.length} not cleared:\n` + failed.slice(0, 8).join('\n') : ''))
   }
 
   // ── Process Days modal ──────────────────────────────────────────────────────
@@ -549,11 +603,12 @@ export default function DateCalculatorPage() {
       days: Math.max(1, tempDurations[c]?.days || 1),
       capacity: tempDurations[c]?.capacity ? parseFloat(tempDurations[c].capacity) : undefined,
     }))
-    setProcessDurations(newDurations)
-    await fetch('/api/setup/settings', {
+    const res = await fetch('/api/setup/settings', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ key:'processDurations', value: newDurations })
-    })
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    if (!res.ok) { alert('Process days NOT saved: ' + (res.error || 'Unknown error')); return }
+    setProcessDurations(newDurations)
     setShowPDModal(false)
     alert('✓ Process days saved!')
   }
@@ -589,14 +644,14 @@ export default function DateCalculatorPage() {
             </span>
           </span>
           <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-            <button className="small success" onClick={generateDates}>⚙ Generate Dates</button>
-            <button className="small"
+            <button className="small success edit-only" onClick={generateDates} disabled={generating}>{generating ? '⏳ Generating…' : '⚙ Generate Dates'}</button>
+            <button className="small edit-only"
               style={{ background: saveStatus==='saved'?'#1D9E75':'var(--accent)', color:'#fff', border:'none', fontWeight:600 }}
               onClick={() => savePlannedDatesToOrders(rows, true)}>
               {saveStatus==='saving'?'⏳ Saving…':saveStatus==='saved'?'✓ Saved':'⬇ Save to Orders'}
             </button>
-            <button className="small primary" onClick={openProcessDaysModal}>Process Days</button>
-            <button className="small"
+            <button className="small primary edit-only" onClick={openProcessDaysModal}>Process Days</button>
+            <button className="small edit-only"
               style={{ background: selectedBatches.size>0?'#DC2626':'#E5E7EB', color: selectedBatches.size>0?'white':'#9CA3AF', border:'none' }}
               onClick={handleClearSelected}>
               Clear Selected ({selectedBatches.size})
@@ -606,8 +661,14 @@ export default function DateCalculatorPage() {
         </div>
 
         <div style={{ fontSize:11, color:'var(--text-tertiary)', padding:'3px 16px', flexShrink:0, background:'var(--bg-secondary)' }}>
-          Anchor dates (S/D) come from machine sheet · Generate Dates calculates all process dates · Save pushes to orders
+          Anchor dates (S/D) come from machine sheet · Generate Dates calculates all process dates · Save pushes to orders · Click a row's dates to edit them (dd/mm/yyyy) · Finished batches are hidden
         </div>
+        {saveError && (
+          <div style={{ fontSize:12, color:'#991B1B', background:'#FEE2E2', padding:'6px 16px', flexShrink:0, display:'flex', justifyContent:'space-between' }}>
+            <span>⚠ {saveError}</span>
+            <button className="xs" onClick={() => setSaveError('')}>✕</button>
+          </div>
+        )}
 
         {/* Table */}
         {rows.length === 0 ? (
@@ -664,13 +725,22 @@ export default function DateCalculatorPage() {
                         const ymd = row.dates[pc] || ''
                         const display = ymd ? toDisplay(ymd) : ''
                         const isAnchorProc = ANCHOR_PROCS.includes(pc)
+                        const editing = editingId === row.batchUUID
+                        const draft = drafts[`${row.batchUUID}|${pc}`]
                         return (
                           <td key={pc} style={{ padding:0, borderRight:'1px solid #E5E7EB',
-                            background: display ? (isAnchorProc?'#DBEAFE':'#F0FDF4') : '' }}>
-                            <input type="text" value={display}
-                              onChange={e => handleDateChange(idx, pc, e.target.value)}
-                              style={{ width:'100%', minWidth:100, height:32, border:0, background:'transparent',
-                                padding:'2px 6px', fontSize:11, textAlign:'center', outline:'none' }} />
+                            background: draft !== undefined ? '#FEE2E2' : display ? (isAnchorProc?'#DBEAFE':'#F0FDF4') : '' }}
+                            onClick={editing || !canEdit ? undefined : () => setEditingId(row.batchUUID)}>
+                            {editing ? (
+                              <input type="text" value={draft ?? display} placeholder="dd/mm/yyyy"
+                                onChange={e => handleDateChange(idx, pc, e.target.value)}
+                                onBlur={() => handleDateBlur(row, pc)}
+                                style={{ width:'100%', minWidth:100, height:32, border:0, background:'transparent',
+                                  padding:'2px 6px', fontSize:11, textAlign:'center', outline:'none' }} />
+                            ) : (
+                              <div title="Click to edit this row" style={{ minWidth:100, height:32, lineHeight:'32px', padding:'0 6px',
+                                fontSize:11, textAlign:'center', cursor:'text' }}>{display}</div>
+                            )}
                           </td>
                         )
                       })}

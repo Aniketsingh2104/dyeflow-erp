@@ -260,32 +260,31 @@ export default function OrdersPage() {
     if (!act || selectedIds.size === 0) return
     setSaving(true)
     const ids = Array.from(selectedIds)
+    const numOf = (id: string) => orders.find(o => o.id === id)?.order_number || id
+    // Every call's real result is counted — a failed save is never shown as done
+    const report = (label: string, results: { id: string; error: string | null }[]) => {
+      const failed = results.filter(r => r.error)
+      const okN = results.length - failed.length
+      if (!failed.length) { showToast(`✓ ${label}: ${okN} order${okN !== 1 ? 's' : ''}`); return }
+      const lines = failed.slice(0, 8).map(f => `• ${numOf(f.id)} — ${f.error}`).join('\n')
+      alert(`${label}: ${okN} done, ${failed.length} failed\n\n${lines}${failed.length > 8 ? `\n…and ${failed.length - 8} more` : ''}`)
+    }
+    const each = async (list: string[], fn: (id: string) => Promise<{ error: string | null }>) =>
+      Promise.all(list.map(async id => ({ id, error: (await fn(id)).error })))
     try {
       if (act === 'delete') {
-        await Promise.all(ids.map(id => deleteOrder(id)))
-        showToast(`✓ ${ids.length} order${ids.length !== 1 ? 's' : ''} deleted`)
+        report('Deleted', await each(ids, id => deleteOrder(id)))
       } else if (act === 'assign' && bulkSupervisor) {
         const sup = supervisors.find(s => s.name === bulkSupervisor)
-        if (sup) {
-          await Promise.all(ids.map(id => apiAssignSupervisor(id, sup.id)))
-          showToast(`✓ ${ids.length} orders assigned to ${bulkSupervisor}`)
-        }
-      } else if (act === 'status' && bulkStatus) {
-        await bulkUpdateOrders(ids, { status: bulkStatus })
-        showToast(`✓ Status updated to ${bulkStatus}`)
+        if (sup) report(`Assigned to ${bulkSupervisor}`, await each(ids, id => apiAssignSupervisor(id, sup.id)))
       } else if (act === 'hold') {
-        await bulkUpdateOrders(ids, { status: 'hold', hold_approval: 'Hold', hold_reason: bulkHoldReason || null })
-        showToast(`✓ ${ids.length} orders put on hold`)
+        const r = await bulkUpdateOrders(ids, { status: 'hold', hold_approval: 'Hold', hold_reason: bulkHoldReason || null })
+        if (r.error) alert('Hold not saved: ' + r.error)
+        else showToast(`✓ ${ids.length} order${ids.length !== 1 ? 's' : ''} put on hold`)
       } else if (act === 'unhold') {
-        await Promise.all(
-          ids
-            .filter(id => orders.find(o => o.id === id)?.status === 'hold')
-            .map(id => {
-              const o = orders.find(x => x.id === id)
-              return updateOrderStatus(id, o?.supervisor_id ? 'assigned' : 'new')
-            })
-        )
-        showToast('✓ Hold released')
+        const held = ids.filter(id => orders.find(o => o.id === id)?.status === 'hold')
+        if (!held.length) showToast('None of the selected orders is on hold')
+        else report('Hold released', await each(held, id => updateOrderStatus(id, 'release')))
       }
     } finally {
       setSaving(false)
@@ -309,15 +308,24 @@ export default function OrdersPage() {
     const [moved] = reordered.splice(dragIdx, 1)
     reordered.splice(dragOver, 0, moved)
     setDragIdx(null); setDragOver(null)
+    // show the new order straight away; the server then numbers it (one call)
+    const pos = new Map(reordered.map((o, i) => [o.id, i]))
+    const slots = orders.map((o, i) => pos.has(o.id) ? i : -1).filter(i => i >= 0)
     setOrders(prev => {
       const next = [...prev]
-      reordered.forEach((o, idx) => {
-        const fi = next.findIndex(x => x.id === o.id)
-        if (fi !== -1) next[fi] = { ...next[fi], priority: idx }
-      })
+      slots.forEach((slot, k) => { next[slot] = reordered[k] })
       return next
     })
-    await Promise.all(reordered.map((o, idx) => updateOrder(o.id, { priority: idx })))
+    setSaving(true)
+    try {
+      const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reorder', ids: reordered.map(o => o.id) }) })
+        .then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      if (!res.ok) alert('Priority not saved: ' + (res.error || 'Unknown error'))
+    } finally {
+      setSaving(false)
+      loadAll()
+    }
   }
 
   // ── Modal openers ───────────────────────────────────────────────────────────
@@ -619,17 +627,17 @@ export default function OrdersPage() {
           <option value="all">All Articles</option>
           {uniqueArticles.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
-        <button onClick={() => router.push('/import')}
+        <button className="edit-only" onClick={() => router.push('/import')}
           style={{ padding: '6px 12px', fontSize: 12, border: '1px solid var(--border-medium)',
             borderRadius: 5, background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer' }}>
           📄 Import Excel
         </button>
-        <button onClick={openNewModal}
+        <button className="edit-only" onClick={openNewModal}
           style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none',
             borderRadius: 5, background: 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
           + New Order
         </button>
-        <button onClick={() => setPriorityMode(m => !m)}
+        <button className="edit-only" onClick={() => setPriorityMode(m => !m)}
           style={{ padding: '6px 12px', fontSize: 12, fontWeight: priorityMode ? 700 : 500,
             border: `1px solid ${priorityMode ? 'var(--purple)' : 'var(--border-medium)'}`,
             borderRadius: 5,
@@ -655,7 +663,7 @@ export default function OrdersPage() {
 
       {/* ── Bulk action bar ── */}
       {someSelected && (
-        <div style={{ flexShrink: 0, background: 'var(--accent-light)',
+        <div className="edit-only" style={{ flexShrink: 0, background: 'var(--accent-light)',
           border: '1px solid var(--accent)', borderRadius: 8, padding: '8px 14px',
           marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>
@@ -669,9 +677,6 @@ export default function OrdersPage() {
           <button className="small" style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
             onClick={() => { setBulkAction('assign'); setShowBulkModal(true) }}>
             👤 Assign Supervisor
-          </button>
-          <button className="small" onClick={() => { setBulkAction('status'); setShowBulkModal(true) }}>
-            📦 Change Status
           </button>
           <button className="small danger" onClick={() => { setBulkAction('hold'); setShowBulkModal(true) }}>
             ⏸ Put on Hold
@@ -873,14 +878,14 @@ export default function OrdersPage() {
                           <span title="Drag to reorder"
                             style={{ cursor: 'grab', fontSize: 16, color: 'var(--purple)', padding: '0 4px' }}>⠿</span>
                         )}
-                        {typeof order.priority === 'number' && (
+                        {typeof order.priority === 'number' && order.priority > 0 && (
                           <span style={{ fontSize: 10, fontWeight: 700,
                             background: 'var(--purple-light)', color: 'var(--purple)',
-                            padding: '2px 6px', borderRadius: 10 }}>#{order.priority + 1}</span>
+                            padding: '2px 6px', borderRadius: 10 }}>#{order.priority}</span>
                         )}
                         <button className="xs" onClick={() => openViewModal(order)}>View</button>
-                        <button className="xs" onClick={() => openEditModal(order)}>Edit</button>
-                        <button className="xs primary" onClick={() => openAssignModal(order)}>
+                        <button className="xs edit-only" onClick={() => openEditModal(order)}>Edit</button>
+                        <button className="xs primary edit-only" onClick={() => openAssignModal(order)}>
                           {order.supervisor_id ? 'Re-assign' : 'Assign'}
                         </button>
                         {order.supervisor_id && (order.process_route || []).length > 0 && (() => {
@@ -895,8 +900,8 @@ export default function OrdersPage() {
                             </span>
                           )
                           return (<>
-                            <button className="xs primary" onClick={() => openSplitModal(order)}>Split</button>
-                            <button className="xs"
+                            <button className="xs primary edit-only" onClick={() => openSplitModal(order)}>Split</button>
+                            <button className="xs edit-only"
                               style={{ background: '#7C3AED', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
                               onClick={() => doFullSplit(order)}
                               disabled={saving}>
@@ -1008,9 +1013,9 @@ export default function OrdersPage() {
             <div className="modal-header">
               <span className="modal-title">Order — {selectedOrder.order_number}</span>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="small primary" onClick={() => openEditModal(selectedOrder)}>Edit</button>
+                <button className="small primary edit-only" onClick={() => openEditModal(selectedOrder)}>Edit</button>
                 {!selectedOrder.supervisor_id && (
-                  <button className="small primary" onClick={() => openAssignModal(selectedOrder)}>{selectedOrder.supervisor_id ? 'Re-assign' : 'Assign'}</button>
+                  <button className="small primary edit-only" onClick={() => openAssignModal(selectedOrder)}>{selectedOrder.supervisor_id ? 'Re-assign' : 'Assign'}</button>
                 )}
                 <button className="small" onClick={() => setModal(null)}>✕</button>
               </div>
@@ -1092,7 +1097,6 @@ export default function OrdersPage() {
             <div className="modal-header">
               <span className="modal-title">
                 {bulkAction === 'assign' && '👤 Assign Supervisor'}
-                {bulkAction === 'status' && '📦 Change Status'}
                 {bulkAction === 'hold'   && '⏸ Put on Hold'}
                 {bulkAction === 'delete' && '🗑 Delete Orders'}
               </span>
@@ -1119,17 +1123,6 @@ export default function OrdersPage() {
               </div>
             )}
 
-            {bulkAction === 'status' && (
-              <div className="form-group" style={{ marginBottom: 14 }}>
-                <label>New Status *</label>
-                <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)}>
-                  <option value="">— Choose —</option>
-                  {Object.entries(STATUS_MAP).map(([v, b]) =>
-                    <option key={v} value={v}>{b.label}</option>)}
-                </select>
-              </div>
-            )}
-
             {bulkAction === 'hold' && (
               <div className="form-group" style={{ marginBottom: 14 }}>
                 <label>Hold Reason (optional)</label>
@@ -1143,7 +1136,7 @@ export default function OrdersPage() {
               <div style={{ background: 'var(--danger-light)', border: '1px solid var(--danger)',
                 borderRadius: 8, padding: '12px 14px', marginBottom: 14,
                 fontSize: 12, color: 'var(--danger)' }}>
-                ⚠ This cannot be undone. All batches and planned dates will also be deleted.
+                ⚠ This cannot be undone. Only an order whose batches haven't started can be deleted — its waiting batches and planned dates go with it. Others are refused and listed.
               </div>
             )}
 
@@ -1156,8 +1149,7 @@ export default function OrdersPage() {
                   padding: '8px 14px', borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 13,
                 } : {}}
                 disabled={saving
-                  || (bulkAction === 'assign' && !bulkSupervisor)
-                  || (bulkAction === 'status' && !bulkStatus)}
+                  || (bulkAction === 'assign' && !bulkSupervisor)}
                 onClick={() => applyBulk()}>
                 {saving ? 'Working…'
                   : bulkAction === 'delete' ? `🗑 Delete ${selectedIds.size}`

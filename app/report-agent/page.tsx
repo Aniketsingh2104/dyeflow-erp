@@ -232,14 +232,7 @@ export default function ReportAgentPage() {
 
   const getDb = (): DbSnapshot => {
     if (db) return db
-    // Fallback to localStorage
-    if (typeof window !== 'undefined') {
-      const raw = localStorage.getItem('dyeflow_db')
-      if (raw) {
-        const d = JSON.parse(raw)
-        return { orders: d.orders || [], fobRecords: d.fobRecords || [], faultyRecords: d.faultyRecords || [], machines: d.machines || [], supervisors: d.supervisors || [], processList: d.processList || [] }
-      }
-    }
+    // (no browser copy any more — until the snapshot has loaded there is no data)
     return { orders: [], fobRecords: [], faultyRecords: [], machines: [], supervisors: [], processList: [] }
   }
 

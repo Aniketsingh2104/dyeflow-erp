@@ -5,18 +5,18 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import GlobalSearch from '@/components/GlobalSearch'
 import { DarkModeToggle, NotificationCenter, KeyboardShortcuts } from '@/components/AppShell'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
+import { pageAccess, machinePaths } from '@/lib/pageAccess'
+import { isBatchFinished } from '@/lib/batchStatus'
 
-function canViewPath(path: string, userPerms: Record<string, any> | null, admin: boolean): boolean {
+// same matching as the server (lib/pageAccess.ts) — a machine sheet counts by
+// its id or by its name slug (what User Management stores)
+function canViewPath(item: NavItem, userPerms: Record<string, any> | null, admin: boolean): boolean {
   if (admin) return true
   if (!userPerms) return false   // fail closed: non-admin with no permissions sees nothing
-  if (userPerms[path]) return !!userPerms[path].view
-  for (const key of Object.keys(userPerms)) {
-    if (path.startsWith(key + '/') || key.startsWith(path + '/')) return !!userPerms[key].view
-  }
-  return false
+  return pageAccess(userPerms, item.aliases?.length ? item.aliases : [item.path], false).view
 }
 
-interface NavItem  { name: string; path: string; adminOnly?: boolean }
+interface NavItem  { name: string; path: string; adminOnly?: boolean; aliases?: string[] }
 interface NavSection { label: string; items: NavItem[] }
 
 export default function Navigation() {
@@ -52,7 +52,8 @@ export default function Navigation() {
         fetch('/api/machines',    { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/processes',   { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/supervisors', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
+        // only the few fields the counts need, only unfinished batches
+        fetch('/api/batches?active=1&fields=light', { cache: 'no-store' }).then(r => r.json()),
       ])
 
       // Machines nav items
@@ -61,6 +62,7 @@ export default function Navigation() {
         machineList.map((m: any) => ({
           name: m.name,
           path: `/machines/${m.id}`,   // use UUID, not name slug
+          aliases: machinePaths(m),
         }))
       )
 
@@ -68,7 +70,7 @@ export default function Navigation() {
       const activeBatchesPerProcess: Record<string, number> = {}
       for (const b of (bRes.data || [])) {
         const code = b.current_process
-        if (code && b.status !== 'done') {
+        if (code && !isBatchFinished(b)) {
           activeBatchesPerProcess[code] = (activeBatchesPerProcess[code] || 0) + 1
         }
       }
@@ -121,12 +123,15 @@ export default function Navigation() {
   useEffect(() => {
     loadUserPerms()
     loadDynamic()
-    const handle = () => { loadUserPerms(); loadDynamic() }
-    window.addEventListener('storage', handle)
-    window.addEventListener('dyeflow-db-updated', handle)
+    // 'storage' fires on every page change (the signed-in user is re-read) —
+    // that only needs the permissions; the counts reload when data changes
+    const onUser = () => loadUserPerms()
+    const onData = () => { loadUserPerms(); loadDynamic() }
+    window.addEventListener('storage', onUser)
+    window.addEventListener('dyeflow-db-updated', onData)
     return () => {
-      window.removeEventListener('storage', handle)
-      window.removeEventListener('dyeflow-db-updated', handle)
+      window.removeEventListener('storage', onUser)
+      window.removeEventListener('dyeflow-db-updated', onData)
     }
   }, [loadUserPerms, loadDynamic])
 
@@ -148,7 +153,7 @@ export default function Navigation() {
 
   const filterItems = (items: NavItem[]): NavItem[] => {
     if (userIsAdmin) return items
-    return items.filter(item => canViewPath(item.path, userPerms, userIsAdmin))
+    return items.filter(item => canViewPath(item, userPerms, userIsAdmin))
   }
 
   const sections: NavSection[] = [
@@ -266,7 +271,6 @@ export default function Navigation() {
         { name: 'Holiday Master', path: '/setup/holiday-master' },
       ]
     },
-    { label: 'PC', items: [{ name: 'PC Overview', path: '/pc' }] },
   ]
 
   const isActive = (path: string) => pathname === path

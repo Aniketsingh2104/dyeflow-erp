@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { dbSelect, dbInsert, dbUpdate, sb } from '@/lib/supabase'
+import { dbSelect, dbSelectAll, dbInsert, dbUpdate, sb } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'lab', 'GET'); if (g.deny) return g.deny }
@@ -57,6 +57,24 @@ export async function GET(req: NextRequest) {
   })
 }
 
+// Lab ids (LAB-IND-001, LR-0001, ISSUE-0001) are handed out HERE: the next
+// number after the highest one in the table, and if two saves pick the same
+// number at once the second simply takes the next one (it used to be worked
+// out in the browser — a clash failed with "duplicate" or lost the issue).
+async function insertWithNextId(table: string, prefix: string, width: number, row: Record<string, any>) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { data: ids, error: e1 } = await dbSelectAll<any>(table, { id: `like.${prefix}*` }, 'id')
+    if (e1) return { data: null, error: e1, id: '' }
+    const max = Math.max(0, ...(ids || []).map((x: any) => parseInt(String(x.id).slice(prefix.length).replace(/\D/g, ''), 10) || 0))
+    const id = prefix + String(max + 1).padStart(width, '0')
+    const { data, error } = await dbInsert(table, { ...row, id })
+    if (!error) return { data, error: null, id }
+    if (!/duplicate|already exists/i.test(error)) return { data: null, error, id: '' }
+    await new Promise(r => setTimeout(r, 20 + Math.random() * 80))   // someone took it — read again
+  }
+  return { data: null, error: 'Could not get a free number — please try again.', id: '' }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json()
   { const g = await guard(req, 'lab', (body as any)?.action); if (g.deny) return g.deny }
@@ -65,8 +83,7 @@ export async function POST(req: NextRequest) {
   // ── Indents ──────────────────────────────────────────────────────────────
 
   if (action === 'create_indent') {
-    const { data, error } = await dbInsert('lab_indents', {
-      id,
+    const { data, error, id: newId } = await insertWithNextId('lab_indents', 'LAB-IND-', 3, {
       unit:              payload.unit,
       party_name:        payload.partyName,
       quality:           payload.quality,
@@ -81,7 +98,7 @@ export async function POST(req: NextRequest) {
       closed:            false,
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, data })
+    return NextResponse.json({ ok: true, data, id: newId })
   }
 
   if (action === 'update_indent') {
@@ -106,8 +123,7 @@ export async function POST(req: NextRequest) {
   // ── Requests ──────────────────────────────────────────────────────────────
 
   if (action === 'create_request') {
-    const { data, error } = await dbInsert('lab_requests', {
-      id,
+    const { data, error, id: newId } = await insertWithNextId('lab_requests', 'LR-', 4, {
       indent_id:                payload.indentId || null,
       unit:                     payload.unit || null,
       party:                    payload.party || null,
@@ -124,7 +140,7 @@ export async function POST(req: NextRequest) {
       recheck_remark:           payload.recheckRemark || null,
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, data })
+    return NextResponse.json({ ok: true, data, id: newId })
   }
 
   // Two independent confirmations — request only moves to FMS (confirmed=true)
@@ -172,15 +188,17 @@ export async function POST(req: NextRequest) {
   // ── Issues ────────────────────────────────────────────────────────────────
 
   if (action === 'create_issue') {
-    const { data, error } = await dbInsert('lab_issues', {
-      id,
+    if (!payload.requestId || !String(payload.description || '').trim()) {
+      return NextResponse.json({ ok: false, error: 'requestId and description required' }, { status: 400 })
+    }
+    const { data, error, id: newId } = await insertWithNextId('lab_issues', 'ISSUE-', 4, {
       request_id:  payload.requestId,
       description: payload.description,
       priority:    payload.priority || 'Medium',
       solved:      false,
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, data })
+    return NextResponse.json({ ok: true, data, id: newId })
   }
 
   if (action === 'toggle_issue') {

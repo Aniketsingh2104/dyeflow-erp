@@ -51,89 +51,52 @@ export default function GlobalSearch() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // searched in the database (app/api/search), a moment after typing stops
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const seq = useRef(0)
   const search = (q: string) => {
     setQuery(q)
-    if (!q.trim()) { setResults([]); return }
-
-    const raw = localStorage.getItem('dyeflow_db')
-    if (!raw) return
-    const db = JSON.parse(raw)
-    const term = q.toLowerCase().trim()
-    const found: SearchResult[] = []
-
-    const statusColors: Record<string, string> = {
-      new: '#EF9F27', assigned: '#185FA5', 'in-process': '#185FA5',
-      done: '#1D9E75', hold: '#A32D2D', splitting: '#3C3489'
-    }
-
-    // Orders
-    ;(db.orders || []).forEach((o: any) => {
-      const haystack = [o.orderNumber, o.party, o.color, o.article, o.supervisor, o.challanNo, o.lotNo, o.labNo]
-        .join(' ').toLowerCase()
-      if (haystack.includes(term)) {
-        found.push({
-          type: 'order', id: o.id,
-          title: `${o.orderNumber || 'No #'} — ${o.party || '?'}`,
-          subtitle: `${o.article || ''} · ${o.color || ''} · ${o.qtyKg || '?'} Kg`,
-          path: '/orders',
-          badge: o.status || 'new',
-          badgeColor: statusColors[o.status] || '#888'
-        })
+    if (timer.current) clearTimeout(timer.current)
+    if (q.trim().length < 2) { seq.current++; setResults([]); return }   // a search still on its way is dropped
+    timer.current = setTimeout(async () => {
+      const mine = ++seq.current
+      const j = await fetch('/api/search?q=' + encodeURIComponent(q.trim()), { cache: 'no-store' })
+        .then(r => r.json()).catch(() => null)
+      if (mine !== seq.current || !j?.ok) return     // a newer search is on its way
+      const statusColors: Record<string, string> = {
+        new: '#EF9F27', assigned: '#185FA5', 'in-process': '#185FA5', pending: '#888',
+        done: '#1D9E75', hold: '#A32D2D', splitting: '#3C3489', faulty: '#DC2626', 'written-off': '#6B7280',
       }
-    })
-
-    // Batches
-    ;(db.orders || []).forEach((o: any) => {
-      ;(o.splits || []).forEach((b: any) => {
-        if ((b.batchId || '').toLowerCase().includes(term)) {
-          found.push({
-            type: 'batch', id: b.batchId,
-            title: `Batch ${b.batchId}`,
-            subtitle: `Order ${o.orderNumber} · ${o.party} · ${b.kg} Kg`,
-            path: '/batches',
-            badge: b.status || 'pending',
-            badgeColor: statusColors[b.status] || '#888'
-          })
-        }
+      const d = j.data || {}
+      const found: SearchResult[] = []
+      for (const o of d.orders || []) found.push({
+        type: 'order', id: o.id,
+        title: `${o.order_number || 'No #'} — ${o.party || '?'}`,
+        subtitle: `${o.article || ''} · ${o.color || ''} · ${o.qty_kg ?? '?'} Kg${o.supervisors?.name ? ' · ' + o.supervisors.name : ''}`,
+        path: '/orders', badge: o.status || 'new', badgeColor: statusColors[o.status] || '#888',
       })
-    })
-
-    // Machines
-    ;(db.machines || []).forEach((m: any) => {
-      if ((m.name || m.id || '').toLowerCase().includes(term)) {
-        found.push({
-          type: 'machine', id: m.id,
-          title: m.name || m.id,
-          subtitle: `Capacity: ${m.capacity} Kg · ${m.status || 'idle'}`,
-          path: `/machines/${(m.id || '').toLowerCase().replace(/\s+/g, '-')}`,
-          badge: m.status || 'idle',
-          badgeColor: m.status === 'running' ? '#1D9E75' : '#888'
-        })
-      }
-    })
-
-    // Supervisors
-    ;(db.supervisors || []).forEach((s: any) => {
-      if ((s.name || '').toLowerCase().includes(term)) {
-        const supOrders = (db.orders || []).filter((o: any) =>
-          (o.supervisor || '').toLowerCase() === (s.name || '').toLowerCase()
-        )
-        found.push({
-          type: 'supervisor', id: s.id,
-          title: s.name,
-          subtitle: `${supOrders.length} orders · ${supOrders.filter((o: any) => o.status === 'assigned').length} in inbox`,
-          path: `/supervisor/${encodeURIComponent(s.id || s.name)}`,
-          badge: 'supervisor',
-          badgeColor: '#3C3489'
-        })
-      }
-    })
-
-    setResults(found.slice(0, 12))
-    setSelected(0)
+      for (const b of d.batches || []) found.push({
+        type: 'batch', id: b.id,
+        title: `Batch ${b.batch_id}`,
+        subtitle: `${b.kg ?? '?'} Kg${b.current_process ? ' · at ' + b.current_process : ''}`,
+        path: '/batches/search', badge: b.status || 'pending', badgeColor: statusColors[b.status] || '#888',
+      })
+      for (const m of d.machines || []) found.push({
+        type: 'machine', id: m.id, title: m.name,
+        subtitle: `${m.machine_type || 'Machine'}${parseFloat(m.capacity) ? ' · ' + m.capacity + ' Kg' : ''}`,
+        path: `/machines/${m.id}`, badge: 'machine', badgeColor: '#888',
+      })
+      for (const sp of d.supervisors || []) found.push({
+        type: 'supervisor', id: sp.id, title: sp.name, subtitle: 'Supervisor inbox',
+        path: `/supervisor/${encodeURIComponent(sp.id)}`, badge: 'supervisor', badgeColor: '#3C3489',
+      })
+      setResults(found.slice(0, 16))
+      setSelected(0)
+    }, 250)
   }
 
   const navigate = (path: string) => {
+    seq.current++
     router.push(path)
     setOpen(false)
     setQuery('')

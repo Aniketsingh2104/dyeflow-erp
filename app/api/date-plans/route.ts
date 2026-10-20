@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { dbSelect, dbUpsert } from '@/lib/supabase'
+import { dbSelect, dbUpsert, sb } from '@/lib/supabase'
 import { DATE_COL, dateColFor, anchorColFor } from '@/lib/processCodes'
 
 // Process code → column mapping lives in lib/processCodes.ts (one standard:
@@ -56,13 +56,57 @@ export async function POST(req: NextRequest) {
       if (dates) {
         for (const [proc, isoDate] of Object.entries(dates)) {
           const col = dateColFor(proc)
-          if (col) row[col] = isoDate || null
+          if (!col) continue
+          const v = String(isoDate || '').slice(0, 10)
+          if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            return NextResponse.json({ ok: false, error: `"${isoDate}" is not a date (expected yyyy-mm-dd)` }, { status: 400 })
+          }
+          row[col] = v || null
         }
       }
 
       const { data, error } = await dbUpsert('batch_date_plans', row, 'batch_id')
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
       return NextResponse.json({ ok: true, data })
+    }
+
+    // ── Generate Dates: many rows in one call ─────────────────────────────
+    // rows = [{ batch_id, batch_id_str, dates, dc_generated_once, dc_regenerate, pushed }]
+    // Every row carries the same columns (all date columns + flags), so the
+    // whole list is ONE upsert — all saved or none. Anchors are never touched.
+    if (action === 'bulk_upsert') {
+      const list: any[] = Array.isArray(body.rows) ? body.rows : []
+      if (!list.length) return NextResponse.json({ ok: false, error: 'rows required' }, { status: 400 })
+      if (list.length > 2000) return NextResponse.json({ ok: false, error: 'Too many rows at once (max 2000)' }, { status: 400 })
+      const dateCols = [...new Set(Object.values(PROC_COLS))]
+      const now = new Date().toISOString()
+      const out: Record<string, any>[] = []
+      for (const r of list) {
+        if (!r?.batch_id || !/^[0-9a-f-]{36}$/i.test(String(r.batch_id))) {
+          return NextResponse.json({ ok: false, error: 'Every row needs a valid batch_id' }, { status: 400 })
+        }
+        const row: Record<string, any> = {
+          batch_id: r.batch_id, batch_id_str: r.batch_id_str ?? null, updated_at: now,
+          dc_generated_once: !!r.dc_generated_once, dc_regenerate: !!r.dc_regenerate, pushed: !!r.pushed,
+        }
+        for (const c of dateCols) row[c] = null
+        for (const [proc, isoDate] of Object.entries((r.dates || {}) as Record<string, string>)) {
+          const col = dateColFor(proc)
+          if (!col) continue
+          const v = String(isoDate || '').slice(0, 10)
+          if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            return NextResponse.json({ ok: false, error: `${r.batch_id_str || r.batch_id}: "${isoDate}" is not a date` }, { status: 400 })
+          }
+          row[col] = v || null
+        }
+        out.push(row)
+      }
+      const { error } = await sb('/batch_date_plans?on_conflict=batch_id', {
+        method: 'POST', body: JSON.stringify(out),
+        headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      return NextResponse.json({ ok: true, saved: out.length })
     }
 
     // ── Clear date plan (keep anchors, wipe generated dates) ──────────────

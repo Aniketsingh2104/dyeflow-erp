@@ -3,11 +3,94 @@
 import { useState, useEffect } from 'react'
 import {
   MACHINE_REQUIRED,
-  getSmartMachine,
-  getArticleIntelligence,
   isSupervisorOrderLabRecheckBlocked,
   getMachineDisplayNameWithQty
 } from './route-helpers'
+import { sameCode } from '@/lib/processCodes'
+
+// ── Master data: loaded ONCE per page for every order row (was 4 requests per
+// row). Kept for a minute so a refresh after saving sees new rules.
+let masterCache: { at: number; p: Promise<any> } | null = null
+function loadMaster(): Promise<any> {
+  if (masterCache && Date.now() - masterCache.at < 60_000) return masterCache.p
+  const get = (u: string) => fetch(u, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] }))
+  const p = Promise.all([get('/api/machines'), get('/api/processes'), get('/api/route-templates'),
+                         get('/api/article-routes'), get('/api/orders')])
+    .then(([machRes, procRes, routeRes, articleRouteRes, orderRes]) => {
+      const processList = procRes.data || []
+      // every machine for names / saved ids (a switched-off machine may still be
+      // on an order); only active ones are suggested or listed
+      const allMachines = machRes.data || []
+      const machines = allMachines.filter((m: any) => m.is_active !== false)
+      const byId: Record<string, any> = {}
+      for (const m of allMachines) byId[m.id] = m
+      // What the factory has really done: which machine TYPES ran each process,
+      // and which machines each article used last (orders.process_machines)
+      const typesFor: Record<string, Set<string>> = {}
+      const articleMachines: Record<string, Record<string, string>> = {}
+      const orders = [...(orderRes.data || [])].sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)))
+      for (const o of orders) {
+        const pm = o.process_machines && typeof o.process_machines === 'object' ? o.process_machines : null
+        if (!pm) continue
+        const art = String(o.article || '').trim().toLowerCase()
+        for (const [code, ids] of Object.entries(pm) as [string, any][]) {
+          const first = Array.isArray(ids) ? ids[0] : ids
+          const m = byId[first]
+          if (!m) continue
+          ;(typesFor[code] ||= new Set()).add(String(m.machine_type || '').toLowerCase())
+          if (art) (articleMachines[art] ||= {})[code] = m.name     // newest wins
+        }
+      }
+      return {
+        machines,
+        allMachines,
+        processList,
+        typesFor,
+        articleMachines,
+        processRouteMaster: (routeRes.data || []).map((t: any) => ({
+          name:  t.name || t.template_name,
+          steps: (t.steps || []).map((s: any) => ({
+            processCode: s.processCode || s.process_code || s,
+            name: s.name || processList.find((p: any) => p.code === (s.processCode || s))?.name || s.processCode || s,
+          })),
+        })),
+        // article names are stored lower-case — look them up the same way
+        articleProcessMap: (articleRouteRes.data || []).reduce((acc: any, r: any) => {
+          if (r.article && r.route) {
+            acc[String(r.article).trim().toLowerCase()] = typeof r.route === 'string'
+              ? r.route.split('/').map((c: string) => c.trim()).filter(Boolean)
+              : r.route
+          }
+          return acc
+        }, {}),
+      }
+    })
+  masterCache = { at: Date.now(), p }
+  return p
+}
+
+// Machine suggestion for one process of an order:
+//   1. the machine this article used for that process last time
+//   2. else the smallest machine (capacity ≥ qty) of a TYPE that has run this
+//      process before (machine_type — e.g. LJET / Ujet for Dyeing)
+function suggestMachine(code: string, qtyKg: number, article: string, master: any): string {
+  if (!master || !MACHINE_REQUIRED.includes(code)) return ''
+  const art = String(article || '').trim().toLowerCase()
+  const last = master.articleMachines?.[art]
+  const hit = last && Object.entries(last).find(([c]) => sameCode(c, code))
+  if (hit) return hit[1] as string
+  const types: Set<string> | undefined = Object.entries(master.typesFor || {}).find(([c]) => sameCode(c, code))?.[1] as any
+  if (!types?.size) return ''
+  const cands = (master.machines || []).filter((m: any) => types.has(String(m.machine_type || '').toLowerCase()))
+  const cap = (m: any) => parseFloat(m.capacity) || 0
+  const fits = cands.filter((m: any) => cap(m) > 0 && cap(m) >= qtyKg).sort((a: any, b: any) => cap(a) - cap(b))
+  return (fits[0] || cands[0])?.name || ''
+}
+
+const findMachine = (machines: any[], typed: string) => {
+  const t = String(typed || '').trim().toLowerCase()
+  return t ? machines.find((m: any) => m.id === typed || String(m.name || '').trim().toLowerCase() === t) : undefined
+}
 
 interface RouteAssignmentProps {
   order: any
@@ -25,7 +108,8 @@ function buildRouteOptions(db: any, article?: string): { name: string; steps: { 
   for (const p of (db.processList || [])) processNames[p.code] = p.name || p.code
   const articleMap = db.articleProcessMap || {}
   const orderedArticles: string[] = []
-  if (article && articleMap[article]) orderedArticles.push(article)
+  const artKey = String(article || '').trim().toLowerCase()
+  if (artKey && articleMap[artKey]) orderedArticles.push(artKey)
   for (const a of Object.keys(articleMap)) {
     if (!orderedArticles.includes(a)) orderedArticles.push(a)
   }
@@ -96,34 +180,8 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   }
 
   const loadDb = async () => {
-    try {
-      const [machRes, procRes, routeRes, articleRouteRes] = await Promise.all([
-        fetch('/api/machines',        { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
-        fetch('/api/processes',       { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
-        fetch('/api/route-templates', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
-        fetch('/api/article-routes',  { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
-      ])
-      const processList = procRes.data || []
-      setDb({
-        machines: machRes.data || [],
-        processList,
-        processRouteMaster: (routeRes.data || []).map((t: any) => ({
-          name:  t.name || t.template_name,
-          steps: (t.steps || []).map((s: any) => ({
-            processCode: s.processCode || s.process_code || s,
-            name: s.name || processList.find((p: any) => p.code === (s.processCode || s))?.name || s.processCode || s,
-          })),
-        })),
-        articleProcessMap: (articleRouteRes.data || []).reduce((acc: any, r: any) => {
-          if (r.article && r.route) {
-            acc[r.article] = typeof r.route === 'string'
-              ? r.route.split('/').map((c: string) => c.trim()).filter(Boolean)
-              : r.route
-          }
-          return acc
-        }, {}),
-      })
-    } catch (err) { console.error('RouteAssignment loadDb error:', err) }
+    try { setDb(await loadMaster()) }
+    catch (err) { console.error('RouteAssignment loadDb error:', err) }
   }
 
   const initializeTemplate = (database: any, opts: ReturnType<typeof buildRouteOptions>) => {
@@ -138,7 +196,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       )
     }
     if (defaultIdx < 0 && order.article) {
-      const codes: string[] = database.articleProcessMap?.[order.article] || []
+      const codes: string[] = database.articleProcessMap?.[String(order.article || '').trim().toLowerCase()] || []
       if (codes.length)
         defaultIdx = opts.findIndex(rt =>
           (rt.steps || []).map((s: any) => s.processCode).join('/') === codes.join('/')
@@ -155,7 +213,6 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     if (idx < 0) { setShowMachines(false); setMachineInputs({}); return }
     const rt = opts[idx]
     if (!rt) return
-    const articleIntel = getArticleIntelligence(order.article, database)
     const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
     const machineSteps = (rt.steps || []).filter((s: any) => MACHINE_REQUIRED.includes(s.processCode))
     const inputs: {[key: string]: [string, string]} = {}
@@ -164,12 +221,12 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     const existingPM = order.process_machines || order.processMachines || {}
     const resolveMachineName = (idOrName: string) => {
       if (!idOrName) return ''
-      const rec = (database.machines || []).find((m: any) => m.id === idOrName)
+      const rec = (database.allMachines || database.machines || []).find((m: any) => m.id === idOrName)
       return rec ? rec.name : idOrName
     }
     for (const step of machineSteps) {
       const existing = existingPM[step.processCode] || []
-      const smart    = getSmartMachine(step.processCode, qtyKg, articleIntel, database) || ''
+      const smart    = suggestMachine(step.processCode, qtyKg, order.article, database) || ''
       inputs[step.processCode] = [
         resolveMachineName(existing[0]) || smart,
         resolveMachineName(existing[1]) || '',
@@ -208,19 +265,25 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     const processMachinesById: Record<string, string[]> = {}
     let primaryMachineId: string | null = null
 
+    const unknown: string[] = []
     for (const step of rt.steps) {
       if (!MACHINE_REQUIRED.includes(step.processCode)) continue
       const [m1name, m2name] = machineInputs[step.processCode] || ['', '']
       const ids: string[] = []
       for (const mname of [m1name, m2name]) {
         if (!mname.trim()) continue
-        const rec = (db?.machines || []).find((m: any) => m.name === mname || m.id === mname)
-        if (rec) {
-          ids.push(rec.id)
-          if (!primaryMachineId) primaryMachineId = rec.id
-        }
+        // case / spaces don't matter; a name that matches no machine is NOT
+        // dropped silently any more — the save stops and says which one
+        const rec = findMachine(db?.allMachines || db?.machines || [], mname)
+        if (!rec) { unknown.push(`${step.processCode}: "${mname.trim()}"`); continue }
+        if (!ids.includes(rec.id)) ids.push(rec.id)
+        if (!primaryMachineId) primaryMachineId = rec.id
       }
       if (ids.length) processMachinesById[step.processCode] = ids
+    }
+    if (unknown.length) {
+      alert('No machine with this name — pick one from the list:\n' + unknown.join('\n'))
+      return
     }
 
     try {
@@ -276,7 +339,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     // Collect all unique machine names from process_machines
     for (const ids of Object.values(pm) as string[][]) {
       for (const mid of (ids || [])) {
-        const m = (db.machines || []).find((m: any) => m.id === mid)
+        const m = (db.allMachines || db.machines || []).find((m: any) => m.id === mid)
         if (m && !names.includes(m.name)) names.push(m.name)
       }
     }
@@ -284,7 +347,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     if (!names.length) {
       const mid = order.machine_id || order.machineId
       if (mid) {
-        const m = (db.machines || []).find((m: any) => m.id === mid)
+        const m = (db.allMachines || db.machines || []).find((m: any) => m.id === mid)
         if (m) names.push(m.name)
       }
     }
@@ -364,9 +427,8 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         <div style={{ background: '#F9FAFB', borderRadius: '6px', padding: '10px', border: '1px solid #E5E7EB' }}>
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>Machine Assignment:</div>
           {selectedRoute.steps.filter((s: any) => MACHINE_REQUIRED.includes(s.processCode)).map((step: any) => {
-            const articleIntel = getArticleIntelligence(order.article, db)
             const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
-            const smartMcn   = getSmartMachine(step.processCode, qtyKg, articleIntel, db)
+            const smartMcn   = suggestMachine(step.processCode, qtyKg, order.article, db)
             const smartLabel = smartMcn ? getMachineDisplayNameWithQty(smartMcn, db) : ''
             const pair = machineInputs[step.processCode] || ['', '']
 

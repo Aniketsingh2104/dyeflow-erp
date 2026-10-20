@@ -39,10 +39,10 @@ export default function LabWithIssuePage() {
   }
 
   const addIssue = async (requestId: string, desc: string, priority: string) => {
-    const all = await labApi({ type: 'issues' })
-    const newId = genIssueId(all.data || [])
-    await labPost({ action: 'create_issue', id: newId, requestId, description: desc, priority })
-    showToast('✓ Issue raised')
+    // the issue number is given by the server
+    const r = await labPost({ action: 'create_issue', requestId, description: desc, priority })
+    if (!r.ok) { alert('Issue NOT raised: ' + (r.error || 'Unknown error')); return }
+    showToast(`✓ Issue ${r.id || ''} raised`)
     load()
   }
 

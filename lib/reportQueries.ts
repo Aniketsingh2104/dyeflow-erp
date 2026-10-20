@@ -52,18 +52,9 @@ function daysUntil(d: string): number {
 
 /** Fallback: read from localStorage when no injected db is available */
 function getLocalDb(): DbSnapshot {
-  if (typeof window === 'undefined') return emptyDb()
-  const raw = localStorage.getItem('dyeflow_db')
-  if (!raw) return emptyDb()
-  const db = JSON.parse(raw)
-  return {
-    orders:        db.orders         || [],
-    fobRecords:    db.fobRecords     || [],
-    faultyRecords: db.faultyRecords  || [],
-    machines:      db.machines       || [],
-    supervisors:   db.supervisors    || [],
-    processList:   db.processList    || [],
-  }
+  // (the old browser copy of the database is gone — callers pass the
+  // snapshot from /api/snapshot)
+  return emptyDb()
 }
 
 function emptyDb(): DbSnapshot {

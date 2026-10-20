@@ -54,8 +54,12 @@ export default function ShiftsPage() {
 
   useEffect(() => { load() }, [load])
 
+  const [savingShift, setSavingShift] = useState(false)
   const saveShift = async () => {
     if (!form.supervisorName.trim()) { alert('Select a supervisor.'); return }
+    if (savingShift) return           // a double-click saves once
+    setSavingShift(true)
+    try {
     const res = await fetch('/api/shifts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -70,20 +74,22 @@ export default function ShiftsPage() {
         batches_completed:   form.batchesCompleted,
       }),
     })
-    const data = await res.json()
+    const data = await res.json().catch(() => ({ ok: false, error: 'Network error' }))
     if (!data.ok) { alert(`Failed: ${data.error}`); return }
     setShowModal(false)
     resetForm()
     load()
+    } finally { setSavingShift(false) }
   }
 
   const deleteLog = async (id: string) => {
     if (!confirm('Delete this shift log?')) return
-    await fetch('/api/shifts', {
+    const res = await fetch('/api/shifts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', id }),
-    })
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    if (!res.ok) alert('Not deleted: ' + (res.error || 'Unknown error'))
     load()
   }
 
@@ -255,7 +261,7 @@ export default function ShiftsPage() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="primary" onClick={saveShift} style={{ flex: 1 }}>Save Shift</button>
+              <button className="primary" onClick={saveShift} disabled={savingShift} style={{ flex: 1 }}>{savingShift ? 'Saving…' : 'Save Shift'}</button>
               <button onClick={() => { setShowModal(false); resetForm() }} style={{ flex: 1 }}>Cancel</button>
             </div>
           </div>

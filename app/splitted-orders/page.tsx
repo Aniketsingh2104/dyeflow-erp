@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { isBatchFinished } from '@/lib/batchStatus'
+import { collabBlockMessage } from '@/lib/collab'
 
 const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> = {
   new:          { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'New'        },
@@ -11,6 +12,7 @@ const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> =
   faulty:       { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'Faulty'     },
   hold:         { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'On Hold'    },
   repairing:    { bg: '#FEF3C7',              color: '#D97706',          label: '🔄 Repairing'},
+  'written-off':{ bg: 'var(--bg-secondary)',  color: 'var(--text-tertiary)', label: 'Written off' },
 }
 
 function Badge({ status }: { status: string }) {
@@ -54,6 +56,7 @@ const COLS = [
 
 export default function SplittedOrdersPage() {
   const [rows,       setRows]       = useState<any[]>([])
+  const [allBatches, setAllBatches] = useState<any[]>([])   // every batch — for the collab check
   const [loading,    setLoading]    = useState(true)
   const [toast,      setToast]      = useState<{msg:string;err?:boolean}|null>(null)
   const [cols,       setCols]       = useState(COLS)
@@ -76,6 +79,7 @@ export default function SplittedOrdersPage() {
         fetch('/api/repairing-orders',   { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
       const batches: any[] = batchRes.data || []
+      setAllBatches(batches)
       const orders:  any[] = orderRes.data || []
       const repairs: any[] = repairRes.data || []
       const oMap: Record<string, any> = {}
@@ -184,9 +188,10 @@ export default function SplittedOrdersPage() {
 
   // ── Mark done ──────────────────────────────────────────────────────────────
   const handleDone = async (row: any) => {
-    const route: string[] = row.process_route || []
-    const idx  = route.findIndex((c: string) => c === row.current_process)
-    const next = idx >= 0 ? route[idx + 1] : undefined
+    // same rule as the FMS page: a collab batch moves on only when its
+    // partners have arrived at this process too
+    const block = collabBlockMessage(row, row.current_process, allBatches)
+    if (block) { alert(block); return }
     if (!confirm(`Mark ${row.batch_id} done in ${row.current_process}?`)) return
     try {
       const res  = await fetch('/api/batches', {
@@ -195,7 +200,7 @@ export default function SplittedOrdersPage() {
       })
       const data = await res.json()
       if (!data.ok) { alert('Error: ' + data.error); if (data.stale) load(); return }
-      showToast(`✓ ${row.batch_id} ${next ? '→ ' + next : 'completed!'}`)
+      showToast(`✓ ${row.batch_id} ${data.next_process ? '→ ' + data.next_process : 'completed!'}`)
       load()
     } catch (err: any) { alert('Network error: ' + err.message) }
   }

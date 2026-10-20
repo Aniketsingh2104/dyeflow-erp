@@ -199,9 +199,9 @@ export default function FirstProcessBatchPage() {
     const rows = batches.filter(b => {
       for (const [key, val] of Object.entries(colFilters)) {
         if (!val.trim()) continue
-        const cell = key === 'route'
-          ? b.route.join('/')
-          : String(b[key] ?? '').toLowerCase()
+        const cell = (key === 'route'
+          ? (b.route || []).join('/')
+          : String(b[key] ?? '')).toLowerCase()
         if (!cell.includes(val.toLowerCase())) return false
       }
       return true

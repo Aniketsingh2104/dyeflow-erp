@@ -76,12 +76,12 @@ export default function LabRequestedPage() {
   }
 
   const addIssue = async (requestId: string, desc: string, priority: string) => {
-    const all = await labApi({ type: 'issues' })
-    const newId = genIssueId(all.data || [])
-    await labPost({ action: 'create_issue', id: newId, requestId, description: desc, priority })
+    // the issue number is given by the server
+    const r = await labPost({ action: 'create_issue', requestId, description: desc, priority })
+    if (!r.ok) { alert('Issue NOT raised: ' + (r.error || 'Unknown error')); return }
     const res = await labApi({ type: 'issues' })
     if (res.ok) setIssues(res.data || [])
-    showToast('✓ Issue raised')
+    showToast(`✓ Issue ${r.id || ''} raised`)
   }
 
   const today = pending.filter(r => new Date(r.created_at).toDateString() === new Date().toDateString()).length

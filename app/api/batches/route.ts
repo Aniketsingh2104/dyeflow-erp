@@ -50,6 +50,14 @@ export async function GET(req: NextRequest) {
     // active=1 → only batches still to finish (AI context, dashboards)
     else if (searchParams.get('active') === '1') query['status'] = 'not.in.(done,written-off)'
 
+    // fields=light → just what counts / badges need (no nested process rows)
+    if (searchParams.get('fields') === 'light') {
+      const { data, error } = await dbSelect('batches', query,
+        'id,batch_id,order_id,machine_id,supervisor_id,kg,status,current_process,is_done,is_faulty')
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      return NextResponse.json({ ok: true, data })
+    }
+
     const { data, error } = await dbSelect('batches', query,
       'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +

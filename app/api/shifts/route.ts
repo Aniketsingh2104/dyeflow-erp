@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { dbSelect, dbInsert, dbDelete, dbUpdate } from '@/lib/supabase'
+import { dbSelect, dbInsert, dbDelete, dbUpdate, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
@@ -21,17 +21,14 @@ export async function POST(req: NextRequest) {
   const { action } = body
 
   if (action === 'create') {
-    // Replace only the existing entry for the SAME date + shift (overwrite).
-    // (Never delete without a filter — that would wipe every shift log.)
-    const { data: existing } = await dbSelect('shift_logs', {
-      shift_date: `eq.${body.shift_date}`,
-      shift: `eq.${body.shift}`,
-    }, 'id')
-    for (const e of existing || []) {
-      await dbDelete('shift_logs', { id: e.id })
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.shift_date || '')) || !['morning', 'evening', 'night'].includes(body.shift)) {
+      return NextResponse.json({ ok: false, error: 'A valid date and shift are required' }, { status: 400 })
     }
-
-    const { data, error } = await dbInsert('shift_logs', {
+    // The new entry REPLACES the one for the same date + shift: it is saved
+    // first, then every OLDER entry for that date + shift is removed — so two
+    // saves at once still leave exactly one (the newest), and a failed save
+    // leaves the old one in place.
+    const { data, error } = await dbInsert<any>('shift_logs', {
       id:                 body.id || undefined,
       shift_date:         body.shift_date,
       shift:              body.shift,
@@ -42,6 +39,14 @@ export async function POST(req: NextRequest) {
       batches_completed:  body.batches_completed || 0,
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    const row = Array.isArray(data) ? data[0] : data
+    if (row?.id && row?.created_at) {
+      const { error: delErr } = await sb('/shift_logs', { method: 'DELETE', params: {
+        shift_date: `eq.${body.shift_date}`, shift: `eq.${body.shift}`,
+        or: `(created_at.lt.${row.created_at},and(created_at.eq.${row.created_at},id.lt.${row.id}))`,
+      } })
+      if (delErr) return NextResponse.json({ ok: false, error: 'Saved, but the older entry for this shift could not be removed: ' + delErr }, { status: 500 })
+    }
     return NextResponse.json({ ok: true, data })
   }
 

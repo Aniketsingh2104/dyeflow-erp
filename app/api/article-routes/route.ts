@@ -14,8 +14,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const article = searchParams.get('article')
 
-  const query: Record<string, string> = { order: 'article.asc', limit: '5000' }
-  if (article) query['article'] = `ilike.${article}`
+  // every rule (dbSelect pages past the 1,000-row limit); names are stored lower-case
+  const query: Record<string, string> = { order: 'article.asc' }
+  if (article) query['article'] = `eq.${article.trim().toLowerCase()}`
 
   const { data, error } = await dbSelect('article_process_routes', query, 'id,article,route,updated_at')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })

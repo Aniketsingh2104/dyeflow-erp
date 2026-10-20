@@ -4,24 +4,16 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 
 interface ProcessDef { id: string; code: string; name: string; is_enabled: boolean; display_order: number }
 
-const persistMap = async (map: Record<string, string[]>) => {
-  await fetch('/api/setup/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: 'articleProcessMap', value: map }),
-  })
-  if (typeof window !== 'undefined') {
-    try {
-      const raw = localStorage.getItem('dyeflow_db')
-      const db  = raw ? JSON.parse(raw) : {}
-      db.articleProcessMap = map
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-    } catch {}
-  }
-}
+// Article → route rules live in the article_process_routes table (the same
+// place Route Assignment reads its suggestions from). Article names are kept
+// lower-case there, so "Cotton 40s" and "COTTON 40S" are one rule.
+const post = (body: any) => fetch('/api/article-routes', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
 
 export default function ProcessMachineMasterPage() {
   const [rules,        setRules]        = useState<Record<string, string[]>>({})
+  const [ruleIds,      setRuleIds]      = useState<Record<string, string>>({})
   const [processList,  setProcessList]  = useState<ProcessDef[]>([])
   const [articles,     setArticles]     = useState<string[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -34,15 +26,19 @@ export default function ProcessMachineMasterPage() {
   const load = useCallback(async () => {
     setLoading(true)
     const [mapRes, pRes, supRes] = await Promise.all([
-      fetch('/api/setup/settings?key=articleProcessMap', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/article-routes', { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/processes', { cache: 'no-store' }).then(r => r.json()),
       fetch('/api/setup/settings?key=articleSupervisorMap', { cache: 'no-store' }).then(r => r.json()),
     ])
-    const map = (mapRes.ok && mapRes.value && typeof mapRes.value === 'object') ? mapRes.value : {}
+    if (!mapRes.ok) { alert('Could not load the rules: ' + (mapRes.error || 'Unknown error')) }
+    const map: Record<string, string[]> = {}
+    const ids: Record<string, string> = {}
+    for (const r of (mapRes.data || [])) { map[r.article] = r.route || []; ids[r.article] = r.id }
     setRules(map)
+    setRuleIds(ids)
     setProcessList((pRes.data || []).filter((p: ProcessDef) => p.is_enabled).sort((a: ProcessDef, b: ProcessDef) => a.display_order - b.display_order))
     const supMap = (supRes.ok && supRes.value) ? supRes.value : {}
-    setArticles([...new Set([...Object.keys(map), ...Object.keys(supMap)])])
+    setArticles([...new Set([...Object.keys(map), ...Object.keys(supMap).map(a => a.trim().toLowerCase())])])
     setLoading(false)
   }, [])
 
@@ -59,7 +55,7 @@ export default function ProcessMachineMasterPage() {
 
   const openAdd = (art?: string) => {
     setEditingArt(art || '')
-    const existing = art && rules[art] ? rules[art] : []
+    const existing = art && rules[art.trim().toLowerCase()] ? rules[art.trim().toLowerCase()] : []
     setForm({ article: art || '', processRoute: Array.isArray(existing) ? existing : [] })
     setShowModal(true)
   }
@@ -67,19 +63,18 @@ export default function ProcessMachineMasterPage() {
   const save = async () => {
     if (!form.article.trim()) { alert('Enter article name.'); return }
     if (!form.processRoute.length) { alert('Select at least one process.'); return }
-    const updated = { ...rules, [form.article.trim()]: form.processRoute }
-    setRules(updated)
-    await persistMap(updated)
+    const res = await post({ action: 'upsert', article: form.article.trim(), route: form.processRoute })
+    if (!res.ok) { alert('Not saved: ' + (res.error || 'Unknown error')); return }
     setShowModal(false)
     load()
   }
 
   const del = async (art: string) => {
     if (!confirm(`Remove process route for "${art}"?`)) return
-    const updated = { ...rules }
-    delete updated[art]
-    setRules(updated)
-    await persistMap(updated)
+    const id = ruleIds[art]
+    if (!id) { load(); return }
+    const res = await post({ action: 'delete', id })
+    if (!res.ok) { alert('Not removed: ' + (res.error || 'Unknown error')); return }
     load()
   }
 
@@ -92,7 +87,7 @@ export default function ProcessMachineMasterPage() {
     reader.onload = async (ev) => {
       try {
         const json = JSON.parse(ev.target?.result as string)
-        const updated = { ...rules }
+        const list: { article: string; route: string[] }[] = []
         let added = 0, skipped = 0
         for (const [art, data] of Object.entries(json)) {
           if (!art || !data) { skipped++; continue }
@@ -102,10 +97,11 @@ export default function ProcessMachineMasterPage() {
           else if ((data as any).r || (data as any).route) {
             route = ((data as any).r || (data as any).route).split('/').map((c: string) => c.trim()).filter(Boolean)
           }
-          if (route.length) { updated[art] = route; added++ } else skipped++
+          if (route.length) { list.push({ article: art, route }); added++ } else skipped++
         }
-        setRules(updated)
-        await persistMap(updated)
+        if (!list.length) { setImportStatus('❌ No rules found in the file.'); return }
+        const res = await post({ action: 'bulk_upsert', rules: list })
+        if (!res.ok) { setImportStatus('❌ Not imported: ' + (res.error || 'Unknown error')); return }
         setImportStatus(`✅ Imported ${added}${skipped ? `, ${skipped} skipped` : ''}`)
         load()
         if (fileRef.current) fileRef.current.value = ''

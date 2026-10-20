@@ -86,10 +86,10 @@ export default function LabIndentPage() {
         if (!res.ok) { alert('Error: ' + res.error); return }
         showToast('✓ Indent updated')
       } else {
-        const newId = genIndentId(indents)
-        const res = await labPost({ action: 'create_indent', id: newId, ...form })
+        // the indent number is given by the server
+        const res = await labPost({ action: 'create_indent', ...form })
         if (!res.ok) { alert('Error: ' + res.error); return }
-        showToast(`✓ Indent ${newId} created`)
+        showToast(`✓ Indent ${res.id || ''} created`)
       }
       setIndentModal(false)
       setEditingId('')
@@ -114,12 +114,9 @@ export default function LabIndentPage() {
     if (!requestModal) return
     setSaving(true)
     try {
-      const allReqsRes = await labApi({ type: 'requests' })
-      const allReqs = allReqsRes.data || []
-      const newId = genRequestId(allReqs)
+      // the request number is given by the server
       const res = await labPost({
         action:    'create_request',
-        id:        newId,
         indentId:  requestModal.id,
         unit:      requestModal.unit,
         party:     requestModal.party_name,
@@ -129,7 +126,7 @@ export default function LabIndentPage() {
         ...reqForm,
       })
       if (!res.ok) { alert('Error: ' + res.error); return }
-      showToast(`✓ Request ${newId} created`)
+      showToast(`✓ Request ${res.id || ''} created`)
       setRequestModal(null)
       setReqForm({ ...BLANK_REQUEST })
       load()
@@ -145,13 +142,12 @@ export default function LabIndentPage() {
   }
 
   const addIssue = async (requestId: string, desc: string, priority: string) => {
-    const allIssuesRes = await labApi({ type: 'issues' })
-    const allIssues = allIssuesRes.data || []
-    const newId = genIssueId(allIssues)
-    await labPost({ action: 'create_issue', id: newId, requestId, description: desc, priority })
+    // the issue number is given by the server
+    const r = await labPost({ action: 'create_issue', requestId, description: desc, priority })
+    if (!r.ok) { alert('Issue NOT raised: ' + (r.error || 'Unknown error')); return }
     const res = await labApi({ type: 'issues' })
     if (res.ok) setIssues(res.data || [])
-    showToast('✓ Issue raised')
+    showToast(`✓ Issue ${r.id || ''} raised`)
   }
 
   // Only blank the page on the true first load; saveIndent/saveRequest/

@@ -1,13 +1,18 @@
 'use client'
 
 import { batchMachineMap } from '@/lib/machineMap'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
 import { usePermission, useSupervisorFilter } from '@/lib/permissions'
 import { AccessDenied } from '@/lib/AccessDenied'
 import { buildHolidaySet, plannedDateForNumber, sundayOffFrom } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
+import { machinePaths } from '@/lib/pageAccess'
+import { isBatchFinished } from '@/lib/batchStatus'
+import { sameCode } from '@/lib/processCodes'
+import { collabBlockMessage } from '@/lib/collab'
+import { markProcessDone } from '@/lib/db'
 
 // Helper functions
 const getShadeTypeByColor = (color: string): string => {
@@ -28,85 +33,6 @@ const getShadeTypeRank = (color: string): number => {
   return 99  // For White and others
 }
 
-const normalizeShadeKey = (name: string): string => {
-  return (name || '').toLowerCase().trim().replace(/\s+/g, ' ')
-}
-
-const getShadeMasterTypeByColor = (color: string): string => {
-  const raw = String(color || '').trim()
-  if (!raw) return ''
-  
-  const stored = localStorage.getItem('dyeflow_db')
-  if (!stored) return ''
-  const db = JSON.parse(stored)
-  const rows = db.shadeMaster || []
-  
-  const key = normalizeShadeKey(raw)
-  if (!key) return ''
-  
-  const exact = rows.find((r: any) => normalizeShadeKey(r.colourName) === key)
-  if (exact && exact.colourType) return exact.colourType
-  
-  const partial = rows.find((r: any) => {
-    const rk = normalizeShadeKey(r.colourName)
-    return rk && (key.includes(rk) || rk.includes(key))
-  })
-  
-  return partial?.colourType || ''
-}
-
-const getProcObj = (code: string) => {
-  const stored = localStorage.getItem('dyeflow_db')
-  if (!stored) return null
-  const db = JSON.parse(stored)
-  const processes = db.processes || []
-  const found = processes.find((p: any) => p.code === code)
-  
-  // If process found in database, return it
-  if (found) return found
-  
-  // FALLBACK: If no processes in database, return a simple object with name based on code
-  // This mapping converts process codes to full names
-  const codeToName: { [key: string]: string } = {
-    'C': 'CBR',
-    'S': 'SCQ',
-    'H': 'Heat-Set',
-    'D': 'Dyeing',
-    'S2': 'SCQ2',
-    'Rx': 'Relax',
-    'O': 'Opener',
-    'G': 'Ghanti',
-    'F': 'Finish',
-    'Co': 'Compactor',
-    'Tu': 'Tubler',
-    'Add': 'Addition',
-    'Lev': 'Levelling',
-    'Rc': 'RC',
-    'Fix': 'Fixing',
-    'Wash': 'Washing',
-    'Dry': 'Dry',
-    'B': 'Brushing',
-    'R': 'Raising',
-    'K': 'Kundi'
-  }
-  
-  return {
-    code: code,
-    name: codeToName[code] || code,
-    machine: null
-  }
-}
-
-const isMachineMatch = (batchMachine: string, machine: any): boolean => {
-  if (!batchMachine) return false
-  if (batchMachine === machine.id) return true
-  if (batchMachine === machine.name) return true
-  const batchMachineLower = batchMachine.toLowerCase()
-  const machineNameLower = (machine.name || '').toLowerCase()
-  if (batchMachineLower === machineNameLower) return true
-  if (machineNameLower.includes(batchMachineLower) || batchMachineLower.includes(machineNameLower)) return true
-  return false
-}
 
 const formatDate = (dateStr: string) => {
   if (!dateStr) return '-'
@@ -155,23 +81,30 @@ const COLUMNS = [
   { key: 'action', label: 'ACTION', defaultWidth: 150, canHide: false }
 ]
 
-interface ReviewItem {
-  type: 'collab' | 'single'
-  title: string
-  note: string
-  batches: any[]
-  total: number
-  colorKey: string
-}
 
 export default function MachinePage() {
   const params = useParams()
   const router = useRouter()
   const machineId = params.machineId as string
 
-  // Permission guard
+  // Permission guard — the sheet counts by its id OR its name slug (User
+  // Management stores the slug; the menu links by id). Same rule as the server.
   const machinePath = `/machines/${machineId}`
-  const { canView, canEdit, canDelete, loading: permLoading } = usePermission(machinePath)
+  const [permPaths, setPermPaths] = useState<string[] | null>(null)
+  useEffect(() => {
+    let off = false
+    fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()).then(j => {
+      if (off) return
+      const m = (j.data || []).find((x: any) => x.id === machineId
+        || (x.name || '').toLowerCase().replace(/[^a-z0-9]/g, '-') === machineId.toLowerCase()
+        || (x.name || '').toLowerCase() === machineId.toLowerCase())
+      setPermPaths(machinePaths(m, machineId))
+    }).catch(() => { if (!off) setPermPaths([machinePath]) })
+    return () => { off = true }
+  }, [machineId, machinePath])
+  const perm = usePermission(permPaths || [machinePath])
+  const { canView, canEdit } = perm
+  const permLoading = perm.loading || permPaths === null
   const supervisorFilter = useSupervisorFilter()
   
   const [machine, setMachine] = useState<any>(null)
@@ -182,9 +115,10 @@ export default function MachinePage() {
   const [columnWidths, setColumnWidths] = useState<{ [key: number]: number }>({})
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
   const [showColumnMenu, setShowColumnMenu] = useState(false)
-  const [showReviewModal, setShowReviewModal] = useState(false)
-  const [reviewItems, setReviewItems] = useState<ReviewItem[]>([])
-  const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
+  // finished rows (this process done) are hidden unless asked for
+  const [showDone, setShowDone] = useState(false)
+  const [rawBatches, setRawBatches] = useState<any[]>([])   // every batch — for the collab check
+  const enterSaved = useRef<Set<string>>(new Set())          // Enter saved this cell — skip the blur save
   
   // Batch Collaboration Modal state
   const [showCollabModal, setShowCollabModal] = useState(false)
@@ -200,7 +134,7 @@ export default function MachinePage() {
 
   useEffect(() => {
     applyFilters()
-  }, [batches, filters, shadeFilter])
+  }, [batches, filters, shadeFilter, showDone])
 
   const loadHiddenColumns = () => {
     try {
@@ -374,7 +308,16 @@ export default function MachinePage() {
         // Create one row per process (SCQ → row1, Dyeing → row2 for same batch)
         for (const displayProcess of machineProcessCodes) {
           const processName = displayProcess ? (procMap[displayProcess] || displayProcess) : '-'
+          // this row's process is finished (or the whole batch is) → a "done" row
+          const procDone = isBatchFinished(b) || (b.batch_processes || []).some((bp: any) =>
+            sameCode(bp.process_code, displayProcess) && bp.status === 'done')
+          // the batch is running at THIS process right now → it can be marked Done here
+          const atThisProcess = !procDone && sameCode(b.current_process, displayProcess)
+            && b.status === 'in-process' && !b.is_faulty
           machineBatches.push({
+            procDone,
+            atThisProcess,
+            current_process: b.current_process,
             rowKey:         `${b.batch_id}-${displayProcess}`,   // unique per process
             batchId:        b.batch_id,
             id:             b.id,
@@ -424,6 +367,7 @@ export default function MachinePage() {
       }
 
       setBatches(machineBatches)
+      setRawBatches(allBatches)
     } catch (err) {
       console.error('Machine page loadData error:', err)
     }
@@ -469,6 +413,23 @@ export default function MachinePage() {
   // Ticking "Faulty" raises a proper faulty record at the batch's current
   // process (same as the FMS page). A faulty batch is cleared on the Faulty
   // page (Mark OK / Reprocess), not by unticking here.
+  // Done on the machine sheet = the same server step as Done on the FMS page
+  // (process_done): only for a batch running at this row's process, and only
+  // when its collab partners have arrived too.
+  const handleDone = async (row: any) => {
+    const raw = rawBatches.find(b => b.id === row.id)
+    if (!raw || !sameCode(raw.current_process, row.currentProcess) || raw.status !== 'in-process') {
+      alert(`${row.batchId} is not running at ${row.currentProcess} any more — refresh the page.`); loadData(); return
+    }
+    const block = collabBlockMessage(raw, row.currentProcess, rawBatches)
+    if (block) { alert(block); return }
+    if (!confirm(`Mark ${row.batchId} done in ${row.currentProcess}?`)) return
+    const { error, next_process } = await markProcessDone(row.id, row.currentProcess)
+    if (error) alert('Not marked done: ' + error)
+    else if (next_process) alert(`✓ ${row.batchId} → ${next_process}`)
+    loadData()
+  }
+
   const toggleFaulty = async (batchId: string, _orderId: string, currentFaulty: boolean) => {
     if (currentFaulty) { alert('This batch is faulty — clear it on the Faulty page (Mark OK or Reprocess).'); return }
     const row = batches.find(b => b.id === batchId)
@@ -486,198 +447,6 @@ export default function MachinePage() {
     }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
     if (!res.ok) alert('Error: ' + res.error)
     loadData()
-  }
-
-  const getNumberingReview = () => {
-    const capacity = parseFloat(machine?.capacity) || 0
-    const targetCapacity = capacity > 0 ? capacity * 0.8 : 0
-    
-    // Get unnumbered batches
-    const unnumbered = batches.filter(b => (!b.planNumber || b.planNumber <= 0) && b.status !== 'done')
-    
-    if (!unnumbered.length || !targetCapacity) return { items: [], targetCapacity, capacity }
-    
-    // Group by color
-    const byColor: { [key: string]: any[] } = {}
-    unnumbered.forEach(batch => {
-      const colorKey = normalizeShadeKey(batch.color || '')
-      if (!byColor[colorKey]) byColor[colorKey] = []
-      byColor[colorKey].push(batch)
-    })
-    
-    const items: ReviewItem[] = []
-    const groupedBatchIds = new Set<string>()
-    
-    // Find combinations
-    Object.entries(byColor).forEach(([colorKey, group]) => {
-      if (group.length < 2) return
-      
-      // Try to combine batches of same color
-      const bins: { batches: any[], total: number }[] = []
-      
-      // Sort by quantity descending
-      group.slice().sort((a, b) => (parseFloat(b.kg) || 0) - (parseFloat(a.kg) || 0)).forEach(batch => {
-        const qty = parseFloat(batch.kg) || 0
-        let bin = bins.find(x => x.total + qty <= targetCapacity + 0.001)
-        
-        if (!bin) {
-          bin = { batches: [], total: 0 }
-          bins.push(bin)
-        }
-        
-        bin.batches.push(batch)
-        bin.total += qty
-      })
-      
-      // Add bins with 2+ batches
-      bins.filter(bin => bin.batches.length >= 2).forEach(bin => {
-        bin.batches.forEach(b => groupedBatchIds.add(b.batchId))
-        
-        items.push({
-          type: 'collab',
-          title: `${bin.batches[0].color} - ${bin.batches[0].processName}`,
-          note: `Same colour batches can run together (${bin.total.toFixed(1)} / ${targetCapacity} Kg target)`,
-          batches: bin.batches,
-          total: bin.total,
-          colorKey
-        })
-      })
-    })
-    
-    // Add single low-quantity batches
-    unnumbered.forEach(batch => {
-      if (groupedBatchIds.has(batch.batchId)) return
-      
-      const qty = parseFloat(batch.kg) || 0
-      if (qty > 0 && qty < targetCapacity) {
-        items.push({
-          type: 'single',
-          title: `${batch.color} - ${batch.batchId}`,
-          note: `Low quantity batch (${qty} / ${targetCapacity} Kg target). Number now or skip for later.`,
-          batches: [batch],
-          total: qty,
-          colorKey: normalizeShadeKey(batch.color || '')
-        })
-      }
-    })
-    
-    return { items, targetCapacity, capacity }
-  }
-
-  const openReviewModal = () => {
-    const review = getNumberingReview()
-    
-    if (!review.items.length) {
-      // No items to review, run numbering directly
-      confirmNumbering([])
-      return
-    }
-    
-    setReviewItems(review.items)
-    // Select all by default
-    const allBatchIds = new Set<string>()
-    review.items.forEach(item => {
-      item.batches.forEach(b => allBatchIds.add(b.batchId))
-    })
-    setSelectedBatches(allBatchIds)
-    setShowReviewModal(true)
-  }
-
-  const toggleBatchSelection = (batchIds: string[]) => {
-    const newSelected = new Set(selectedBatches)
-    const allSelected = batchIds.every(id => newSelected.has(id))
-    
-    if (allSelected) {
-      batchIds.forEach(id => newSelected.delete(id))
-    } else {
-      batchIds.forEach(id => newSelected.add(id))
-    }
-    
-    setSelectedBatches(newSelected)
-  }
-
-  const confirmNumbering = (skipBatchIds: string[]) => {
-    const stored = localStorage.getItem('dyeflow_db')
-    if (!stored) return
-
-    const db = JSON.parse(stored)
-    
-    // Get unnumbered batches (excluding skipped ones)
-    const unnumbered = batches.filter(b => {
-      if (b.planNumber && b.planNumber > 0) return false
-      if (b.status === 'done') return false
-      if (skipBatchIds.includes(b.batchId)) return false
-      
-      // CRITICAL: Check shade master
-      const shadeType = getShadeMasterTypeByColor(b.color || '')
-      if (!shadeType || shadeType === 'Other') {
-        console.log(`Skipping batch ${b.batchId} - color "${b.color}" not in shade master`)
-        return false
-      }
-      
-      return true
-    })
-    
-    if (unnumbered.length === 0) {
-      alert('⚠️ No batches to number!\n\nAll batch colors must be defined in Shade Master before numbering.')
-      setShowReviewModal(false)
-      return
-    }
-
-    // Get max number
-    const existingNumbers = batches
-      .filter(b => b.planNumber && b.planNumber > 0)
-      .map(b => b.planNumber)
-    const maxNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0
-
-    // Get last shade for circular rotation
-    const lastNumberedBatch = batches.find(b => b.planNumber === maxNumber)
-    const lastShadeRank = lastNumberedBatch ? getShadeTypeRank(lastNumberedBatch.color) : 1
-
-    const shadeCycle = [1, 2, 3, 4]
-    const getCircularShadeWeight = (rank: number, startRank: number) => {
-      if (!shadeCycle.includes(rank)) return 99
-      const startIdx = Math.max(0, shadeCycle.indexOf(startRank))
-      const idx = shadeCycle.indexOf(rank)
-      return (idx - startIdx + shadeCycle.length) % shadeCycle.length
-    }
-
-    // Sort by shade sequence
-    const toNumber = [...unnumbered].sort((a, b) => {
-      const aRank = getShadeTypeRank(a.color)
-      const bRank = getShadeTypeRank(b.color)
-      const shadeDiff = getCircularShadeWeight(aRank, lastShadeRank) - getCircularShadeWeight(bRank, lastShadeRank)
-      if (shadeDiff !== 0) return shadeDiff
-      
-      const dateDiff = (a.date || '9999-12-31').localeCompare(b.date || '9999-12-31')
-      if (dateDiff !== 0) return dateDiff
-      
-      return (a.batchId || '').localeCompare(b.batchId || '')
-    })
-
-    // Assign numbers
-    let changed = false
-    toNumber.forEach((batch, idx) => {
-      const newNumber = maxNumber + idx + 1
-      
-      for (const order of db.orders) {
-        if (order.id === batch.orderId) {
-          const dbBatch = order.splits.find((s: any) => s.batchId === batch.batchId)
-          if (dbBatch) {
-            dbBatch.planNumber = newNumber
-            changed = true
-          }
-        }
-      }
-    })
-
-    if (changed) {
-      localStorage.setItem('dyeflow_db', JSON.stringify(db))
-      loadData()
-      alert(`✅ Numbered ${toNumber.length} batches!\n\nShade sequence: Light → Medium → Dark → Extra Dark → Light...\nMax 3 batches per day.`)
-    }
-    
-    setShowReviewModal(false)
   }
 
   // Handle collaboration confirmation — saves to Supabase
@@ -703,7 +472,7 @@ export default function MachinePage() {
       if (g.length) groups.push(g)
     }
     for (const b of batches) {
-      if (b.planNumber || b.status === 'done' || used.has(b.rowKey)) continue
+      if (b.planNumber || b.procDone || used.has(b.rowKey)) continue
       if (skipBatchIds.includes(b.rowKey) || skipBatchIds.includes(b.batchId)) continue
       used.add(b.rowKey); groups.push([{ batch: b.id, code: b.currentProcess }])
     }
@@ -717,7 +486,7 @@ export default function MachinePage() {
   }
 
   const runNumbering = () => {
-    const unnumbered = batches.filter(b => !b.planNumber && b.status !== 'done')
+    const unnumbered = batches.filter(b => !b.planNumber && !b.procDone)
     if (unnumbered.length === 0) { alert('No batches to number'); return }
 
     // Sort by shade type (Light → Medium → Dark → Extra Dark) before opening modal
@@ -762,7 +531,7 @@ export default function MachinePage() {
   }
 
   const applyFilters = () => {
-    let filtered = [...batches]
+    let filtered = showDone ? [...batches] : batches.filter(b => !b.procDone)
     
     if (shadeFilter !== 'all') {
       filtered = filtered.filter(b => b.shadeType.toLowerCase() === shadeFilter.toLowerCase())
@@ -839,141 +608,13 @@ export default function MachinePage() {
   }
 
   const totalBatches = batches.length
-  const activeBatches = batches.filter(b => b.status !== 'done').length
+  const activeBatches = batches.filter(b => !b.procDone).length
   const numberedBatches = batches.filter(b => b.planNumber && b.planNumber > 0).length
-  const unnumberedBatches = totalBatches - numberedBatches
+  const unnumberedBatches = batches.filter(b => !b.procDone && !(b.planNumber > 0)).length
+  const doneRows = batches.filter(b => b.procDone).length
 
   return (
     <div className="content">
-      {/* Review Modal */}
-      {showReviewModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }} onClick={() => setShowReviewModal(false)}>
-          <div style={{
-            background: 'white',
-            borderRadius: '8px',
-            padding: '24px',
-            maxWidth: '900px',
-            width: '90%',
-            maxHeight: '80vh',
-            overflow: 'auto'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
-                Review batch collaboration - {machine.name}
-              </h3>
-              <button onClick={() => setShowReviewModal(false)} style={{
-                background: 'none',
-                border: 'none',
-                fontSize: '20px',
-                cursor: 'pointer',
-                padding: '4px 8px'
-              }}>×</button>
-            </div>
-            
-            <div style={{ fontSize: '12px', color: '#718096', marginBottom: '16px' }}>
-              Machine capacity: <strong>{machine.capacity} Kg</strong> &nbsp;•&nbsp; 
-              Target fill: <strong>{machine.capacity * 0.8} Kg (80%)</strong>
-              <br/>
-              Uncheck any batch/group to skip numbering now.
-            </div>
-            
-            <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#F7FAFC', borderBottom: '2px solid #E2E8F0' }}>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>NUMBER NOW</th>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>TYPE</th>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>COLOUR / PROCESS</th>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>BATCHES</th>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>TOTAL KG</th>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>NOTE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reviewItems.map((item, idx) => {
-                  const batchIds = item.batches.map(b => b.batchId)
-                  const allSelected = batchIds.every(id => selectedBatches.has(id))
-                  
-                  return (
-                    <tr key={idx} style={{ borderBottom: '1px solid #E2E8F0' }}>
-                      <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={() => toggleBatchSelection(batchIds)}
-                        />
-                      </td>
-                      <td style={{ padding: '8px' }}>
-                        <span style={{
-                          padding: '2px 8px',
-                          borderRadius: '12px',
-                          fontSize: '10px',
-                          fontWeight: 600,
-                          background: item.type === 'collab' ? '#DBEAFE' : '#FEF3C7',
-                          color: item.type === 'collab' ? '#1E40AF' : '#92400E'
-                        }}>
-                          {item.type === 'collab' ? 'Collab' : 'Single'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px', fontWeight: 700, color: '#E53E3E' }}>{item.title}</td>
-                      <td style={{ padding: '8px', fontSize: '10px' }}>
-                        {item.batches.map((b, i) => (
-                          <div key={i}>
-                            {b.batchId} ({b.orderNo} - {b.kg} Kg)
-                          </div>
-                        ))}
-                      </td>
-                      <td style={{ padding: '8px', fontWeight: 700 }}>{item.total.toFixed(1)}</td>
-                      <td style={{ padding: '8px', fontSize: '10px', color: '#718096' }}>{item.note}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '16px' }}>
-              <button onClick={() => setShowReviewModal(false)} style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                border: '1px solid #E2E8F0',
-                borderRadius: '4px',
-                background: 'white',
-                cursor: 'pointer'
-              }}>
-                Cancel
-              </button>
-              <button onClick={() => {
-                const skipBatchIds = reviewItems.flatMap(item => 
-                  item.batches.filter(b => !selectedBatches.has(b.batchId)).map(b => b.batchId)
-                )
-                confirmNumbering(skipBatchIds)
-              }} style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                border: 'none',
-                borderRadius: '4px',
-                background: '#48BB78',
-                color: 'white',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}>
-                Run Numbering
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Machine Header */}
       <div className="card" style={{ marginBottom: '12px', background: 'linear-gradient(135deg, #FFF5F5 0%, #FED7D7 100%)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px' }}>
@@ -1099,7 +740,11 @@ export default function MachinePage() {
                 ))}
               </div>
             )}
-            <button
+            <label style={{ fontSize: '11px', color: '#718096', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} />
+              Show done ({doneRows})
+            </label>
+            {canEdit && <button
               onClick={runNumbering}
               style={{
                 padding: '6px 14px',
@@ -1114,8 +759,8 @@ export default function MachinePage() {
               disabled={unnumberedBatches === 0}
             >
               🔢 Run Numbering {unnumberedBatches > 0 ? `(${unnumberedBatches})` : ''}
-            </button>
-            {numberedBatches > 0 && (
+            </button>}
+            {canEdit && numberedBatches > 0 && (
               <button
                 onClick={clearNumbering}
                 style={{
@@ -1249,7 +894,10 @@ export default function MachinePage() {
                               data-plan-idx={idx}
                               data-batch-id={batch.id}
                               data-process={batch.currentProcess}
+                              disabled={!canEdit || batch.procDone}
                               onBlur={(e) => {
+                                // Enter already saved this cell (focus moving on blurs it)
+                                if (enterSaved.current.delete(batch.rowKey)) return
                                 const val = e.target.value
                                 if (val !== String(batch.planNumber || '')) {
                                   updatePlanNumber(batch.id, batch.currentProcess, val, batch.date_calc_plan_raw)
@@ -1260,12 +908,16 @@ export default function MachinePage() {
                                   e.preventDefault()
                                   const val = (e.target as HTMLInputElement).value
                                   if (val !== String(batch.planNumber || '')) {
+                                    enterSaved.current.add(batch.rowKey)
                                     updatePlanNumber(batch.id, batch.currentProcess, val, batch.date_calc_plan_raw)
                                   }
                                   const nextInput = document.querySelector<HTMLInputElement>(
                                     `input[data-plan-idx="${idx + 1}"]`
                                   )
-                                  if (nextInput) { nextInput.focus(); nextInput.select() }
+                                  // moving focus fires this cell's blur right now (skipped by the flag);
+                                  // the flag is then cleared so a LATER edit here saves normally
+                                  if (nextInput && !nextInput.disabled) { nextInput.focus(); nextInput.select() }
+                                  enterSaved.current.delete(batch.rowKey)
                                 }
                               }}
                               placeholder="-"
@@ -1330,6 +982,7 @@ export default function MachinePage() {
                             <input
                               type="checkbox"
                               checked={batch.faulty || false}
+                              disabled={!canEdit}
                               onChange={() => toggleFaulty(batch.id, batch.orderId, batch.faulty || false)}
                               style={{
                                 width: '16px',
@@ -1346,20 +999,10 @@ export default function MachinePage() {
                       if (col.key === 'action') {
                         return (
                           <td key={col.key} style={{ ...tdStyle, whiteSpace: 'nowrap', width: `${width}px` }}>
-                            <button style={{
-                              padding: '4px 10px',
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              border: '1px solid #E2E8F0',
-                              borderRadius: '4px',
-                              background: 'white',
-                              cursor: 'pointer',
-                              marginRight: '4px'
-                            }}>
-                              Sheet
-                            </button>
-                            {batch.status !== 'done' && (
-                              <button style={{
+                            {batch.procDone ? (
+                              <span style={{ fontSize: '10px', color: '#48BB78', fontWeight: 600 }}>✓ Done</span>
+                            ) : canEdit && batch.atThisProcess ? (
+                              <button onClick={() => handleDone(batch)} style={{
                                 padding: '4px 10px',
                                 fontSize: '10px',
                                 fontWeight: 600,
@@ -1371,6 +1014,11 @@ export default function MachinePage() {
                               }}>
                                 Done
                               </button>
+                            ) : (
+                              <span style={{ fontSize: '10px', color: '#A0AEC0' }}
+                                title={batch.current_process ? `Now at ${batch.current_process}` : 'Not sent yet'}>
+                                {batch.current_process ? `at ${batch.current_process}` : 'waiting'}
+                              </span>
                             )}
                           </td>
                         )

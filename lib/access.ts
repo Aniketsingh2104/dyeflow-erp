@@ -58,6 +58,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
     assign_supervisor: { edit: ['/orders', '/supervisor', '/ai-assistant'] },
     update_status: { edit: ['/orders', '/ai-assistant'] },
     bulk_update: { edit: ['/orders', '/ai-assistant'] },
+    reorder: { edit: ['/orders'] },
     delete: 'admin',
   },
   batches: {

@@ -102,10 +102,9 @@ export default function LabSubmittedPage() {
     if (!redevelopRemark.trim()) { alert('Enter a remark for the redevelop request.'); return }
     setSaving(true)
     try {
-      const newId = genRequestId(allRequests)
+      // the request number is given by the server
       const createRes = await labPost({
         action: 'create_request',
-        id: newId,
         indentId: rejectModal.indent_id,
         unit: rejectModal.unit,
         party: rejectModal.party,
@@ -122,6 +121,7 @@ export default function LabSubmittedPage() {
         recheckRemark: redevelopRemark.trim(),
       })
       if (!createRes.ok) { alert('Error creating recheck request: ' + createRes.error); return }
+      const newId = createRes.id
 
       const patchRes = await patchFmsData(rejectModal, { labDecision: 'rejected', rejectionAction: 'redevelop', redevelopRequestId: newId })
       if (!patchRes.ok) { alert('Error: ' + patchRes.error); return }

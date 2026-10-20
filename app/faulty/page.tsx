@@ -1,4 +1,5 @@
 'use client'
+import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 
 import { useEffect, useState, useCallback } from 'react'
 import ReprocessModal from '@/components/ReprocessModal'
@@ -46,6 +47,8 @@ const COLUMNS = [
 ]
 
 export default function FaultyPage() {
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => { setIsAdmin(isAdminUser(getActiveUserRecord())) }, [])
   const [records,      setRecords]      = useState<any[]>([])
   const [loading,      setLoading]      = useState(true)
   const [search,       setSearch]       = useState('')
@@ -379,14 +382,14 @@ export default function FaultyPage() {
                             <td key={col.key} style={{...s, overflow:'visible'}}>
                               <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                                 {r.status === 'open' && (<>
-                                  <button
+                                  <button className="edit-only"
                                     onClick={() => setOkModal(r)}
                                     style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
                                       border:'none', borderRadius:4, cursor:'pointer',
                                       background:'#16A34A', color:'white' }}>
                                     ✓ OK
                                   </button>
-                                  <button
+                                  <button className="edit-only"
                                     onClick={() => { setReprocessModal(r); setReprocessReason('') }}
                                     style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
                                       border:'none', borderRadius:4, cursor:'pointer',
@@ -400,11 +403,17 @@ export default function FaultyPage() {
                                 {r.status === 'resolved' && (
                                   <span style={{ fontSize:11, fontWeight:600, color:'#16A34A' }}>✓ Resolved</span>
                                 )}
-                                <button className="xs"
+                                {r.status === 'written-off' && (
+                                  <span style={{ fontSize:11, fontWeight:600, color:'#6B7280' }}>✕ Written off</span>
+                                )}
+                                <button className="xs edit-only"
                                   onClick={() => { setEditModal(r); setEditData({ status:r.status, notes:r.notes||'', if_ok:r.if_ok }) }}>
                                   Edit
                                 </button>
-                                <button className="xs danger" onClick={() => handleDelete(r.id)}>Del</button>
+                                {/* only an admin, only a closed record (the server refuses others) */}
+                                {isAdmin && (r.status === 'resolved' || r.status === 'written-off') && (
+                                  <button className="xs danger" onClick={() => handleDelete(r.id)}>Del</button>
+                                )}
                               </div>
                             </td>
                           )
@@ -440,7 +449,7 @@ export default function FaultyPage() {
                 onChange={e => setEditData((p: any) => ({ ...p, status:e.target.value }))}>
                 {/* Only Written Off can be set by hand — Mark OK / Reprocess move the batch too */}
                 <option value={editModal.status}>{(editModal.status || 'open').replace(/^./, (c: string) => c.toUpperCase())} (current)</option>
-                {editModal.status !== 'written-off' && <option value="written-off">Written Off</option>}
+                {(editModal.status || 'open') === 'open' && <option value="written-off">Written Off (batch finished, not reprocessed)</option>}
               </select>
             </div>
             <div className="form-group" style={{ marginBottom:12 }}>

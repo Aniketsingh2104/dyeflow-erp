@@ -1,4 +1,5 @@
 'use client'
+import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 import ReprocessModal from '@/components/ReprocessModal'
 
 import { useEffect, useState, useCallback } from 'react'
@@ -50,6 +51,8 @@ const COLUMNS = [
 ]
 
 export default function FobPage() {
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => { setIsAdmin(isAdminUser(getActiveUserRecord())) }, [])
   const [records,     setRecords]     = useState<any[]>([])
   const [loading,     setLoading]     = useState(true)
   const [search,      setSearch]      = useState('')
@@ -386,7 +389,7 @@ export default function FobPage() {
                           <td key={col.key} style={{...s, overflow:'visible'}}>
                             <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                               {!r.sent_at && r.status === 'open' && (
-                                <button onClick={() => handleMarkSent(r.id)} disabled={saving}
+                                <button className="edit-only" onClick={() => handleMarkSent(r.id)} disabled={saving}
                                   style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
                                     border:'none', borderRadius:4, cursor:'pointer',
                                     background:'#2563EB', color:'white' }}>
@@ -400,13 +403,13 @@ export default function FobPage() {
                                 </span>
                               )}
                               {(r.status === 'open' || r.status === 'sent') && (<>
-                                <button onClick={() => handleFobApproved(r)} disabled={saving}
+                                <button className="edit-only" onClick={() => handleFobApproved(r)} disabled={saving}
                                   style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
                                     border:'none', borderRadius:4, cursor:'pointer',
                                     background:'#16A34A', color:'white' }}>
                                   ✓ Approved
                                 </button>
-                                <button onClick={() => setReprocessModal(r)} disabled={saving}
+                                <button className="edit-only" onClick={() => setReprocessModal(r)} disabled={saving}
                                   style={{ padding:'3px 8px', fontSize:11, fontWeight:700,
                                     border:'none', borderRadius:4, cursor:'pointer',
                                     background:'#D97706', color:'white' }}>
@@ -425,11 +428,14 @@ export default function FobPage() {
                                   🔄 Repairing
                                 </span>
                               )}
-                              <button className="xs"
+                              <button className="xs edit-only"
                                 onClick={() => { setEditModal(r); setEditData({ notes:r.notes||'' }) }}>
                                 Edit
                               </button>
-                              <button className="xs danger" onClick={() => handleDelete(r.id)}>Del</button>
+                              {/* only an admin, only an approved FOB (the server refuses others) */}
+                              {isAdmin && r.status === 'approved' && (
+                                <button className="xs danger" onClick={() => handleDelete(r.id)}>Del</button>
+                              )}
                             </div>
                           </td>
                         )

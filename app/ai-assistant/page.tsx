@@ -431,6 +431,7 @@ Be precise. Show actual numbers from the data — don't invent days-remaining fi
 2. Respond with a JSON array of specific actions to execute
 3. ONLY use these action types: status_change, assign_supervisor, add_hold, update_remark, bulk_assign
 4. For each action include: type, orderNumber (or orderNumbers for bulk), field, oldValue, newValue, description
+5. status_change can ONLY put an order on "hold" or "release" a hold — every other status follows the batches automatically and cannot be set
 
 Respond with ONLY a JSON object in this exact format:
 {
@@ -490,7 +491,9 @@ ${ctx}`
       for (const action of proposedActions) {
         const orderNums = action.orderNumbers || (action.orderNumber ? [action.orderNumber] : [])
 
-        // Bulk assign: one bulk_update call covering every matched order, instead of looping.
+        // Bulk assign: assign_supervisor per order — it keeps each order's
+        // status right (only a new order becomes 'assigned'; a held / split /
+        // running order keeps its status). bulk_update used to force 'assigned'.
         if (action.type === 'bulk_assign') {
           const ids: string[] = []
           for (const num of orderNums) {
@@ -502,8 +505,13 @@ ${ctx}`
           if (!supId) {
             results.push(`❌ Supervisor "${action.newValue}" not found`)
           } else if (ids.length > 0) {
-            const res = await postOrders({ action: 'bulk_update', ids, patch: { supervisor_id: supId, status: 'assigned' } })
-            results.push(res.ok ? `✅ ${ids.length} order(s) → supervisor ${action.newValue}` : `❌ Bulk assign failed: ${res.error}`)
+            let okN = 0
+            for (const id of ids) {
+              const res = await postOrders({ action: 'assign_supervisor', id, supervisor_id: supId })
+              if (res.ok) okN++
+              else results.push(`❌ ${Object.keys(orderByNumber).find(k => orderByNumber[k]?.id === id) || id}: ${res.error}`)
+            }
+            if (okN) results.push(`✅ ${okN} order(s) → supervisor ${action.newValue}`)
           }
           continue
         }
@@ -515,8 +523,12 @@ ${ctx}`
           try {
             switch (action.type) {
               case 'status_change': {
-                const res = await postOrders({ action: 'update_status', id: order.id, status: action.newValue })
-                results.push(res.ok ? `✅ ${orderNum}: status ${order.status} → ${action.newValue}` : `❌ ${orderNum}: ${res.error}`)
+                // By hand only Hold / Release Hold — other statuses follow the batches
+                const want = String(action.newValue || '').toLowerCase()
+                const status = want === 'hold' ? 'hold' : (['release', 'unhold', 'release hold'].includes(want) || order.status === 'hold') ? 'release' : null
+                if (!status) { results.push(`⚠️ ${orderNum}: "${action.newValue}" can't be set by hand — only Hold / Release Hold (other statuses follow the batches)`); break }
+                const res = await postOrders({ action: 'update_status', id: order.id, status })
+                results.push(res.ok ? `✅ ${orderNum}: ${status === 'hold' ? 'put on hold' : 'hold released'}` : `❌ ${orderNum}: ${res.error}`)
                 break
               }
               case 'assign_supervisor': {

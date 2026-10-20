@@ -182,10 +182,11 @@ export default function RepairingOrderPage() {
     if (!sup) { alert('Supervisor not found'); return }
     setSaving(true)
     try {
-      await fetch('/api/batches', {
+      const res = await fetch('/api/batches', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ action:'update', id: assignModal.batch_id, supervisor_id: sup.id })
-      })
+      }).then(x=>x.json()).catch(() => ({ ok:false, error:'Network error' }))
+      if (!res.ok) { alert('Not reassigned: ' + (res.error || 'Unknown error')); return }
       showToast('Reassigned to ' + chosenSup)
       setAssignModal(null); setChosenSup(''); load()
     } finally { setSaving(false) }

@@ -197,7 +197,6 @@ export default function FmsProcessPage() {
         const bpStatus = bp?.status || 'pending'  // 'pending' | 'done' | 'faulty' | 'fob'
         const actual   = bp?.done_at ? bp.done_at.split('T')[0] : ''
         const actualDateTime = bp?.done_at ? bp.done_at : ''  // full timestamp for display
-        const delay    = delayMeta(planned, actual, now)
         // Check if FOB exists for this batch at this process
         // Either via fob_records OR via batch_processes.status='fob'
         const fobKey  = `${b.id}__${processCode}`
@@ -240,8 +239,8 @@ export default function FmsProcessPage() {
           bpStatus,          // 'pending' | 'done' | 'faulty'
           hasFob,            // true if FOB record exists for this batch at this process
           actualDateTime,    // full timestamp of done_at for display
-          delayText:         delay.text,
-          delayLate:         delay.late,
+          // TIME DELAY is worked out when the table draws (it follows the
+          // clock) — the minute tick no longer reloads all the data
           isFaulty:          b.is_faulty,
         }
       })
@@ -254,7 +253,7 @@ export default function FmsProcessPage() {
     } finally {
       setLoading(false)
     }
-  }, [processCode, now])
+  }, [processCode])
 
   useEffect(() => {
     loadRows()
@@ -619,7 +618,10 @@ export default function FmsProcessPage() {
                             {row.actualDateTime ? fmtDateTime(row.actualDateTime) : '-'}
                           </td>
                         )
-                        case 'time_delay':    return <td key={col.id} style={{ ...s, fontWeight: 700, color: row.delayLate ? 'var(--danger)' : 'var(--success)' }}>{row.delayText}</td>
+                        case 'time_delay': {
+                          const d = delayMeta(row.plannedDate, row.actualDate, now)
+                          return <td key={col.id} style={{ ...s, fontWeight: 700, color: d.late ? 'var(--danger)' : 'var(--success)' }}>{d.text}</td>
+                        }
                         case 'actions': {
                           // Determine which action has been taken
                           const isDone   = row.bpStatus === 'done'
@@ -638,7 +640,7 @@ export default function FmsProcessPage() {
 
                           return (
                             <td key={col.id} style={{ ...s, overflow: 'visible' }}>
-                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <div className="edit-only" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
 
                                 {/* DONE button */}
                                 <button

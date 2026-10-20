@@ -748,3 +748,6 @@ a.danger {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* PageGuard: View-only users don't see change controls (components/PageGuard.tsx) */
+.dyeflow-readonly .edit-only { display: none !important; }

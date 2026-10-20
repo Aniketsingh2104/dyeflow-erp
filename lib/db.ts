@@ -174,11 +174,7 @@ export function getCurrentUser(): { username: string; role: string } | null {
 // ── Legacy stubs ───────────────────────────────────────────────────────────
 
 export function getDb(): Record<string, any> {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = localStorage.getItem('dyeflow_db')
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
+  return {}   // the old browser copy of the database is gone (Supabase only)
 }
 
 export function saveDb(_db: Record<string, any>): void {
