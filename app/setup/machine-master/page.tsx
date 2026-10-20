@@ -1,9 +1,10 @@
 'use client'
 
+import { SECTIONS, sectionOf } from '@/lib/machineSections'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 
-interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string; numbering_base_date?: string; nozzles?: number | null; reel_speed?: number | null }
+interface Machine { id: string; name: string; machine_type?: string; capacity: number; status: string; numbering_base_date?: string; nozzles?: number | null; reel_speed?: number | null; section?: string | null }
 
 const api = async (action: string, payload: Record<string, any> = {}) => {
   const res = await fetch('/api/machines', {
@@ -19,7 +20,7 @@ export default function MachineMasterPage() {
   const [loading,      setLoading]      = useState(true)
   const [showModal,    setShowModal]    = useState(false)
   const [importStatus, setImportStatus] = useState('')
-  const [form, setForm] = useState({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' })
+  const [form, setForm] = useState({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '', section: 'Others' })
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -49,9 +50,10 @@ export default function MachineMasterPage() {
       name: form.name.trim(), machine_type: form.machine_type.trim(),
       capacity: form.capacity, status: 'idle', is_active: true,
       nozzles: parseInt(form.nozzles) || null, reel_speed: parseFloat(form.reel_speed) || null,
+      section: form.section,
     })
     if (!data.ok) alert(`Failed: ${data.error}`)
-    else { setShowModal(false); setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' }); load() }
+    else { setShowModal(false); setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '', section: 'Others' }); load() }
   }
 
   const processImport = async (rows: any[][]) => {
@@ -148,7 +150,7 @@ export default function MachineMasterPage() {
           </div>
           <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
             borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-            onClick={() => { setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '' }); setShowModal(true) }}>
+            onClick={() => { setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '', section: 'Others' }); setShowModal(true) }}>
             + Add Machine
           </button>
         </div>
@@ -156,7 +158,7 @@ export default function MachineMasterPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead style={{ background: 'var(--bg-secondary)' }}>
               <tr>
-                {['Machine Name','Type','Capacity (Kg)','Nozzles','Reel Speed (m/min)','Numbering Base Date','Status','Actions'].map(h => (
+                {['Machine Name','Type','Section','Capacity (Kg)','Nozzles','Reel Speed (m/min)','Numbering Base Date','Status','Actions'].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
                     color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
                     borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -165,9 +167,9 @@ export default function MachineMasterPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+                <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
               ) : machines.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
                   No machines yet. Click "+ Add Machine" or upload Excel.
                 </td></tr>
               ) : (
@@ -180,6 +182,19 @@ export default function MachineMasterPage() {
                         <span style={{ background: '#E6F0FF', color: '#3366CC', padding: '2px 8px',
                           borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{m.machine_type}</span>
                       )}
+                    </td>
+                    <td style={{ padding: '12px 14px' }}>
+                      {/* the Supervisor sheet lists machines by section */}
+                      <select value={sectionOf(m)} onChange={async e => {
+                          const r = await fetch('/api/machines', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'update', id: m.id, section: e.target.value }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
+                          if (!r.ok) alert('Not saved: ' + (r.error || 'Unknown error'))
+                          load()
+                        }}
+                        style={{ fontSize: 12, padding: '3px 8px', border: '1px solid var(--border-medium)', borderRadius: 4,
+                          background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                        {SECTIONS.map(x => <option key={x} value={x}>{x}</option>)}
+                      </select>
                     </td>
                     <td style={{ padding: '12px 14px', fontSize: 13 }}>{m.capacity} Kg</td>
                     {/* jet loading data for Auto Split (lib/loading.ts) — saved when you leave the box */}
@@ -302,6 +317,12 @@ export default function MachineMasterPage() {
                 <label>Capacity (Kg)</label>
                 <input type="number" value={form.capacity} onChange={e => setForm({ ...form, capacity: parseInt(e.target.value) || 200 })}
                   placeholder="200" />
+              </div>
+              <div className="form-group">
+                <label>Section</label>
+                <select value={form.section} onChange={e => setForm({ ...form, section: e.target.value })}>
+                  {SECTIONS.map(x => <option key={x} value={x}>{x}</option>)}
+                </select>
               </div>
               <div className="form-group">
                 <label>Nozzles (jets)</label>

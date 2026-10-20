@@ -7,6 +7,7 @@ import { DarkModeToggle, NotificationCenter, KeyboardShortcuts } from '@/compone
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 import { pageAccess, machinePaths } from '@/lib/pageAccess'
 import { isBatchFinished } from '@/lib/batchStatus'
+import { SECTIONS, sectionOf } from '@/lib/machineSections'
 
 // same matching as the server (lib/pageAccess.ts) — a machine sheet counts by
 // its id or by its name slug (what User Management stores)
@@ -16,7 +17,7 @@ function canViewPath(item: NavItem, userPerms: Record<string, any> | null, admin
   return pageAccess(userPerms, item.aliases?.length ? item.aliases : [item.path], false).view
 }
 
-interface NavItem  { name: string; path: string; adminOnly?: boolean; aliases?: string[] }
+interface NavItem  { name: string; path: string; adminOnly?: boolean; aliases?: string[]; header?: boolean }
 interface NavSection { label: string; items: NavItem[] }
 
 export default function Navigation() {
@@ -58,13 +59,19 @@ export default function Navigation() {
 
       // Machines nav items
       const machineList = mRes.data || []
-      setMachines(
-        machineList.map((m: any) => ({
+      // grouped by section (LongJet ▸ UJET ▸ Beam ▸ Cotton ▸ Others)
+      const grouped: NavItem[] = []
+      for (const sec of SECTIONS) {
+        const list = machineList.filter((m: any) => sectionOf(m) === sec)
+        if (!list.length) continue
+        grouped.push({ name: sec, path: `#section-${sec}`, header: true })
+        for (const m of list) grouped.push({
           name: m.name,
           path: `/machines/${m.id}`,   // use UUID, not name slug
           aliases: machinePaths(m),
-        }))
-      )
+        })
+      }
+      setMachines(grouped)
 
       // FMS items: count active batches per process from Supabase
       const activeBatchesPerProcess: Record<string, number> = {}
@@ -152,8 +159,9 @@ export default function Navigation() {
   }
 
   const filterItems = (items: NavItem[]): NavItem[] => {
-    if (userIsAdmin) return items
-    return items.filter(item => canViewPath(item, userPerms, userIsAdmin))
+    const kept = userIsAdmin ? items : items.filter(item => item.header || canViewPath(item, userPerms, userIsAdmin))
+    // a section heading with nothing under it is dropped
+    return kept.filter((item, i) => !item.header || (kept[i + 1] && !kept[i + 1].header))
   }
 
   const sections: NavSection[] = [
@@ -305,7 +313,12 @@ export default function Navigation() {
 
               {isOpen && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)', minWidth: '200px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 1000, maxHeight: '400px', overflowY: 'auto' }}>
-                  {section.items.map(item => (
+                  {section.items.map(item => item.header ? (
+                    <div key={item.path} style={{ padding: '6px 14px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                      letterSpacing: '0.06em', color: 'var(--text-tertiary)', borderTop: '1px solid var(--border-light)' }}>
+                      {item.name}
+                    </div>
+                  ) : (
                     <Link key={item.path + item.name} href={item.path} onClick={() => setOpenDropdown(null)}
                       style={{
                         display: 'block', padding: '8px 14px', fontSize: '13px',

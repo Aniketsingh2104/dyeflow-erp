@@ -9,6 +9,7 @@ import {
 import { sameCode, canonicalCode } from '@/lib/processCodes'
 import { articleForMaster } from '@/lib/articleMatch'
 import { workRoute, fullRoute, routeHasQa } from '@/lib/routeTail'
+import { SECTIONS, sectionOf, cleanSections } from '@/lib/machineSections'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 
 // ── Route to pre-fill, per article (app/api/route-suggest): Master → Master
@@ -47,8 +48,11 @@ function loadMaster(): Promise<any> {
   if (masterCache && Date.now() - masterCache.at < 60_000) return masterCache.p
   const get = (u: string) => fetch(u, { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] }))
   const p = Promise.all([get('/api/machines'), get('/api/processes'), get('/api/route-templates'),
-                         get('/api/article-routes'), get('/api/orders')])
-    .then(([machRes, procRes, routeRes, articleRouteRes, orderRes]) => {
+                         get('/api/article-routes'), get('/api/orders'), get('/api/supervisors')])
+    .then(([machRes, procRes, routeRes, articleRouteRes, orderRes, supRes]) => {
+      // each supervisor's default machine sections (Supervisor Master)
+      const supSections: Record<string, string[]> = {}
+      for (const sp of (supRes.data || [])) supSections[sp.id] = cleanSections(sp.default_sections)
       const processList = procRes.data || []
       // every machine for names / saved ids (a switched-off machine may still be
       // on an order); only active ones are suggested or listed
@@ -76,6 +80,7 @@ function loadMaster(): Promise<any> {
       return {
         machines,
         allMachines,
+        supSections,
         processList,
         typesFor,
         articleMachines,
@@ -189,6 +194,17 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   const [saveToMaster,        setSaveToMaster]        = useState(true)
   // QA before Packing → Dispatch: from the Master for this article (or the saved route)
   const [qa,                  setQa]                  = useState(false)
+  // machine sections listed per process box (several can be ticked; none = all)
+  const [sectionSel,          setSectionSel]          = useState<Record<string, string[]>>({})
+  const toggleSection = (code: string, sec: string) => setSectionSel(prev => {
+    const cur = prev[code] || []
+    return { ...prev, [code]: cur.includes(sec) ? cur.filter(x => x !== sec) : SECTIONS.filter(x => x === sec || cur.includes(x)) }
+  })
+  const machinesFor = (code: string) => {
+    const sel = sectionSel[code] || []
+    const list = db?.machines || []
+    return sel.length ? list.filter((m: any) => sel.includes(sectionOf(m))) : list
+  }
   const [isAdmin,             setIsAdmin]             = useState(false)
 
   // ── Confirmed check — top of render ───────────────────────────────────────
@@ -305,6 +321,19 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       ]
     }
     setMachineInputs(inputs)
+    // machine list per process: the supervisor's sections (plus the section of
+    // a machine already saved, so it is listed too); none = all machines
+    const defaults = database.supSections?.[order.supervisor_id] || []
+    const sel: Record<string, string[]> = {}
+    for (const step of machineSteps) {
+      const set = new Set<string>(defaults)
+      for (const name of inputs[step.processCode] || []) {
+        const rec = findMachine(database.allMachines || database.machines || [], name)
+        if (rec && set.size) set.add(sectionOf(rec))
+      }
+      sel[step.processCode] = SECTIONS.filter(x => set.has(x))
+    }
+    setSectionSel(sel)
     setShowMachines(machineSteps.length > 0)
   }
 
@@ -550,6 +579,21 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
                 </div>
                 {smartLabel && <div style={{ fontSize: '10px', color: '#10B981', marginBottom: '4px' }}>suggest: {smartLabel}</div>}
 
+                {/* which machine sections to list (several can be picked; none = all) */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: '6px' }}>
+                  {SECTIONS.map(sec => {
+                    const on = (sectionSel[step.processCode] || []).includes(sec)
+                    return (
+                      <button key={sec} type="button" onClick={() => toggleSection(step.processCode, sec)}
+                        style={{ padding: '2px 8px', fontSize: '10px', fontWeight: 600, borderRadius: 10, cursor: 'pointer',
+                          border: `1px solid ${on ? '#2563EB' : '#D1D5DB'}`, background: on ? '#DBEAFE' : '#fff', color: on ? '#1D4ED8' : '#6B7280' }}>
+                        {sec}
+                      </button>
+                    )
+                  })}
+                  {!(sectionSel[step.processCode] || []).length && <span style={{ fontSize: '10px', color: '#9CA3AF', alignSelf: 'center' }}>all machines</span>}
+                </div>
+
                 {/* Machine 1 */}
                 <div style={{ fontSize: '10px', color: '#6B7280', marginBottom: '2px' }}>Machine 1</div>
                 <input type="text" list={`m1-${order.id}-${step.processCode}`}
@@ -558,7 +602,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
                   placeholder="Primary machine"
                   style={{ width: '100%', padding: '5px 8px', fontSize: '11px', border: '1px solid #D1D5DB', borderRadius: '4px', marginBottom: '6px' }} />
                 <datalist id={`m1-${order.id}-${step.processCode}`}>
-                  {(db.machines || []).map((m: any) => <option key={m.id} value={m.name}>{m.name}{m.capacity ? ` (${m.capacity}kg)` : ''}</option>)}
+                  {machinesFor(step.processCode).map((m: any) => <option key={m.id} value={m.name}>{m.name}{m.capacity ? ` (${m.capacity}kg)` : ''}</option>)}
                 </datalist>
 
                 {/* Machine 2 */}
@@ -570,7 +614,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
                   style={{ width: '100%', padding: '5px 8px', fontSize: '11px', border: '1px solid #D1D5DB', borderRadius: '4px',
                     borderStyle: pair[1] ? 'solid' : 'dashed', opacity: pair[1] ? 1 : 0.7 }} />
                 <datalist id={`m2-${order.id}-${step.processCode}`}>
-                  {(db.machines || []).map((m: any) => <option key={m.id} value={m.name}>{m.name}{m.capacity ? ` (${m.capacity}kg)` : ''}</option>)}
+                  {machinesFor(step.processCode).map((m: any) => <option key={m.id} value={m.name}>{m.name}{m.capacity ? ` (${m.capacity}kg)` : ''}</option>)}
                 </datalist>
               </div>
             )
