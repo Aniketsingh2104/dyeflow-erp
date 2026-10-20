@@ -15,6 +15,7 @@ import { getProcessList } from '@/lib/db'
 
 // ── Column definitions ──────────────────────────────────────────────────────
 
+const ORDERS_COL_WIDTHS_KEY = 'dyeflow_orders_col_widths'
 const COLUMNS = [
   { key: 'created_at',      label: 'TIMESTAMP',      defaultWidth: 140 },
   { key: 'order_number',    label: 'ORDER #',         defaultWidth: 140 },
@@ -39,7 +40,7 @@ const COLUMNS = [
   { key: 'hold_reason',     label: 'HOLD REMARK',     defaultWidth: 150 },
   { key: 'supervisor',      label: 'SUPERVISOR',      defaultWidth: 120 },
   { key: 'process_route',   label: 'PROCESS ROUTE',   defaultWidth: 200 },
-  { key: 'machine',         label: 'MACHINE',         defaultWidth: 120 },
+  { key: 'machine',         label: 'MACHINE',         defaultWidth: 180 },
   { key: 'status',          label: 'STATUS',          defaultWidth: 100 },
   { key: 'actions',         label: 'ACTIONS',         defaultWidth: 300 },
 ]
@@ -99,9 +100,15 @@ export default function OrdersPage() {
   const [colFilters,    setColFilters]    = useState<Record<string, string>>({})
 
   // Column widths & resize
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() =>
-    Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultWidth]))
-  )
+  // column widths are remembered in this browser (dragged widths used to vanish on refresh)
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    const defaults = Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultWidth]))
+    try {
+      const saved = JSON.parse(localStorage.getItem(ORDERS_COL_WIDTHS_KEY) || '{}')
+      for (const [k, v] of Object.entries(saved)) if (k in defaults && typeof v === 'number' && v >= 50) defaults[k] = v
+    } catch {}
+    return defaults
+  })
   const [resizing, setResizing] = useState<{ key: string; startX: number; startW: number } | null>(null)
 
   // Selection
@@ -248,7 +255,10 @@ export default function OrdersPage() {
       const diff = e.pageX - resizing.startX
       setColWidths(prev => ({ ...prev, [resizing.key]: Math.max(50, resizing.startW + diff) }))
     }
-    const onUp = () => setResizing(null)
+    const onUp = () => {
+      setResizing(null)
+      setColWidths(prev => { try { localStorage.setItem(ORDERS_COL_WIDTHS_KEY, JSON.stringify(prev)) } catch {} return prev })
+    }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup',  onUp)
     document.body.style.cursor     = 'col-resize'
@@ -880,14 +890,14 @@ export default function OrdersPage() {
                       )}
                     </td>
 
-                    <td style={{ ...td, width: colWidths.machine }}>
+                    <td style={{ ...td, width: colWidths.machine, overflow: 'hidden' }}>
                       {/* every machine the supervisor picked, per process (process_machines), in route order */}
                       {machLines.map(l => (
-                        <div key={l.code} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, whiteSpace: 'nowrap' }}>
+                        <div key={l.code} style={{ display: 'flex', gap: 4, alignItems: 'flex-start', marginBottom: 3, flexWrap: 'wrap' }}>
                           {l.code && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', minWidth: 18 }}>{l.code}</span>}
                           {l.names.map(n => (
                             <span key={n} style={{ background: 'var(--purple-light)', color: 'var(--purple)',
-                              padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{n}</span>
+                              padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600, whiteSpace: 'normal' }}>{n}</span>
                           ))}
                         </div>
                       ))}
