@@ -191,8 +191,22 @@ export default function OrdersPage() {
   // process_route is an array of codes shown as names — filtering on the raw
   // o[key] value silently breaks for these three (empty/UUID/code strings
   // never match what's typed into the filter box).
+  // Machines per process as the supervisor set them: [{ code: 'S', names: ['LJET-31'] }, { code: 'D', names: ['LJET-22', 'LJET-18'] }]
+  // in route order; an order with only the old single machine_id gives one line with no code.
+  const machineLines = useCallback((o: any): { code: string; names: string[] }[] => {
+    const pm: Record<string, any> = o.process_machines || {}
+    const name = (id: string) => machines.find(m => m.id === id)?.name
+    const route: string[] = o.process_route || []
+    const codes = [...route.filter(c => pm[c]), ...Object.keys(pm).filter(c => !route.includes(c))]
+    const lines = codes.map(code => ({ code, names: ((Array.isArray(pm[code]) ? pm[code] : [pm[code]]) as string[]).map(name).filter(Boolean) as string[] }))
+      .filter(l => l.names.length)
+    if (lines.length) return lines
+    const single = o.machine_id && name(o.machine_id)
+    return single ? [{ code: '', names: [single] }] : []
+  }, [machines])
+
   const getColumnText = useCallback((o: any, key: string): string => {
-    if (key === 'machine') return machines.find(m => m.id === o.machine_id)?.name || ''
+    if (key === 'machine') return machineLines(o).map(l => `${l.code} ${l.names.join(' ')}`).join(' ') || ''
     if (key === 'supervisor') return supervisors.find(s => s.id === o.supervisor_id)?.name || ''
     if (key === 'process_route') {
       return (o.process_route || [])
@@ -200,7 +214,7 @@ export default function OrdersPage() {
         .join(' ')
     }
     return String(o[key] ?? '')
-  }, [machines, supervisors, processList])
+  }, [machines, supervisors, processList, machineLines])
 
   const filtered = useMemo(() => {
     let list = [...orders]
@@ -775,7 +789,7 @@ export default function OrdersPage() {
                 </tr>
               ) : filtered.map((order, idx) => {
                 const sup     = supervisors.find(s => s.id === order.supervisor_id)
-                const mach    = machines.find(m => m.id === order.machine_id)
+                const machLines = machineLines(order)
                 const selected = selectedIds.has(order.id)
                 return (
                   <tr key={order.id || idx}
@@ -867,12 +881,16 @@ export default function OrdersPage() {
                     </td>
 
                     <td style={{ ...td, width: colWidths.machine }}>
-                      {mach && (
-                        <span style={{ background: 'var(--purple-light)', color: 'var(--purple)',
-                          padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
-                          {mach.name}
-                        </span>
-                      )}
+                      {/* every machine the supervisor picked, per process (process_machines), in route order */}
+                      {machLines.map(l => (
+                        <div key={l.code} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, whiteSpace: 'nowrap' }}>
+                          {l.code && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', minWidth: 18 }}>{l.code}</span>}
+                          {l.names.map(n => (
+                            <span key={n} style={{ background: 'var(--purple-light)', color: 'var(--purple)',
+                              padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{n}</span>
+                          ))}
+                        </div>
+                      ))}
                     </td>
 
                     <td style={{ ...td, width: colWidths.status }}>
