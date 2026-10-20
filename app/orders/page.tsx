@@ -7,8 +7,9 @@ import {
   assignSupervisor as apiAssignSupervisor,
   updateOrderStatus, bulkUpdateOrders,
   getSupervisors, getCustomers, getMachines,
-  createSplits, getCurrentUser,
+  createSplitsAsking, getCurrentUser,
 } from '@/lib/db'
+import { cleanSubProd, subProdFromRemarks } from '@/lib/subProd'
 import AutoSplitModal from '@/components/AutoSplitModal'
 import { getProcessList } from '@/lib/db'
 
@@ -375,9 +376,11 @@ export default function OrdersPage() {
         }
         return o.machine_id || ''
       })()
-      setSplitParts([{ kg: remainingKg, mtr: remainingMtr, taka: remainingTaka, machine_id: primaryMachineId }])
+      // Sub Prod No.: an imported order's "Sub Prod: P-xxxx-A" goes into batch 1 of its first split
+      const subProd = existingBatches.length ? '' : (subProdFromRemarks(o.remarks) || '')
+      setSplitParts([{ kg: remainingKg, mtr: remainingMtr, taka: remainingTaka, machine_id: primaryMachineId, sub_prod_no: subProd }])
     } catch {
-      setSplitParts([{ kg: o.qty_kg, mtr: o.qty_mtr || 0, taka: o.no_of_taka || 0 }])
+      setSplitParts([{ kg: o.qty_kg, mtr: o.qty_mtr || 0, taka: o.no_of_taka || 0, sub_prod_no: '' }])
     }
     setModal('split')
   }
@@ -580,8 +583,10 @@ export default function OrdersPage() {
         taka:        parseInt(p.taka)  || 0,
         // Use per-batch machine selection if available, else fall back to order's primary machine
         machine_id:  firstMachine(buildMap(p)) || p.machine_id || selectedOrder.machine_id || null,
+        sub_prod_no: cleanSubProd(p.sub_prod_no),
       }))
-      const { error } = await createSplits(selectedOrder.id, batches, selectedOrder.process_route || [])
+      const { error, cancelled } = await createSplitsAsking(selectedOrder.id, batches, selectedOrder.process_route || [])
+      if (cancelled) return
       if (error) { alert('Error: ' + error); return }
       showToast(`✓ ${batches.length} batch${batches.length > 1 ? 'es' : ''} created`)
       setModal(null); setSelectedOrder(null); setSplitParts([]); loadAll()
@@ -1350,7 +1355,7 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
     return () => { cancelled = true }
   }, [order.article, order.color])
 
-  const add    = () => setSplitParts(p => [...p, { kg: 0, mtr: 0, taka: 0, machine_id: allMachineOptions[0]?.id || '' }])
+  const add    = () => setSplitParts(p => [...p, { kg: 0, mtr: 0, taka: 0, machine_id: allMachineOptions[0]?.id || '', sub_prod_no: '' }])
   const remove = (i: number) => setSplitParts(p => p.filter((_, j) => j !== i))
   const upd    = (i: number, field: string, val: string) =>
     setSplitParts(p => p.map((b, j) => j === i ? { ...b, [field]: val } : b))
@@ -1421,6 +1426,7 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Qty (Kg)</th>
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Qty (Mtr)</th>
               <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Taka</th>
+              <th style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>Sub Prod No.</th>
               {choiceProcs.map(code => (
                 <th key={code} style={{ padding: '6px 8px', fontSize: 11, textAlign: 'left', borderBottom: '1px solid var(--border-light)' }}>
                   {code} machine
@@ -1442,6 +1448,13 @@ function SplitModal({ order, splitParts, setSplitParts, onSave, onClose, saving 
                         background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
                   </td>
                 ))}
+                <td style={{ padding: '6px 8px' }}>
+                  <input type="text" value={part.sub_prod_no || ''} maxLength={30} placeholder="e.g. P-5201-A"
+                    onChange={e => upd(i, 'sub_prod_no', e.target.value.toUpperCase())}
+                    style={{ width: 110, padding: '4px 6px', fontSize: 12,
+                      border: '1px solid var(--border-medium)', borderRadius: 4,
+                      background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+                </td>
                 {choiceProcs.map(code => {
                   const opts = getMachineOptions(code)
                   return (

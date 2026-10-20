@@ -348,7 +348,7 @@ ${lines.join('\n') || '  none matching'}`
 // ── Anomaly Detection ─────────────────────────────────────────────────────────
 
 export interface AnomalyItem {
-  batchId: string; orderNo: string; party: string; article: string; color: string;
+  batchId: string; subProdNo?: string; orderNo: string; party: string; article: string; color: string;
   processCode: string; processName: string; daysStuck: number; expectedDays: number;
   overByDays: number; supervisor: string; machine: string; severity: 'critical'|'warning'|'watch'
 }
@@ -395,7 +395,7 @@ export async function fetchAnomalyContext(): Promise<{ anomalies: AnomalyItem[];
         daysStuck >= expectedDays * 1.5 ? 'warning'  : 'watch'
       const order = orderMap[b.order_id] || {}
       anomalies.push({
-        batchId: b.batch_id || b.id, orderNo: order.order_number || '-',
+        batchId: b.batch_id || b.id, subProdNo: b.sub_prod_no || '', orderNo: order.order_number || '-',
         party: order.party || '-', article: order.article || '-', color: order.color || '-',
         processCode: proc, processName: procNames[proc] || proc,
         daysStuck, expectedDays, overByDays,

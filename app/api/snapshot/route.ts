@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
       dbSelect('orders', { order: 'created_at.desc', or: `(status.neq.done,updated_at.gte.${since90})` },
         'id,order_number,party,article,color,qty_kg,status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,created_at,supervisors(name),machines(name,capacity)'),
       dbSelect('batches', { order: 'created_at.asc', or: `(status.not.in.(done,written-off),updated_at.gte.${since90})` },
-        'id,batch_id,order_id,kg,status,current_process,process_route,fms_enter_at,fms_actual_dates,is_faulty,updated_at,machines(name)'),
+        'id,batch_id,sub_prod_no,order_id,kg,status,current_process,process_route,fms_enter_at,fms_actual_dates,is_faulty,updated_at,machines(name)'),
       dbSelect('machines', { order: 'name.asc' }, 'id,name,capacity,status,machine_type'),
       dbSelect('supervisors', { order: 'name.asc' }, 'id,name'),
       dbSelect('fob_records', { order: 'created_at.desc', or: `(status.in.(open,sent,repairing),created_at.gte.${since180})` }),
@@ -47,6 +47,7 @@ export async function GET(req: NextRequest) {
       return {
         id: r.id, status: r.status,
         batchId:     b.batch_id || '-',
+        subProdNo:   b.sub_prod_no || '',
         orderNo:     r.order_number || o.order_number || '-',
         party:       r.party || o.party || '-',
         article:     o.article || '-',
@@ -107,6 +108,7 @@ export async function GET(req: NextRequest) {
       if (!batchesByOrder[b.order_id]) batchesByOrder[b.order_id] = []
       batchesByOrder[b.order_id].push({
         batchId:           b.batch_id,
+        subProdNo:         b.sub_prod_no || '',
         kg:                b.kg,
         status:            b.status,
         fmsCurrentProcess: b.current_process,

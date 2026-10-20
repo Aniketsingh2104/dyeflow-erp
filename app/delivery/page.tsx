@@ -13,6 +13,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { toCsv } from '@/lib/csv'
+import { SubProdCell } from '@/components/SubProd'
 import Link from 'next/link'
 import { getUrgency, URGENCY_CELL_STYLE } from '@/lib/dateUrgency'
 import { dateColFor } from '@/lib/processCodes'
@@ -125,15 +126,16 @@ export default function DeliveryTrackerPage() {
       if (tab === 'open'    && isDone(r)) return false
       if (tab === 'done'    && !isDone(r)) return false
       if (!s) return true
-      return [r.orderNumber, r.party, r.article, r.color, r.supervisor, ...r.batches.map(b => b.batch_id)]
+      return [r.orderNumber, r.party, r.article, r.color, r.supervisor, ...r.batches.map(b => b.batch_id), ...r.batches.map(b => b.sub_prod_no)]
         .some(v => String(v || '').toLowerCase().includes(s))
     })
   }, [rows, tab, q])
 
   const exportCsv = () => {
-    const head = ['Order', 'Party', 'Article', 'Colour', 'Supervisor', 'Order Kg', 'Split Kg', 'Done Kg', 'Dispatch date', 'Status', 'Now at', 'Late batches']
+    const head = ['Order', 'Party', 'Article', 'Colour', 'Supervisor', 'Order Kg', 'Split Kg', 'Done Kg', 'Dispatch date', 'Status', 'Now at', 'Late batches', 'Sub Prod Nos']
     const body = shown.map(r => [r.orderNumber, r.party, r.article, r.color, r.supervisor, r.qtyKg, r.splitKg, r.doneKg,
-      r.dispatch, r.status, r.where, r.atRisk])
+      r.dispatch, r.status, r.where, r.atRisk,
+      r.batches.map(b => b.sub_prod_no ? `${b.batch_id}: ${b.sub_prod_no}` : '').filter(Boolean).join(', ')])
     const csv = toCsv([head, ...body])
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -236,6 +238,7 @@ export default function DeliveryTrackerPage() {
                             {r.batches.map(b => (
                               <div key={b.id} style={{ display: 'flex', gap: 14, padding: '4px 0', fontSize: 12, alignItems: 'center' }}>
                                 <Link href={`/batches/${encodeURIComponent(b.batch_id)}`} style={{ fontWeight: 700, minWidth: 140 }}>{b.batch_id}</Link>
+                                <span style={{ minWidth: 100 }}><SubProdCell value={b.sub_prod_no} /></span>
                                 <span style={{ minWidth: 60 }}>{b.kg} Kg</span>
                                 <span style={{ minWidth: 110 }}>{b.status === 'done' ? '✓ Done' : b.is_faulty ? '⚠ Faulty' : b.current_process ? `at ${b.current_process}` : b.status}</span>
                                 <span style={{ color: 'var(--text-tertiary)' }}>dispatch {fmtD(b._dispatch)}</span>

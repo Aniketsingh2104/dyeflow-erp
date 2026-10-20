@@ -1,5 +1,6 @@
 'use client'
 
+import { withSubProd } from '@/lib/subProd'
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -77,7 +78,7 @@ export default function GlobalSearch() {
       })
       for (const b of d.batches || []) found.push({
         type: 'batch', id: b.id,
-        title: `Batch ${b.batch_id}`,
+        title: `Batch ${withSubProd(b.batch_id, b.sub_prod_no)}`,
         subtitle: `${b.kg ?? '?'} Kg${b.current_process ? ' · at ' + b.current_process : ''}`,
         path: '/batches/search', badge: b.status || 'pending', badgeColor: statusColors[b.status] || '#888',
       })

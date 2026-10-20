@@ -7,6 +7,7 @@ import { rpc, rpcFail } from '@/lib/rpc'
 import { loadHolidaySet } from '@/lib/holidays'
 import { plannedDateForNumber } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
+import { cleanSubProd } from '@/lib/subProd'
 import { machineLoading, rangeBatches, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
 
 // Columns the generic "update" action may change (machine sheet numbering,
@@ -54,13 +55,13 @@ export async function GET(req: NextRequest) {
     // fields=light → just what counts / badges need (no nested process rows)
     if (searchParams.get('fields') === 'light') {
       const { data, error } = await dbSelect('batches', query,
-        'id,batch_id,order_id,machine_id,supervisor_id,kg,status,current_process,is_done,is_faulty')
+        'id,batch_id,sub_prod_no,order_id,machine_id,supervisor_id,kg,status,current_process,is_done,is_faulty')
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
       return NextResponse.json({ ok: true, data })
     }
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
+      'id,batch_id,sub_prod_no,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,process_machine_map,supervisor_id,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
@@ -93,6 +94,30 @@ function cleanParams(p: any): Record<string, any> | null {
     else if (typeof v === 'string' && v.length <= 60) out[k] = v
   }
   return Object.keys(out).length ? out : null
+}
+
+// "DYE26-0102-B2-R-S1" → "DYE26-0102-B2": a batch and its repair batches share a Sub Prod No.
+function batchRoot(batchId: any): string {
+  const m = String(batchId ?? '').match(/^(.*?-B\d+)(?:-|$)/)
+  return m ? m[1] : String(batchId ?? '')
+}
+
+// Other batches that already carry one of these Sub Prod Nos (a batch's own
+// repair batches don't count). Returns e.g. [{ sub_prod_no: 'P-5201-A', batch_id: 'DYE26-0098-B1' }]
+async function subProdDuplicates(values: string[], ownBatchId?: string): Promise<{ sub_prod_no: string; batch_id: string }[]> {
+  const list = [...new Set(values.filter(Boolean))]
+  if (!list.length) return []
+  const inList = list.map(v => `"${v.replace(/["\\]/g, '')}"`).join(',')
+  const { data } = await dbSelect('batches', { sub_prod_no: `in.(${inList})`, order: 'created_at.asc', limit: '200' }, 'batch_id,sub_prod_no')
+  const own = ownBatchId ? batchRoot(ownBatchId) : null
+  return (data || []).filter((r: any) => !own || batchRoot(r.batch_id) !== own)
+    .map((r: any) => ({ sub_prod_no: r.sub_prod_no, batch_id: r.batch_id }))
+}
+
+function duplicateMessage(d: { sub_prod_no: string; batch_id: string }[]): string {
+  const seen = new Map<string, string[]>()
+  for (const x of d) seen.set(x.sub_prod_no, [...(seen.get(x.sub_prod_no) || []), x.batch_id])
+  return [...seen].map(([sp, ids]) => `${sp} is already on ${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ` +${ids.length - 3} more` : ''}`).join('\n')
 }
 
 async function getSplitContext(order_id: string) {
@@ -160,7 +185,7 @@ export async function POST(req: NextRequest) {
       if (!order_id) return NextResponse.json({ ok: false, error: 'order_id required' }, { status: 400 })
       const ctx = await getSplitContext(order_id)
       if (ctx.error || !ctx.order) return NextResponse.json({ ok: false, error: ctx.error }, { status: 400 })
-      const { data: oRows } = await dbSelect('orders', { id: `eq.${order_id}`, limit: '1' }, 'width,gsm')
+      const { data: oRows } = await dbSelect('orders', { id: `eq.${order_id}`, limit: '1' }, 'width,gsm,remarks')
       const width = oRows?.[0]?.width, gsm = oRows?.[0]?.gsm
       const route: string[] = (ctx.order.process_route || []).map((c: string) => canonicalCode(c))
       const pm: Record<string, string[]> = {}
@@ -203,7 +228,7 @@ export async function POST(req: NextRequest) {
       })
       const r2 = (x: number | null | undefined, d = 2) => x == null ? null : Math.round(x * 10 ** d) / 10 ** d
       return NextResponse.json({ ok: true,
-        order: { id: order_id, order_number: ctx.order.order_number, qty_kg: qtyKg, allocated_kg: r2(ctx.allocatedKg), remaining_kg: remKg, width, gsm },
+        order: { id: order_id, order_number: ctx.order.order_number, qty_kg: qtyKg, allocated_kg: r2(ctx.allocatedKg), remaining_kg: remKg, width, gsm, remarks: oRows?.[0]?.remarks || null },
         process: code,
         machines: (mRows || []).map((m: any) => ({ id: m.id, name: m.name })).sort((a: any, b: any) => options.indexOf(a.id) - options.indexOf(b.id)),
         machine: { id: machine.id, name: machine.name, capacity: parseFloat(machine.capacity) || null, nozzles: parseFloat(machine.nozzles) || null, reel_speed: parseFloat(machine.reel_speed) || null },
@@ -239,6 +264,19 @@ export async function POST(req: NextRequest) {
           `but the order is ${orderKg} Kg (${Math.max(0, Math.round((orderKg - ctx.allocatedKg) * 100) / 100)} Kg left).` }, { status: 400 })
       }
 
+      // Sub Prod No. (optional): the same number twice in this split, or one
+      // already on another batch → the page asks "save anyway?" and sends allow_duplicate
+      const subProds = parts.map((b: any) => cleanSubProd(b.sub_prod_no))
+      if (!payload.allow_duplicate) {
+        const dups: { sub_prod_no: string; batch_id: string }[] = []
+        subProds.forEach((v: string | null, i: number) => {
+          if (v && subProds.indexOf(v) !== i) dups.push({ sub_prod_no: v, batch_id: `batch ${subProds.indexOf(v) + 1} of this split` })
+        })
+        dups.push(...await subProdDuplicates(subProds.filter(Boolean) as string[]))
+        if (dups.length) return NextResponse.json({ ok: false, duplicate: true, duplicates: dups,
+          error: duplicateMessage(dups) }, { status: 409 })
+      }
+
       // Client-sent batch_id is ignored — the server numbers new batches
       // after the highest existing one so IDs never collide or restart.
       // the order's route when the page didn't send one (an empty list counts as none)
@@ -259,6 +297,7 @@ export async function POST(req: NextRequest) {
         process_route: route,  // save route on batch so machine page shows correct process
         // Auto Split: the machine settings for this batch (nozzle / pump / pressure …)
         process_params: cleanParams(b.process_params),
+        sub_prod_no:   subProds[idx],
       }})
 
       const { data: created, error } = await sb<any[]>('/batches', {
@@ -393,6 +432,30 @@ export async function POST(req: NextRequest) {
       if (r.error) return rpcFail(r)
       await refreshOrderStatus(r.data?.order_id)
       return NextResponse.json({ ok: true, data: { id: r.data?.id } })
+    }
+
+    // ── Sub Prod No. of one batch (Splitted Orders / Batch page) ────────────
+    // Empty clears it. Same number on another batch → 409 duplicate, the page
+    // asks "save anyway?" and sends allow_duplicate. Written to the Audit Log.
+    if (action === 'set_sub_prod') {
+      const { id } = payload
+      if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+      const raw = payload.sub_prod_no == null ? '' : String(payload.sub_prod_no)
+      if (raw.trim().length > 30) return NextResponse.json({ ok: false, error: 'Sub Prod No. can be at most 30 characters.' }, { status: 400 })
+      const value = cleanSubProd(raw)
+      const { data: rows } = await dbSelect('batches', { id: `eq.${id}`, limit: '1' }, 'id,batch_id,sub_prod_no,order_id')
+      const b = rows?.[0]
+      if (!b) return NextResponse.json({ ok: false, error: 'Batch not found' }, { status: 404 })
+      if ((b.sub_prod_no || null) === value) return NextResponse.json({ ok: true, data: { id, sub_prod_no: value } })
+      if (value && !payload.allow_duplicate) {
+        const dups = await subProdDuplicates([value], b.batch_id)
+        if (dups.length) return NextResponse.json({ ok: false, duplicate: true, duplicates: dups, error: duplicateMessage(dups) }, { status: 409 })
+      }
+      const { error } = await dbUpdate('batches', { id }, { sub_prod_no: value, updated_at: new Date().toISOString() })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await auditLog({ username: _user, action: 'sub_prod_no', entity_type: 'batch', entity_id: id,
+        old_value: `${b.batch_id}: ${b.sub_prod_no || '—'}`, new_value: `${b.batch_id}: ${value || '—'}` })
+      return NextResponse.json({ ok: true, data: { id, sub_prod_no: value } })
     }
 
     // ── Delete one batch and restore qty to order ────────────────────────────

@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
         dbSelect('orders', { order: 'created_at.desc', limit: '200' },
           'id,order_number,party,article,color,qty_kg,qty_mtr,status,process_route,delivery_date,created_at,supervisors(name),machines(id,name)'),
         dbSelect('batches', { order: 'created_at.desc', limit: '500' },
-          'id,batch_id,order_id,kg,status,current_process,is_faulty,created_at,machines(name)'),
+          'id,batch_id,sub_prod_no,order_id,kg,status,current_process,is_faulty,created_at,machines(name)'),
         dbSelect('machines', { order: 'name.asc' },
           'id,name,capacity,status'),
         dbSelect('supervisors', { order: 'name.asc' },

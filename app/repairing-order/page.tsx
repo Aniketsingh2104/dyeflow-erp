@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
 import { useEffect, useState, useCallback } from 'react'
 
 function fmtDateTime(d: any) {
@@ -14,6 +15,7 @@ const COLUMNS = [
   { key:'created_at',       label:'TIMESTAMP',      width:145 },
   { key:'order_number',     label:'ORDER #',         width:120 },
   { key:'batch_id_str',     label:'BATCH #',         width:140 },
+  { key:'sub_prod_no',      label:'SUB PROD NO.',    width:120 },
   { key:'party',            label:'PARTY',           width:100 },
   { key:'sub_party',        label:'SUB PARTY',       width:100 },
   { key:'article',          label:'ARTICLE',         width:90  },
@@ -78,7 +80,7 @@ export default function RepairingOrderPage() {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
     if (search.trim()) {
       const q = search.toLowerCase()
-      return [r.order_number, r.party, r.batch_id_str, r.color, r.article]
+      return [r.order_number, r.party, r.batch_id_str, r.sub_prod_no, r.color, r.article]
         .some(v => String(v ?? '').toLowerCase().includes(q))
     }
     return true
@@ -327,6 +329,7 @@ export default function RepairingOrderPage() {
                             {r.order_number || '-'}
                           </td>
                         )
+                        case 'sub_prod_no': return <td key={col.key} style={s}><SubProdCell value={r.sub_prod_no} /></td>
                         case 'batch_id_str': return (
                           <td key={col.key} style={{...s, fontWeight:700, color:'var(--accent)'}}>
                             {r.batch_id_str || r.batch_id || '-'}

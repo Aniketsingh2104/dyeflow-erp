@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { getOrders, getSupervisors, getMachines, createSplits } from '@/lib/db'
+import { getOrders, getSupervisors, getMachines, createSplitsAsking } from '@/lib/db'
+import { cleanSubProd, subProdFromRemarks } from '@/lib/subProd'
 
 function SplitOrderContent() {
   const searchParams = useSearchParams()
@@ -13,7 +14,7 @@ function SplitOrderContent() {
   const [supervisors, setSupervisors] = useState<any[]>([])
   const [machines,    setMachines]    = useState<any[]>([])
   const [saving,      setSaving]      = useState(false)
-  const [parts,       setParts]       = useState([{ kg: 0, mtr: 0, machine_id: '' }])
+  const [parts,       setParts]       = useState<{ kg: any; mtr: any; machine_id: string; sub_prod_no: string }[]>([{ kg: 0, mtr: 0, machine_id: '', sub_prod_no: '' }])
 
   const loadAll = useCallback(async () => {
     const [supRes, machRes] = await Promise.all([getSupervisors(), getMachines()])
@@ -25,7 +26,8 @@ function SplitOrderContent() {
     const found = (orders || []).find((o: any) => o.id === orderId || o.order_number === orderId)
     if (found) {
       setOrder(found)
-      setParts([{ kg: parseFloat(found.qty_kg) || 0, mtr: parseFloat(found.qty_mtr) || 0, machine_id: found.machine_id || '' }])
+      // an imported order's "Sub Prod: P-xxxx-A" goes into batch 1
+      setParts([{ kg: parseFloat(found.qty_kg) || 0, mtr: parseFloat(found.qty_mtr) || 0, machine_id: found.machine_id || '', sub_prod_no: subProdFromRemarks(found.remarks) || '' }])
     }
   }, [orderId])
 
@@ -41,7 +43,7 @@ function SplitOrderContent() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
 
-  const add = () => setParts(p => [...p, { kg: Math.max(0, remKg), mtr: Math.max(0, remMtr), machine_id: '' }])
+  const add = () => setParts(p => [...p, { kg: Math.max(0, remKg), mtr: Math.max(0, remMtr), machine_id: '', sub_prod_no: '' }])
 
   const remove = (i: number) => {
     if (parts.length <= 1) { alert('Cannot remove the last batch'); return }
@@ -56,7 +58,7 @@ function SplitOrderContent() {
     const n  = parts.length
     const kg = (parseFloat(order.qty_kg)  || 0) / n
     const mt = (parseFloat(order.qty_mtr) || 0) / n
-    setParts(parts.map(() => ({ ...parts[0], kg: parseFloat(kg.toFixed(2)), mtr: parseFloat(mt.toFixed(2)) })))
+    setParts(parts.map((p) => ({ ...parts[0], sub_prod_no: p.sub_prod_no, kg: parseFloat(kg.toFixed(2)), mtr: parseFloat(mt.toFixed(2)) })))
   }
 
   const handleSave = async () => {
@@ -69,8 +71,10 @@ function SplitOrderContent() {
         kg:          parseFloat(String(p.kg)) || 0,
         mtr:         parseFloat(String((p as any).mtr)) || 0,
         machine_id:  p.machine_id || null,
+        sub_prod_no: cleanSubProd(p.sub_prod_no),
       }))
-      const { error } = await createSplits(order.id, batches, order.process_route || [])
+      const { error, cancelled } = await createSplitsAsking(order.id, batches, order.process_route || [])
+      if (cancelled) return
       if (error) { alert('Error: ' + error); return }
       alert('✓ Order split successfully!')
       router.push('/orders')
@@ -165,7 +169,7 @@ function SplitOrderContent() {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead style={{ background: 'var(--bg-secondary)' }}>
             <tr>
-              {['Batch','Batch ID','Qty (Kg)','Qty (Mtr)','Machine',''].map(h => (
+              {['Batch','Batch ID','Sub Prod No.','Qty (Kg)','Qty (Mtr)','Machine',''].map(h => (
                 <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10,
                   fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase',
                   letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
@@ -185,6 +189,13 @@ function SplitOrderContent() {
                     </span>
                   </td>
                   <td style={{ ...td, fontWeight: 600, color: 'var(--accent)' }}>{batchId}</td>
+                  <td style={td}>
+                    <input type="text" value={part.sub_prod_no} maxLength={30} placeholder="e.g. P-5201-A"
+                      onChange={e => upd(i, 'sub_prod_no', e.target.value.toUpperCase())}
+                      style={{ width: 120, padding: '5px 8px',
+                        border: '1px solid var(--border-medium)', borderRadius: 4,
+                        background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13 }} />
+                  </td>
                   <td style={td}>
                     <input type="number" value={part.kg} min={0} step={0.1}
                       onChange={e => upd(i, 'kg', e.target.value)}

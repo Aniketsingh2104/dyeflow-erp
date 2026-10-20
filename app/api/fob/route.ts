@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     let orderMap:Record<string,any> = {}
 
     if (batchIds.length) {
-      const { data:batches } = await dbSelectIn('batches', 'id', batchIds, 'id,batch_id,kg,mtr,taka,sent_at,created_at,process_route,machines(id,name)'
+      const { data:batches } = await dbSelectIn('batches', 'id', batchIds, 'id,batch_id,sub_prod_no,kg,mtr,taka,sent_at,created_at,process_route,machines(id,name)'
       )
       for (const b of batches||[]) batchMap[b.id] = b
     }
@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
         ...r,
         batch_id_str:  batch.batch_id || r.batch_id,
         batch_uuid:    r.batch_id,
+        sub_prod_no:   batch.sub_prod_no || null,
         process_route: batch.process_route || [],
         kg:            batch.kg || r.fob_kg,
         qty_mtr:       batch.mtr || order.qty_mtr || '-',

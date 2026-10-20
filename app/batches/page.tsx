@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone } from '@/lib/db'
@@ -118,6 +119,7 @@ export default function BatchesPage() {
       const s = search.toLowerCase()
       return (
         (b.batch_id  || '').toLowerCase().includes(s) ||
+        (b.sub_prod_no || '').toLowerCase().includes(s) ||
         (b.orderNo   || '').toLowerCase().includes(s) ||
         (b.party     || '').toLowerCase().includes(s) ||
         (b.color     || '').toLowerCase().includes(s) ||
@@ -194,7 +196,7 @@ export default function BatchesPage() {
         flexWrap: 'wrap', alignItems: 'center' }}>
         <input
           value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search batch, order, party, color…"
+          placeholder="Search batch, Sub Prod No., order, party, color…"
           style={{ width: 260, fontSize: 13, padding: '6px 10px',
             border: '1px solid var(--border-medium)', borderRadius: 6,
             background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
@@ -291,6 +293,7 @@ export default function BatchesPage() {
               gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
               gap: '4px 16px', fontSize: 12,
               color: 'var(--text-secondary)', marginBottom: 10 }}>
+              <div><span style={{ color: 'var(--text-tertiary)' }}>Sub Prod No. </span><SubProdCell value={batch.sub_prod_no} /></div>
               <div><span style={{ color: 'var(--text-tertiary)' }}>Article </span>{batch.article}</div>
               <div><span style={{ color: 'var(--text-tertiary)' }}>Color </span>{batch.color}</div>
               <div>

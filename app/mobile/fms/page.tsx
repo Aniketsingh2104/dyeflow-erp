@@ -17,12 +17,14 @@ import { useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import { getBatches, getOrders, getProcessList, markProcessDone, markBatchFaulty } from '@/lib/db'
 import { collabBlockMessage } from '@/lib/collab'
+import { SubProdTag } from '@/components/SubProd'
 
 interface ProcOpt { code: string; name: string; allowFaulty: boolean }
 
 interface FmsRow {
   id: string            // batch uuid
   batchId: string       // e.g. DYE26-0102-B1
+  subProd: string       // Sub Prod No. ('' = none)
   orderId: string
   orderNo: string
   party: string
@@ -125,6 +127,7 @@ function FmsContent() {
         out.push({
           id:          b.id,
           batchId:     b.batch_id || '-',
+          subProd:     b.sub_prod_no || '',
           orderId:     b.order_id,
           orderNo:     o.order_number || '-',
           party:       o.party   || '-',
@@ -205,7 +208,7 @@ function FmsContent() {
   const filtered = rows.filter(r => {
     if (!search.trim()) return true
     const s = search.toLowerCase()
-    return [r.batchId, r.orderNo, r.party, r.color, r.article].some(v => v.toLowerCase().includes(s))
+    return [r.batchId, r.subProd, r.orderNo, r.party, r.color, r.article].some(v => v.toLowerCase().includes(s))
   })
   const pending = filtered.filter(r => !r.isDone)
   const done    = filtered.filter(r => r.isDone).slice(0, 30)
@@ -285,7 +288,7 @@ function FmsContent() {
                     <div style={{ padding: '14px 14px 10px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                         <div>
-                          <div style={{ fontSize: 16, fontWeight: 700, color: '#185FA5' }}>{r.batchId}</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: '#185FA5' }}>{r.batchId}<SubProdTag value={r.subProd} /></div>
                           <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{r.orderNo} · {r.party}</div>
                         </div>
                         {overdue && (
@@ -340,7 +343,7 @@ function FmsContent() {
                 <div key={r.id} style={{ background: '#F0FDF4', margin: '0 12px 8px', borderRadius: 12, padding: '12px 14px', boxShadow: '0 1px 2px rgba(0,0,0,0.04)', borderLeft: '4px solid #059669' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#065F46' }}>{r.batchId}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#065F46' }}>{r.batchId}<SubProdTag value={r.subProd} /></div>
                       <div style={{ fontSize: 11, color: '#059669', marginTop: 2 }}>{r.orderNo} · {r.party} · {r.kg} Kg · {fmt(r.doneAt)}</div>
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 700, background: '#D1FAE5', color: '#065F46', padding: '4px 10px', borderRadius: 20 }}>✓ Done</span>

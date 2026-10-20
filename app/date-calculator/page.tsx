@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
 import { canonicalCode } from '@/lib/processCodes'
 import { buildHolidaySet, sundayOffFrom } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
@@ -11,6 +12,7 @@ import { usePageEdit } from '@/components/PageGuard'
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface BatchRow {
   batchId:     string   // e.g. DYE26-0004-B1
+  subProd:     string | null   // Sub Prod No. (e.g. P-5201-A)
   batchUUID:   string   // Supabase UUID
   orderId:     string   // orders.id
   kg:          number
@@ -353,6 +355,7 @@ export default function DateCalculatorPage() {
 
         batchRows.push({
           batchId:     b.batch_id || b.id,
+          subProd:     b.sub_prod_no || null,
           batchUUID:   b.id,
           orderId:     b.order_id || '',
           kg:          parseFloat(b.kg) || 0,
@@ -687,6 +690,7 @@ export default function DateCalculatorPage() {
                   <th style={TH}>SELECT</th>
                   <th style={TH}>COLOUR</th>
                   <th style={TH}>BATCH</th>
+                  <th style={TH}>SUB PROD NO.</th>
                   <th style={TH}>QTY(KG)</th>
                   <th style={TH}>ROUTE</th>
                   <th style={TH}>MACHINE</th>
@@ -718,6 +722,7 @@ export default function DateCalculatorPage() {
                       </td>
                       <td style={TD}>{row.color||'-'}</td>
                       <td style={{ ...TD, fontWeight:700, color:'#2563EB' }}>{row.batchId}</td>
+                      <td style={TD}><SubProdCell value={row.subProd} /></td>
                       <td style={{ ...TD, fontWeight:700 }}>{row.kg||'-'}</td>
                       <td style={{ ...TD, color:'#2563EB', fontWeight:600, fontSize:11 }}>{routeDisplay||'-'}</td>
                       <td style={TD}>{row.machine||'-'}</td>

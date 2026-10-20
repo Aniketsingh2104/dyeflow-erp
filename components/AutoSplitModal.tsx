@@ -8,8 +8,9 @@
 // then through the normal split checks (create_splits).
 import { useCallback, useEffect, useState } from 'react'
 import { reelSpeedNeeded, cycleNeeded } from '@/lib/loading'
+import { cleanSubProd, subProdFromRemarks } from '@/lib/subProd'
 
-interface Row { kg: string; mtr: string; taka: string }
+interface Row { kg: string; mtr: string; taka: string; sub: string }
 
 export default function AutoSplitModal({ order, onClose, onSaved }: {
   order: { id: string; order_number?: string }
@@ -32,7 +33,9 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
     if (!j.ok) { setError(j.error || 'Could not work out the batches'); setData(null); return }
     setData(j)
     setMachineId(j.machine.id)
-    setRows(j.batches.map((b: any) => ({ kg: String(b.kg), mtr: b.mtr != null ? String(b.mtr) : '', taka: b.taka != null ? String(b.taka) : '' })))
+    // an imported order's "Sub Prod: P-xxxx-A" goes into batch 1 of its first split; a machine change keeps what was typed
+    setRows(prev => j.batches.map((b: any, i: number) => ({ kg: String(b.kg), mtr: b.mtr != null ? String(b.mtr) : '', taka: b.taka != null ? String(b.taka) : '',
+      sub: prev[i]?.sub ?? (i === 0 && !(j.order.allocated_kg > 0) ? (subProdFromRemarks(j.order.remarks) || '') : '') })))
   }, [order.id])
 
   useEffect(() => { load() }, [load])
@@ -66,7 +69,7 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
   }
 
   const setRow = (i: number, k: keyof Row, v: string) => setRows(prev => prev.map((r, j) => j === i ? { ...r, [k]: v } : r))
-  const addRow = () => setRows(prev => [...prev, { kg: '', mtr: '', taka: '' }])
+  const addRow = () => setRows(prev => [...prev, { kg: '', mtr: '', taka: '', sub: '' }])
   const removeRow = (i: number) => setRows(prev => prev.filter((_, j) => j !== i))
 
   const save = async () => {
@@ -77,10 +80,11 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
     setSaving(true)
     try {
       const params = data.params || {}
-      const res = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create_splits', order_id: order.id,
+      const send = (allowDuplicate: boolean) => fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create_splits', order_id: order.id, ...(allowDuplicate ? { allow_duplicate: true } : {}),
           batches: list.map(r => ({
             kg: num(r.kg), mtr: num(r.mtr) || null, taka: parseInt(r.taka) || null,
+            sub_prod_no: cleanSubProd(r.sub),
             machine_id: data.machine.id,
             process_machine_map: { [data.process]: data.machine.id },
             process_params: {
@@ -92,6 +96,11 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
             },
           })) }) })
         .then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
+      let res = await send(false)
+      if (!res.ok && res.duplicate) {
+        if (!confirm(`Sub Prod No. already used:\n${res.error}\n\nSave anyway?`)) return
+        res = await send(true)
+      }
       if (!res.ok) { alert('Not split: ' + (res.error || 'Unknown error')); if (res.stale) load(machineId); return }
       onSaved(`✓ ${data.order.order_number}: ${res.data?.length || list.length} batch(es) created on ${data.machine.name}`)
     } finally { setSaving(false) }
@@ -102,7 +111,7 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 720 }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ maxWidth: 820 }} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <span className="modal-title">⚡ Auto Split — {data?.order?.order_number || order.order_number || ''}</span>
           <button className="small" onClick={onClose}>✕</button>
@@ -150,6 +159,7 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
               <tr style={{ background: 'var(--bg-secondary)', fontSize: 10, textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
                 <th style={{ ...cell, textAlign: 'left' }}>Batch</th><th style={{ ...cell, textAlign: 'left' }}>Kg</th>
                 <th style={{ ...cell, textAlign: 'left' }}>Mtr</th><th style={{ ...cell, textAlign: 'left' }}>Taka</th>
+                <th style={{ ...cell, textAlign: 'left' }}>Sub Prod No.</th>
                 <th style={{ ...cell, textAlign: 'left' }}>Check</th><th style={cell}></th>
               </tr>
             </thead>
@@ -162,6 +172,7 @@ export default function AutoSplitModal({ order, onClose, onSaved }: {
                     <td style={cell}><input type="number" value={r.kg} onChange={e => setRow(i, 'kg', e.target.value)} style={inp} /></td>
                     <td style={cell}><input type="number" value={r.mtr} onChange={e => setRow(i, 'mtr', e.target.value)} style={inp} /></td>
                     <td style={cell}><input type="number" value={r.taka} onChange={e => setRow(i, 'taka', e.target.value)} style={{ ...inp, width: 70 }} /></td>
+                    <td style={cell}><input type="text" value={r.sub} maxLength={30} placeholder="P-5201-A" onChange={e => setRow(i, 'sub', e.target.value.toUpperCase())} style={{ ...inp, width: 100 }} /></td>
                     <td style={{ ...cell, color: c.level === 'bad' ? 'var(--danger)' : c.level === 'warn' ? '#92400E' : 'var(--success)', fontWeight: 600 }}>
                       {c.text}
                     </td>

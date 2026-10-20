@@ -1,5 +1,7 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
+import { withSubProd } from '@/lib/subProd'
 import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -55,6 +57,7 @@ const getPlannedDateByNumber = (planNumber: number, baseDate: string, holidaySet
 // Column definitions
 const COLUMNS = [
   { key: 'batchId', label: 'BATCH ID', defaultWidth: 120, canHide: false },
+  { key: 'subProdNo', label: 'SUB PROD NO.', defaultWidth: 110, canHide: true },
   { key: 'shadeType', label: 'SHADE', defaultWidth: 100, canHide: true },
   { key: 'timeStamp', label: 'TIME STAMP', defaultWidth: 110, canHide: true },
   { key: 'orderNo', label: 'ORDER NUMBER', defaultWidth: 130, canHide: true },
@@ -179,6 +182,14 @@ export default function MachinePage() {
         const state = JSON.parse(stored)
         const key = `machines::${machineId}`
         if (state[key]) {
+          // widths are kept by column position: once, move the ones saved before the
+          // SUB PROD NO. column (position 1) was added one place to the right
+          if (!state[`${key}::v2`]) {
+            const moved: Record<string, number> = {}
+            for (const [i, w] of Object.entries(state[key] as Record<string, number>)) moved[Number(i) >= 1 ? Number(i) + 1 : Number(i)] = w
+            state[key] = moved; state[`${key}::v2`] = true
+            localStorage.setItem('dyeflow_col_widths', JSON.stringify(state))
+          }
           setColumnWidths(state[key])
         }
       }
@@ -192,7 +203,7 @@ export default function MachinePage() {
       const stored = localStorage.getItem('dyeflow_col_widths')
       const state = stored ? JSON.parse(stored) : {}
       const key = `machines::${machineId}`
-      if (!state[key]) state[key] = {}
+      if (!state[key]) { state[key] = {}; state[`${key}::v2`] = true }
       state[key][colIndex] = width
       localStorage.setItem('dyeflow_col_widths', JSON.stringify(state))
       setColumnWidths(prev => ({ ...prev, [colIndex]: width }))
@@ -325,6 +336,7 @@ export default function MachinePage() {
             current_process: b.current_process,
             rowKey:         `${b.batch_id}-${displayProcess}`,   // unique per process
             batchId:        b.batch_id,
+            subProdNo:      b.sub_prod_no || '',
             id:             b.id,
             kg:             b.kg,
             mtr:            b.mtr,
@@ -942,6 +954,9 @@ export default function MachinePage() {
                         )
                       }
                       
+                      if (col.key === 'subProdNo') {
+                        return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}><SubProdCell value={batch.subProdNo} /></td>
+                      }
                       if (col.key === 'batchId') {
                         return <td key={col.key} style={{ ...tdStyle, fontWeight: 700, color: '#E53E3E', width: `${width}px` }}>{batch.batchId}</td>
                       }
@@ -1079,7 +1094,7 @@ export default function MachinePage() {
         onClose={() => setShowCollabModal(false)}
         availableBatches={collabBatches.map(b => ({
           batchId:      b.rowKey || b.batchId,  // use rowKey (batchId-processCode) as unique id
-          batchIdLabel: b.batchId,               // display label (without process suffix)
+          batchIdLabel: withSubProd(b.batchId, b.subProdNo),   // display label (without process suffix) · Sub Prod No.
           orderNumber:  b.orderNo,
           orderId:      b.orderId,
           color:        b.color,

@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdTag } from '@/components/SubProd'
 import { useEffect, useState } from 'react'
 
 export default function MobileBatchesPage() {
@@ -28,6 +29,7 @@ export default function MobileBatchesPage() {
         const o = om[b.order_id] || {}
         return {
           batchId: b.batch_id || '-',
+          subProd: b.sub_prod_no || '',
           orderId: b.order_id,
           orderNo: o.order_number || '-',
           party: o.party || '-',
@@ -50,7 +52,7 @@ export default function MobileBatchesPage() {
 
   const filtered = batches.filter(b => {
     const s = search.toLowerCase().trim()
-    const matchSearch = !s || b.batchId.toLowerCase().includes(s) || b.orderNo.toLowerCase().includes(s) || b.party.toLowerCase().includes(s) || b.color.toLowerCase().includes(s) || b.supervisor.toLowerCase().includes(s)
+    const matchSearch = !s || b.batchId.toLowerCase().includes(s) || (b.subProd || '').toLowerCase().includes(s) || b.orderNo.toLowerCase().includes(s) || b.party.toLowerCase().includes(s) || b.color.toLowerCase().includes(s) || b.supervisor.toLowerCase().includes(s)
     const matchFilter =
       filter === 'all' ? true :
       filter === 'active' ? (!b.isDone && !b.isFaulty) :
@@ -104,7 +106,7 @@ export default function MobileBatchesPage() {
       <div style={{ padding: '10px 12px 6px' }}>
         <div style={{ position: 'relative' }}>
           <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }}>🔍</span>
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Batch ID, order, party, color…" style={{ width: '100%', padding: '11px 12px 11px 36px', fontSize: 14, border: '1px solid #E2E8F0', borderRadius: 10, background: '#fff', outline: 'none', boxSizing: 'border-box' }} />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Batch ID, Sub Prod No., order, party, color…" style={{ width: '100%', padding: '11px 12px 11px 36px', fontSize: 14, border: '1px solid #E2E8F0', borderRadius: 10, background: '#fff', outline: 'none', boxSizing: 'border-box' }} />
         </div>
       </div>
 
@@ -126,7 +128,7 @@ export default function MobileBatchesPage() {
               <div style={{ padding: '14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                   <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: statusColor(b) }}>{b.batchId}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: statusColor(b) }}>{b.batchId}<SubProdTag value={b.subProd} /></div>
                     <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{b.orderNo} · {b.party}</div>
                   </div>
                   <span style={{ fontSize: 11, fontWeight: 700, background: b.isDone ? '#D1FAE5' : b.isFaulty ? '#FEE2E2' : '#DBEAFE', color: statusColor(b), padding: '4px 10px', borderRadius: 20, whiteSpace: 'nowrap', flexShrink: 0 }}>

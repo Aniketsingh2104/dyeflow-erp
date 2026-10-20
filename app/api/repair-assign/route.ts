@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
     if (!batchIds.length) return NextResponse.json({ ok: true, data: [] })
 
     // Fetch those batches (status = repairing OR pending = assigned but not yet in process)
-    const { data: batches, error: bErr } = await dbSelectIn("batches", 'id', batchIds, "id,batch_id,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
+    const { data: batches, error: bErr } = await dbSelectIn("batches", 'id', batchIds, "id,batch_id,sub_prod_no,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
     )
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
 

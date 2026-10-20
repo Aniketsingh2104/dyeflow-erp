@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell, SubProdTag } from '@/components/SubProd'
 import { useEffect, useState, useCallback } from 'react'
 import { fetchProcessList, ProcessDef } from '@/lib/processMap'
 import Link from 'next/link'
@@ -7,6 +8,7 @@ import { isBatchFinished } from '@/lib/batchStatus'
 
 interface KanbanCard {
   batchId: string
+  subProd: string          // Sub Prod No. ('' = none)
   orderId: string
   orderNo: string
   party: string
@@ -87,6 +89,7 @@ export default function ProductionPage() {
 
         const card: KanbanCard = {
           batchId:     b.batch_id || '-',
+          subProd:     b.sub_prod_no || '',
           orderId:     b.order_id || '-',
           orderNo:     order.order_number || '-',
           party:       order.party || '-',
@@ -135,7 +138,7 @@ export default function ProductionPage() {
     if (!search.trim()) return cards
     const s = search.toLowerCase()
     return cards.filter(c =>
-      c.batchId.toLowerCase().includes(s) || c.orderNo.toLowerCase().includes(s) ||
+      c.batchId.toLowerCase().includes(s) || c.subProd.toLowerCase().includes(s) || c.orderNo.toLowerCase().includes(s) ||
       c.party.toLowerCase().includes(s) || c.color.toLowerCase().includes(s) || c.supervisor.toLowerCase().includes(s)
     )
   }
@@ -146,7 +149,7 @@ export default function ProductionPage() {
     return (
       <div style={{ background: card.isFaulty ? '#FFF1F2' : c.bg, border: `1px solid ${card.isFaulty ? '#FCA5A5' : c.border}`, borderRadius: 8, padding: '10px 12px', marginBottom: 8, position: 'relative' }}>
         {card.isFaulty && <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 11, fontWeight: 700, color: '#DC2626' }}>⚠ FAULTY</div>}
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#185FA5', marginBottom: 4 }}>{card.batchId}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#185FA5', marginBottom: 4 }}>{card.batchId}<SubProdTag value={card.subProd} /></div>
         <div style={{ fontSize: 11, color: '#64748B', marginBottom: 6 }}>{card.orderNo} · {card.party}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', fontSize: 11, color: '#475569' }}>
           <div><span style={{ color: '#94A3B8' }}>Color </span>{card.color}</div>
@@ -237,12 +240,13 @@ export default function ProductionPage() {
           <div className="table-wrap">
             <table style={{ minWidth: 800 }}>
               <thead>
-                <tr><th>BATCH</th><th>ORDER #</th><th>PARTY</th><th>COLOR</th><th>KG</th><th>CURRENT PROCESS</th><th>SUPERVISOR</th><th>DAYS LEFT</th><th>STATUS</th></tr>
+                <tr><th>BATCH</th><th>SUB PROD NO.</th><th>ORDER #</th><th>PARTY</th><th>COLOR</th><th>KG</th><th>CURRENT PROCESS</th><th>SUPERVISOR</th><th>DAYS LEFT</th><th>STATUS</th></tr>
               </thead>
               <tbody>
                 {columns.flatMap(col => filtered(col.cards).map(card => (
                   <tr key={card.batchId}>
                     <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{card.batchId}</td>
+                    <td><SubProdCell value={card.subProd} /></td>
                     <td>{card.orderNo}</td><td>{card.party}</td><td>{card.color}</td>
                     <td style={{ fontWeight: 600 }}>{card.kg}</td>
                     <td><span style={{ background: 'var(--accent-light)', color: 'var(--accent-dark)', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>{col.name}</span></td>

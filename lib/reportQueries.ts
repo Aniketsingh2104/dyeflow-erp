@@ -99,7 +99,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
       const enteredAt = (b.fmsEnterAt || {})[processCode] || ''
       const plannedDate = (o.plannedDates || {})[processCode] || (o.plannedDates || {})['Dispatch'] || ''
       return [
-        b.batchId || '-', o.orderNumber || '-', o.party || '-', o.article || '-',
+        b.batchId || '-', b.subProdNo || '-', o.orderNumber || '-', o.party || '-', o.article || '-',
         o.color || '-', String(b.kg || '-'), o.supervisor || '-', o.machine || '-',
         fmtDate(plannedDate), enteredAt ? daysSince(enteredAt) + ' days' : '-',
       ]
@@ -107,7 +107,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     return {
       title: `Batches at ${processName || processCode}`,
       subtitle: `Active batches currently at ${processName || processCode}`,
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Color', 'Kg', 'Supervisor', 'Machine', 'Planned Date', 'Time Here'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Color', 'Kg', 'Supervisor', 'Machine', 'Planned Date', 'Time Here'],
       rows, summary: `${found.length} batch(es) at ${processName || processCode}`,
       totalRows: found.length, generatedAt: now(),
     }
@@ -125,14 +125,14 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
       const o = b._order
       const stuck = daysSince((b.fmsEnterAt || {})[processCode] || '')
       return [
-        b.batchId || '-', o.orderNumber || '-', o.party || '-', o.article || '-',
+        b.batchId || '-', b.subProdNo || '-', o.orderNumber || '-', o.party || '-', o.article || '-',
         o.color || '-', String(b.kg || '-'), o.supervisor || '-',
         fmtDT((b.fmsEnterAt || {})[processCode] || ''), stuck + ' days',
       ]
     })
     return {
       title: `Batches Stuck at ${processName || processCode} > ${days} Days`,
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Color', 'Kg', 'Supervisor', 'Entered At', 'Days Stuck'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Color', 'Kg', 'Supervisor', 'Entered At', 'Days Stuck'],
       rows, summary: `${found.length} batch(es) stuck over ${days} days`,
       totalRows: found.length, generatedAt: now(),
     }
@@ -144,7 +144,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
       .filter((r: any) => !r.fobApproved && !r.fobReprocess && (minDays <= 0 || daysSince(r.fobSentAt || r.createdAt) >= minDays))
       .sort((a: any, b: any) => daysSince(b.fobSentAt || b.createdAt) - daysSince(a.fobSentAt || a.createdAt))
     const rows = records.map((r: any) => [
-      r.batchId || '-', r.orderNo || '-', r.party || '-', r.article || '-',
+      r.batchId || '-', r.subProdNo || '-', r.orderNo || '-', r.party || '-', r.article || '-',
       r.processName || r.processCode || '-', String(r.qtyKg || '-'),
       r.fobSent ? fmtDate(r.fobSentAt || '') : 'Not Sent',
       r.fobSent ? daysSince(r.fobSentAt || r.createdAt) + ' days' : '-',
@@ -152,7 +152,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     ])
     return {
       title: `FOB Approval Pending${minDays > 0 ? ` > ${minDays} Days` : ''}`,
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'FOB Sent On', 'Waiting', 'Reason'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'FOB Sent On', 'Waiting', 'Reason'],
       rows, summary: `${records.length} FOB record(s) pending approval`,
       totalRows: records.length, generatedAt: now(),
     }
@@ -164,13 +164,13 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
       .filter((r: any) => !r.fobSent && r.status === 'open')
       .sort((a: any, b: any) => daysSince(b.createdAt) - daysSince(a.createdAt))
     const rows = records.map((r: any) => [
-      r.batchId || '-', r.orderNo || '-', r.party || '-', r.article || '-',
+      r.batchId || '-', r.subProdNo || '-', r.orderNo || '-', r.party || '-', r.article || '-',
       r.processName || r.processCode || '-', String(r.qtyKg || '-'),
       fmtDate(r.createdAt), daysSince(r.createdAt) + ' days', r.reason || '-',
     ])
     return {
       title: 'FOB Not Yet Sent',
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'Raised On', 'Pending Days', 'Reason'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'Raised On', 'Pending Days', 'Reason'],
       rows, summary: `${records.length} FOB record(s) not yet sent`,
       totalRows: records.length, generatedAt: now(),
     }
@@ -183,13 +183,13 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     if (type) records = records.filter((r: any) => r.type === type)
     records.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     const rows = records.map((r: any) => [
-      r.batchId || '-', r.orderNo || '-', r.party || '-', r.article || '-', r.color || '-',
+      r.batchId || '-', r.subProdNo || '-', r.orderNo || '-', r.party || '-', r.article || '-', r.color || '-',
       r.processName || r.processCode || '-', String(r.qtyKg || '-'), fmtDate(r.createdAt),
       r.fobSent ? '✓' : '✗', r.fobApproved ? '✓' : '✗', r.fobReprocess ? '✓' : '✗', r.reason || '-',
     ])
     return {
       title: `Open FOB Records${type ? ` — ${type}` : ''}`,
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Color', 'Process', 'Qty Kg', 'Date', 'Sent', 'Approved', 'Reprocess', 'Reason'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Color', 'Process', 'Qty Kg', 'Date', 'Sent', 'Approved', 'Reprocess', 'Reason'],
       rows, summary: `${records.length} open FOB record(s)`,
       totalRows: records.length, generatedAt: now(),
     }
@@ -201,12 +201,12 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
       .filter((r: any) => r.status === 'open' && !r.ifOk && !r.reprocess && daysSince(r.date) >= days)
       .sort((a: any, b: any) => daysSince(b.date) - daysSince(a.date))
     const rows = records.map((r: any) => [
-      r.batchId || '-', r.orderNo || '-', r.party || '-', r.faultyType || '-',
+      r.batchId || '-', r.subProdNo || '-', r.orderNo || '-', r.party || '-', r.faultyType || '-',
       String(r.quantity || '-'), fmtDate(r.date), daysSince(r.date) + ' days', r.remarks || '-',
     ])
     return {
       title: `Faulty Batches Open > ${days} Days`,
-      columns: ['Batch ID', 'Order #', 'Party', 'Faulty Type', 'Qty Kg', 'Marked On', 'Open For', 'Remarks'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Faulty Type', 'Qty Kg', 'Marked On', 'Open For', 'Remarks'],
       rows, summary: `${records.length} faulty batch(es) open over ${days} days`,
       totalRows: records.length, generatedAt: now(),
     }
@@ -381,14 +381,14 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     const records = (db.fobRecords || []).filter((r: any) => r.fobReprocess)
       .sort((a: any, b: any) => daysSince(b.fobReprocessAt || b.createdAt) - daysSince(a.fobReprocessAt || a.createdAt))
     const rows = records.map((r: any) => [
-      r.batchId || '-', r.orderNo || '-', r.party || '-', r.article || '-',
+      r.batchId || '-', r.subProdNo || '-', r.orderNo || '-', r.party || '-', r.article || '-',
       r.processName || r.processCode || '-', String(r.qtyKg || '-'),
       fmtDate(r.fobReprocessAt || r.createdAt),
       daysSince(r.fobReprocessAt || r.createdAt) + ' days', r.reason || '-',
     ])
     return {
       title: 'FOB Reprocess Pending',
-      columns: ['Batch ID', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'Marked On', 'Waiting', 'Reason'],
+      columns: ['Batch ID', 'Sub Prod No.', 'Order #', 'Party', 'Article', 'Process', 'Qty Kg', 'Marked On', 'Waiting', 'Reason'],
       rows, summary: `${records.length} FOB record(s) marked for reprocess`,
       totalRows: records.length, generatedAt: now(),
     }
@@ -423,7 +423,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     for (const o of orders) {
       for (const b of (o.splits || [])) {
         rows.push([
-          o.orderNumber, o.party, o.article, o.color, b.batchId || '-',
+          o.orderNumber, o.party, o.article, o.color, b.batchId || '-', b.subProdNo || '-',
           String(b.kg || '-'), b.fmsCurrentProcess || '-',
           b.fmsDone ? 'Done' : 'Active', fmtDate((o.plannedDates || {})['Dispatch'] || ''),
         ])
@@ -431,7 +431,7 @@ export const QUERY_LIBRARY: Record<string, QueryFn> = {
     }
     return {
       title: `Batches for "${partyName}"`,
-      columns: ['Order #', 'Party', 'Article', 'Color', 'Batch ID', 'Kg', 'Current Process', 'Status', 'Dispatch Date'],
+      columns: ['Order #', 'Party', 'Article', 'Color', 'Batch ID', 'Sub Prod No.', 'Kg', 'Current Process', 'Status', 'Dispatch Date'],
       rows, summary: `${rows.length} batch(es) across ${orders.length} order(s)`,
       totalRows: rows.length, generatedAt: now(),
     }

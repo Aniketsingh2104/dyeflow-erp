@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     const orderMap: Record<string, any> = {}
 
     if (batchIds.length) {
-      const { data: batches } = await dbSelectIn('batches', 'id', batchIds, 'id,batch_id,kg,mtr,taka,status,machine_id,process_route,machines(id,name)'
+      const { data: batches } = await dbSelectIn('batches', 'id', batchIds, 'id,batch_id,sub_prod_no,kg,mtr,taka,status,machine_id,process_route,machines(id,name)'
       )
       for (const b of batches || []) batchMap[b.id] = b
     }
@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
         ...r,
         batch_id_str:    batch.batch_id          || '-',
         batch_status:    batch.status            || null,   // 'repairing' = still waiting to be split
+        sub_prod_no:     batch.sub_prod_no       || null,
         batch_kg:        batch.kg                ?? null,
         machine_id:      batch.machine_id        || null,
         batch_route:     batch.process_route     || [],

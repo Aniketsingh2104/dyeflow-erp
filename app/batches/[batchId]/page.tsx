@@ -16,6 +16,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { canonicalCode, dateColFor, sameCode } from '@/lib/processCodes'
+import { usePermission } from '@/lib/permissions'
+import { SubProdEdit } from '@/components/SubProd'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -52,6 +54,7 @@ export default function BatchTracePage() {
   const raw = decodeURIComponent(String(params?.batchId || '')).trim()
 
   const [batch,   setBatch]   = useState<any>(null)
+  const spPerm = usePermission(['/orders', '/supervisor', '/split-order', '/splitted-orders'])
   const [order,   setOrder]   = useState<any>(null)
   const [plan,    setPlan]    = useState<any>(null)
   const [procs,   setProcs]   = useState<Record<string, string>>({})
@@ -162,6 +165,11 @@ export default function BatchTracePage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{batch.batch_id}</div>
+                <div style={{ fontSize: 13, marginTop: 2 }}>
+                  <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', marginRight: 6 }}>Sub Prod No.</span>
+                  <SubProdEdit batchId={batch.id} value={batch.sub_prod_no} canEdit={spPerm.canEdit}
+                    onSaved={v => setBatch((b: any) => ({ ...b, sub_prod_no: v }))} />
+                </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
                   Order <strong>{order?.order_number || '—'}</strong> · {order?.party || '—'} · {order?.article || '—'} · {order?.color || '—'}
                 </div>
@@ -241,7 +249,7 @@ export default function BatchTracePage() {
                   sub={`${fmtDT(r.created_at)} · status: ${r.status}`} href="/repairing-order" />
               ))}
               {related.map(x => (
-                <Line key={x.id} color="var(--accent)" title={`${x.batch_id} — ${x.kg} Kg · ${x.status}`}
+                <Line key={x.id} color="var(--accent)" title={`${x.batch_id}${x.sub_prod_no ? ' · ' + x.sub_prod_no : ''} — ${x.kg} Kg · ${x.status}`}
                   sub={x.batch_id.startsWith(batch.batch_id) ? 'Repair batch made from this batch' : 'Original batch this was repaired from'}
                   href={`/batches/${encodeURIComponent(x.batch_id)}`} />
               ))}

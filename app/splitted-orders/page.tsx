@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { isBatchFinished } from '@/lib/batchStatus'
 import { collabBlockMessage } from '@/lib/collab'
+import { usePermission } from '@/lib/permissions'
+import { SubProdEdit } from '@/components/SubProd'
 
 const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> = {
   new:          { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'New'        },
@@ -46,6 +48,7 @@ const COLS = [
   { id: 'process_route',   label: 'PROCESS ROUTE',     w: 220, on: true  },
   { id: 'machine',         label: 'MACHINE',           w: 160, on: true  },
   { id: 'batch_id',        label: 'BATCH ID',          w: 140, on: true  },
+  { id: 'sub_prod_no',     label: 'SUB PROD NO.',      w: 120, on: true  },
   { id: 'kg',              label: 'BATCH QTY (KG)',    w: 120, on: true  },
   { id: 'mtr',             label: 'BATCH QTY (MTR)',   w: 130, on: true  },
   { id: 'taka',            label: 'TAKA',              w:  80, on: true  },
@@ -63,6 +66,8 @@ export default function SplittedOrdersPage() {
   const [showCols,   setShowCols]   = useState(false)
   const [colFilters, setColFilters] = useState<Record<string,string>>({})
   const [resizing,   setResizing]   = useState<{id:string;startX:number;startW:number}|null>(null)
+  // Sub Prod No. can be changed by whoever may split (lib/access.ts set_sub_prod)
+  const spPerm = usePermission(['/orders', '/supervisor', '/split-order', '/splitted-orders'])
 
   const showToast = (msg: string, err = false) => {
     setToast({msg, err})
@@ -251,6 +256,9 @@ export default function SplittedOrdersPage() {
         ) : '-'
       case 'batch_id':
         return <strong style={{color:'var(--accent)'}}>{row.batch_id}</strong>
+      case 'sub_prod_no':
+        return <SubProdEdit batchId={row.id} value={row.sub_prod_no} canEdit={spPerm.canEdit}
+          onSaved={v => { setRows(p => p.map(r => r.id === row.id ? { ...r, sub_prod_no: v } : r)); showToast(`✓ ${row.batch_id}: Sub Prod No. ${v || 'cleared'}`) }} />
       case 'kg':
         return <strong>{row.kg} Kg</strong>
       case 'mtr':

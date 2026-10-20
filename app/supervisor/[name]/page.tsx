@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
 import { use, useEffect, useState, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import RouteAssignment from './RouteAssignment'
@@ -593,7 +594,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#FFF5F5' }}>
                   <tr>
-                    {['BATCH #','ORDER #','PARTY','SUB PARTY','SALES PERSON','ARTICLE',
+                    {['BATCH #','SUB PROD NO.','ORDER #','PARTY','SUB PARTY','SALES PERSON','ARTICLE',
                       'BLEND','WIDTH','GSM','COLOR','LAB NO.','LOT NO.','CHALLAN NO.',
                       'QTY(KG)','QTY(MTR)','TAKA','FINISH','PACKING','REMARKS',
                       'REPAIR KG','REPAIR MTR','REPAIR TAKA','SOURCE','TYPE','NOTES','ASSIGN','ACTIONS'].map(h => (
@@ -605,6 +606,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
                   {faultyBatches.map((r: any, idx: number) => (
                     <tr key={r.id || idx} style={{ background: idx%2===0?'white':'#FFF5F5', borderBottom: '1px solid #FEE2E2' }}>
                       <td style={{ ...cellStyle, fontWeight:700, color:'#DC2626' }}>{r.batch_id||'-'}</td>
+                      <td style={cellStyle}><SubProdCell value={r.sub_prod_no} /></td>
                       <td style={{ ...cellStyle, fontWeight:700, color:'#2563EB' }}>{r.order_number||'-'}</td>
                       <td style={{ ...cellStyle, color:'#2563EB', fontWeight:600 }}>{r.party||'-'}</td>
                       <td style={cellStyle}>{r.sub_party||'-'}</td>

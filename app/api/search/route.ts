@@ -17,8 +17,8 @@ export async function GET(req: NextRequest) {
   const [o, b, m, s] = await Promise.all([
     dbSelect('orders', { or: `(${orFields})`, order: 'created_at.desc', limit: '8' },
       'id,order_number,party,article,color,qty_kg,status,supervisors(name)'),
-    dbSelect('batches', { batch_id: `ilike.${like}`, order: 'created_at.desc', limit: '6' },
-      'id,batch_id,kg,status,current_process,order_id'),
+    dbSelect('batches', { or: `(batch_id.ilike.${like},sub_prod_no.ilike.${like})`, order: 'created_at.desc', limit: '6' },
+      'id,batch_id,sub_prod_no,kg,status,current_process,order_id'),
     dbSelect('machines', { name: `ilike.${like}`, order: 'name.asc', limit: '5' }, 'id,name,capacity,machine_type'),
     dbSelect('supervisors', { name: `ilike.${like}`, order: 'name.asc', limit: '5' }, 'id,name'),
   ])

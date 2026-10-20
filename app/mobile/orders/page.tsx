@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdTag } from '@/components/SubProd'
 import { useEffect, useState } from 'react'
 
 export default function MobileOrdersPage() {
@@ -25,7 +26,7 @@ export default function MobileOrdersPage() {
       if (!oRes.ok) throw new Error(oRes.error || 'Could not load orders')
       const byOrder: Record<string, any[]> = {}
       for (const b of bRes.data || []) (byOrder[b.order_id] ||= []).push({
-        batchId: b.batch_id, kg: b.kg, status: b.is_faulty ? 'faulty' : b.status, fmsCurrentProcess: b.current_process,
+        batchId: b.batch_id, subProd: b.sub_prod_no || '', kg: b.kg, status: b.is_faulty ? 'faulty' : b.status, fmsCurrentProcess: b.current_process,
       })
       const rows = (oRes.data || []).map((o: any) => ({
         id: o.id, orderNumber: o.order_number, party: o.party, article: o.article, color: o.color,
@@ -157,7 +158,7 @@ export default function MobileOrdersPage() {
                         <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 4 }}>BATCHES ({batches.length})</div>
                         {batches.map((b: any) => (
                           <div key={b.batchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                            <a href={`/batches/${encodeURIComponent(b.batchId)}`} onClick={e => e.stopPropagation()} style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>{b.batchId}</a>
+                            <a href={`/batches/${encodeURIComponent(b.batchId)}`} onClick={e => e.stopPropagation()} style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>{b.batchId}<SubProdTag value={b.subProd} /></a>
                             <span style={{ fontSize: 12, color: '#64748B' }}>{b.kg} Kg</span>
                             <span style={{ fontSize: 11, color: '#94A3B8' }}>{b.fmsCurrentProcess || b.status || '—'}</span>
                           </div>

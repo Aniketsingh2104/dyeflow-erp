@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { buildDbContext, fetchAnomalyContext, AnomalyItem } from '@/lib/dbContext'
 import { useSupervisorFilter } from '@/lib/permissions'
 import { isBatchFinished } from '@/lib/batchStatus'
+import { SubProdCell, SubProdTag } from '@/components/SubProd'
 
 interface AiInsight { text: string; type: 'urgent' | 'info' | 'good' }
 
@@ -209,7 +210,7 @@ function AnomalyPanel() {
               <span style={{ fontSize: 16, flexShrink: 0 }}>{cfg.icon}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: cfg.color }}>{a.batchId}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: cfg.color }}>{a.batchId}<SubProdTag value={a.subProdNo} /></span>
                   <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{a.orderNo} · {a.party}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', background: cfg.color, color: '#fff', borderRadius: 10 }}>{cfg.label}</span>
                 </div>
@@ -473,13 +474,14 @@ export default function DashboardPage() {
         ) : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Batch ID</th><th>Order #</th><th>Party</th><th>Color</th><th>Machine</th><th>Current Process</th><th>Status</th></tr></thead>
+              <thead><tr><th>Batch ID</th><th>Sub Prod No.</th><th>Order #</th><th>Party</th><th>Color</th><th>Machine</th><th>Current Process</th><th>Status</th></tr></thead>
               <tbody>
                 {batches.filter(b => b.status === 'in-process').slice(0, 20).map(b => {
                   const order = orders.find(o => o.id === b.order_id) || {}
                   return (
                     <tr key={b.id}>
                       <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{b.batch_id}</td>
+                      <td><SubProdCell value={b.sub_prod_no} /></td>
                       <td>{order.order_number || '-'}</td>
                       <td>{order.party || '-'}</td>
                       <td>{order.color || '-'}</td>

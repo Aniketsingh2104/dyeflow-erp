@@ -1,4 +1,5 @@
 'use client'
+import { SubProdCell } from '@/components/SubProd'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 
 import { useEffect, useState, useCallback } from 'react'
@@ -23,6 +24,7 @@ const COLUMNS = [
   { key: 'sent_at',        label: 'TIMESTAMP',    width: 145 },
   { key: 'order_number',   label: 'ORDER #',       width: 120 },
   { key: 'batch_id_str',   label: 'BATCH #',       width: 140 },
+  { key: 'sub_prod_no',    label: 'SUB PROD NO.',  width: 120 },
   { key: 'party',          label: 'PARTY',         width: 100 },
   { key: 'article',        label: 'ARTICLE',       width: 90  },
   { key: 'blend',          label: 'BLEND',         width: 70  },
@@ -80,7 +82,7 @@ export default function FaultyPage() {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
     if (search.trim()) {
       const q = search.toLowerCase()
-      return [r.order_number, r.party, r.batch_id_str, r.color, r.faulty_type, r.article]
+      return [r.order_number, r.party, r.batch_id_str, r.sub_prod_no, r.color, r.faulty_type, r.article]
         .some(v => String(v ?? '').toLowerCase().includes(q))
     }
     return true
@@ -316,6 +318,7 @@ export default function FaultyPage() {
                               {r.batch_id_str || r.batch_id}
                             </td>
                           )
+                          case 'sub_prod_no': return <td key={col.key} style={s}><SubProdCell value={r.sub_prod_no} /></td>
                           case 'kg': return (
                             <td key={col.key} style={{...s, fontWeight:700, color:'var(--accent)'}}>
                               {r.kg} Kg

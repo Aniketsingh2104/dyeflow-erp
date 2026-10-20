@@ -4,6 +4,7 @@ import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useState, useCallback } from 'react'
 import { getMachines, getBatches, getOrders, markProcessDone } from '@/lib/db'
 import { isBatchFinished } from '@/lib/batchStatus'
+import { SubProdCell } from '@/components/SubProd'
 
 const BUILTIN_SHADE_RULES = [
   { keyword: 'white',   shadeGroup: 'White'  },
@@ -256,7 +257,7 @@ export default function MachinesPage() {
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead>
                         <tr style={{ background: 'var(--bg-secondary)' }}>
-                          {['Batch ID','Order #','Party','Color','Article','Kg','Process','Status','Actions'].map(h => (
+                          {['Batch ID','Sub Prod No.','Order #','Party','Color','Article','Kg','Process','Status','Actions'].map(h => (
                             <th key={h} style={{ padding: '8px 12px', textAlign: 'left',
                               fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)',
                               textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -272,6 +273,7 @@ export default function MachinesPage() {
                             background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                             borderBottom: '1px solid var(--border-light)' }}>
                             <td style={td}><span style={{ fontWeight: 700, color: 'var(--accent)' }}>{b.batch_id}</span></td>
+                            <td style={td}><SubProdCell value={b.sub_prod_no} /></td>
                             <td style={td}>{b.orderNo}</td>
                             <td style={td}>{b.party}</td>
                             <td style={td}>{b.color}</td>

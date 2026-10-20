@@ -3,10 +3,12 @@
 import { dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { getCollabInfo } from '@/lib/collab'
+import { SubProdCell } from '@/components/SubProd'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 const COLUMNS = [
   { key: 'batch_id',        label: 'BATCH ID',       defaultWidth: 140 },
+  { key: 'sub_prod_no',     label: 'SUB PROD NO.',   defaultWidth: 120 },
   { key: 'order_number',    label: 'ORDER #',         defaultWidth: 120 },
   { key: 'party',           label: 'PARTY',           defaultWidth: 100 },
   { key: 'sub_party',       label: 'SUB PARTY',       defaultWidth: 100 },
@@ -119,6 +121,7 @@ export default function FirstProcessBatchPage() {
           return {
             id:              b.id,
             batch_id:        b.batch_id || b.id,
+            sub_prod_no:     b.sub_prod_no || null,
             order_id:        b.order_id,
             machine_id:      b.machine_id || null,
             date_calc_plan:  b.date_calc_plan || null,
@@ -454,6 +457,7 @@ export default function FirstProcessBatchPage() {
                     }
                     switch(col.key) {
 
+                      case 'sub_prod_no': return <td key={col.key} style={tdStyle}><SubProdCell value={b.sub_prod_no} /></td>
                       case 'batch_id': return (
                         <td key={col.key} style={{...tdStyle,fontWeight:700,color:'var(--accent)'}}>
                           {b.batch_id}

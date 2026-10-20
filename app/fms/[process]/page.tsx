@@ -1,5 +1,6 @@
 'use client'
 
+import { SubProdCell } from '@/components/SubProd'
 import { canonicalCode, sameCode, dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -56,6 +57,7 @@ const DEFAULT_COLS = [
   { id: 'created_at',       label: 'TIMESTAMP',       visible: true,  width: 150, minWidth: 100 },
   { id: 'orderNo',          label: 'ORDER #',          visible: true,  width: 130, minWidth: 80  },
   { id: 'batch_id',         label: 'BATCH #',          visible: true,  width: 130, minWidth: 80  },
+  { id: 'sub_prod_no',      label: 'SUB PROD NO.',     visible: true,  width: 120, minWidth: 80  },
   { id: 'party',            label: 'PARTY',            visible: true,  width: 150, minWidth: 100 },
   { id: 'sub_party',        label: 'SUB PARTY',        visible: false, width: 120, minWidth: 80  },
   { id: 'sales_person',     label: 'SALES PERSON',     visible: false, width: 130, minWidth: 80  },
@@ -98,7 +100,18 @@ export default function FmsProcessPage() {
   const [search,   setSearch]   = useState('')
   const [now,      setNow]      = useState(new Date())
   const [cols,     setCols]     = useState<typeof DEFAULT_COLS>(() => {
-    try { const s = localStorage.getItem(COL_KEY); return s ? JSON.parse(s) : DEFAULT_COLS } catch { return DEFAULT_COLS }
+    try {
+      const s = localStorage.getItem(COL_KEY)
+      if (!s) return DEFAULT_COLS
+      // a saved layout from before a column was added: put the new column in after its neighbour
+      const saved: typeof DEFAULT_COLS = JSON.parse(s)
+      DEFAULT_COLS.forEach((c, i) => {
+        if (saved.some(x => x.id === c.id)) return
+        const after = i > 0 ? saved.findIndex(x => x.id === DEFAULT_COLS[i - 1].id) : -1
+        saved.splice(after + 1, 0, c)
+      })
+      return saved
+    } catch { return DEFAULT_COLS }
   })
   const [showCols,   setShowCols]   = useState(false)
   const [resizing,   setResizing]   = useState<string | null>(null)
@@ -402,7 +415,7 @@ export default function FmsProcessPage() {
   const visible = cols.filter(c => c.visible)
   const displayRows = search.trim()
     ? rows.filter(r =>
-        [r.batch_id, r.orderNo, r.party, r.color, r.article]
+        [r.batch_id, r.sub_prod_no, r.orderNo, r.party, r.color, r.article]
           .some(v => String(v || '').toLowerCase().includes(search.toLowerCase()))
       )
     : rows
@@ -554,6 +567,7 @@ export default function FmsProcessPage() {
                       switch (col.id) {
                         case 'created_at':    return <td key={col.id} style={{ ...s, fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDateTime(row.sentAt || row.created_at)}</td>
                         case 'orderNo':       return <td key={col.id} style={{ ...s, fontWeight: 700 }}>{row.orderNo}</td>
+                        case 'sub_prod_no':   return <td key={col.id} style={s}><SubProdCell value={row.sub_prod_no} /></td>
                         case 'batch_id':      return (
                           <td key={col.id} style={{ ...s, fontWeight: 700, color: 'var(--accent)' }}>
                             {row.batch_id}

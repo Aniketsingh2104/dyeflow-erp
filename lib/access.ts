@@ -66,6 +66,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
     create_splits: { edit: ['/orders', '/supervisor', '/split-order'] },
     auto_split_preview: { edit: ['/orders', '/supervisor', '/split-order'] },
     full_split: { edit: ['/orders', '/supervisor'] },
+    set_sub_prod: { edit: ['/orders', '/supervisor', '/split-order', '/splitted-orders'] },
     update: { edit: [...PLAN_PAGES, '/fms', '/supervisor', '/repairing-order', '/splitted-orders'] },
     process_done: { edit: FMS_PAGES },
     mark_faulty: { edit: FMS_PAGES },

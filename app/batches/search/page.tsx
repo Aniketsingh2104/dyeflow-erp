@@ -1,11 +1,12 @@
 'use client'
 /**
- * /batches/search — find any batch (by batch code, order number, party,
+ * /batches/search — find any batch (by batch code, Sub Prod No., order number, party,
  * article or colour) and open its Batch Trace.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { SubProdCell } from '@/components/SubProd'
 
 const STATUS_COLOR: Record<string, [string, string]> = {
   pending:      ['var(--bg-secondary)', 'var(--text-tertiary)'],
@@ -48,7 +49,7 @@ export default function BatchSearchPage() {
       if (status !== 'active' && status !== 'all' && (b.is_faulty ? 'faulty' : b.status) !== status) return false
       if (!s) return true
       const o = orders[b.order_id] || {}
-      return [b.batch_id, o.order_number, o.party, o.article, o.color, b.current_process, b.machines?.name]
+      return [b.batch_id, b.sub_prod_no, o.order_number, o.party, o.article, o.color, b.current_process, b.machines?.name]
         .some(v => String(v || '').toLowerCase().includes(s))
     })
   }, [batches, orders, q, status])
@@ -64,10 +65,10 @@ export default function BatchSearchPage() {
 
       <div className="card" style={{ marginBottom: 14 }}>
         <form onSubmit={e => { e.preventDefault(); if (rows.length === 1) open(rows[0].batch_id); else if (q.trim()) {
-            const exact = batches.find(b => String(b.batch_id).toLowerCase() === q.trim().toLowerCase()); if (exact) open(exact.batch_id) } }}
+            const exact = batches.find(b => String(b.batch_id).toLowerCase() === q.trim().toLowerCase() || String(b.sub_prod_no || '').toLowerCase() === q.trim().toLowerCase()); if (exact) open(exact.batch_id) } }}
           style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input autoFocus value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Batch code, order number, party, article or colour…"
+            placeholder="Batch code, Sub Prod No., order number, party, article or colour…"
             style={{ flex: 1, minWidth: 240, padding: '8px 12px', fontSize: 14 }} />
           <select value={status} onChange={e => setStatus(e.target.value)} style={{ padding: '8px 10px', fontSize: 13 }}>
             <option value="active">Not finished</option>
@@ -92,7 +93,7 @@ export default function BatchSearchPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-secondary)' }}>
-                  {['Batch', 'Order', 'Party', 'Article / Colour', 'Kg', 'Status', 'Now at', 'Machine'].map(h => (
+                  {['Batch', 'Sub Prod No.', 'Order', 'Party', 'Article / Colour', 'Kg', 'Status', 'Now at', 'Machine'].map(h => (
                     <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10, textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>{h}</th>
                   ))}
                 </tr>
@@ -105,6 +106,7 @@ export default function BatchSearchPage() {
                   return (
                     <tr key={b.id} onClick={() => open(b.batch_id)} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border-light)' }}>
                       <td style={td}><Link href={`/batches/${encodeURIComponent(b.batch_id)}`} style={{ fontWeight: 700 }}>{b.batch_id}</Link></td>
+                      <td style={td}><SubProdCell value={b.sub_prod_no} /></td>
                       <td style={td}>{o.order_number || '—'}</td>
                       <td style={td}>{o.party || '—'}</td>
                       <td style={td}>{o.article || '—'} · {o.color || '—'}</td>

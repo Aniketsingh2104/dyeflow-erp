@@ -1,4 +1,5 @@
 'use client'
+import { withSubProd } from '@/lib/subProd'
 import React from 'react'
 
 interface ReprocessData {
@@ -38,7 +39,7 @@ export default function ReprocessModal({ record, onClose, onConfirm, saving, sou
 
         {/* Header */}
         <div className="modal-header">
-          <span className="modal-title">🔄 Reprocess — {record?.batch_id_str}</span>
+          <span className="modal-title">🔄 Reprocess — {withSubProd(record?.batch_id_str, record?.sub_prod_no)}</span>
           <button className="small" onClick={onClose}>✕</button>
         </div>
 

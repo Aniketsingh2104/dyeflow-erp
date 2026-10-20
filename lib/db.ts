@@ -89,12 +89,39 @@ export async function getBatches(optsOrId?: string | { orderId?: string; status?
   } catch (e: any) { return { data: [], error: e.message } }
 }
 
-export async function createSplits(orderId: string, batches: any[], processRoute: string[]): Promise<{ data: any; error: string | null }> {
+export async function createSplits(orderId: string, batches: any[], processRoute: string[], opts: { allowDuplicate?: boolean } = {}): Promise<{ data: any; error: string | null; duplicate?: boolean }> {
   try {
-    const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'create_splits', order_id: orderId, batches, process_route: processRoute }) })
+    const res  = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'create_splits', order_id: orderId, batches, process_route: processRoute, ...(opts.allowDuplicate ? { allow_duplicate: true } : {}) }) })
     const data = await res.json()
-    return { data: data.data || null, error: data.error || null }
+    return { data: data.data || null, error: data.error || null, duplicate: !!data.duplicate }
   } catch (e: any) { return { data: null, error: e.message } }
+}
+
+/** createSplits, and when a Sub Prod No. is already on another batch, ask
+ *  "save anyway?" and send again. cancelled = the user said no. */
+export async function createSplitsAsking(orderId: string, batches: any[], processRoute: string[]): Promise<{ data: any; error: string | null; cancelled?: boolean }> {
+  const r = await createSplits(orderId, batches, processRoute)
+  if (!r.duplicate) return r
+  if (!confirm(`Sub Prod No. already used:\n${r.error}\n\nSave anyway?`)) return { data: null, error: null, cancelled: true }
+  return createSplits(orderId, batches, processRoute, { allowDuplicate: true })
+}
+
+/** Sub Prod No. of one batch (empty clears it); asks "save anyway?" on a duplicate.
+ *  Returns the saved value, or an error / cancelled. */
+export async function saveSubProd(batchUuid: string, value: string): Promise<{ ok: boolean; value?: string | null; error?: string; cancelled?: boolean }> {
+  const send = async (allow: boolean) => {
+    try {
+      const res = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_sub_prod', id: batchUuid, sub_prod_no: value, ...(allow ? { allow_duplicate: true } : {}) }) })
+      return await res.json()
+    } catch (e: any) { return { ok: false, error: e.message || 'Network error' } }
+  }
+  let j = await send(false)
+  if (!j.ok && j.duplicate) {
+    if (!confirm(`Sub Prod No. already used:\n${j.error}\n\nSave anyway?`)) return { ok: false, cancelled: true }
+    j = await send(true)
+  }
+  return j.ok ? { ok: true, value: j.data?.sub_prod_no ?? null } : { ok: false, error: j.error || 'Not saved' }
 }
 
 // The next process is worked out on the server from the batch's own route
