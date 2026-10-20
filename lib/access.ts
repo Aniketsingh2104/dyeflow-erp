@@ -100,7 +100,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
   // setup masters: everyone reads, admin changes
   machines: { GET: 'staff', POST: 'admin' }, processes: { GET: 'staff', POST: 'admin' },
   supervisors: { GET: 'staff', POST: 'admin' }, customers: { GET: 'staff', POST: 'admin' },
-  'article-routes': { GET: 'staff', POST: 'admin' }, 'article-supervisor-map': { GET: 'staff', POST: 'admin' },
+  'article-routes': { GET: 'staff', POST: 'admin' }, 'route-suggest': { POST: 'staff' }, 'article-supervisor-map': { GET: 'staff', POST: 'admin' },
   'shade-master': { GET: 'staff', POST: 'admin' }, 'route-templates': { GET: 'staff', POST: 'admin' },
   'setup-holidays': { GET: 'staff', POST: 'admin' }, holidays: { GET: 'staff' },
   users: { GET: 'admin', POST: 'admin' },

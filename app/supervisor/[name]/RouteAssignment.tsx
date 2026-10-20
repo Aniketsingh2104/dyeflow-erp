@@ -6,7 +6,38 @@ import {
   isSupervisorOrderLabRecheckBlocked,
   getMachineDisplayNameWithQty
 } from './route-helpers'
-import { sameCode } from '@/lib/processCodes'
+import { sameCode, canonicalCode } from '@/lib/processCodes'
+import { articleForMaster } from '@/lib/articleMatch'
+import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
+
+// ── Route to pre-fill, per article (app/api/route-suggest): Master → Master
+// by article code → history. Every row on the page asks; the asks are
+// gathered and sent as ONE request.
+type Suggestion = { route: string[] | null; source: 'master' | 'master-code' | 'history' | null; matched: string | null; count: number; machines: Record<string, string> }
+const suggestCache = new Map<string, Promise<Suggestion | null>>()
+let pending: { article: string; resolve: (s: Suggestion | null) => void }[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+function flushSuggestions() {
+  const batch = pending; pending = []; flushTimer = null
+  const articles = [...new Set(batch.map(b => b.article))]
+  fetch('/api/route-suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ articles }) })
+    .then(r => r.json()).catch(() => ({ ok: false }))
+    .then(j => { for (const b of batch) b.resolve(j?.ok ? (j.data?.[b.article] || null) : null) })
+}
+function suggestRoute(article: string): Promise<Suggestion | null> {
+  const a = String(article || '').trim()
+  if (!a) return Promise.resolve(null)
+  if (!suggestCache.has(a)) {
+    suggestCache.set(a, new Promise(resolve => {
+      pending.push({ article: a, resolve })
+      if (!flushTimer) flushTimer = setTimeout(flushSuggestions, 60)
+    }))
+    // a failed answer is not kept — the next page load asks again
+    suggestCache.get(a)!.then(v => { if (!v) suggestCache.delete(a) })
+  }
+  return suggestCache.get(a)!
+}
+const routeKeyOf = (codes: string[]) => codes.map(c => canonicalCode(c)).join('/')
 
 // ── Master data: loaded ONCE per page for every order row (was 4 requests per
 // row). Kept for a minute so a refresh after saving sees new rules.
@@ -73,12 +104,13 @@ function loadMaster(): Promise<any> {
 //   1. the machine this article used for that process last time
 //   2. else the smallest machine (capacity ≥ qty) of a TYPE that has run this
 //      process before (machine_type — e.g. LJET / Ujet for Dyeing)
-function suggestMachine(code: string, qtyKg: number, article: string, master: any): string {
+function suggestMachine(code: string, qtyKg: number, article: string, master: any, fromHistory = ''): string {
   if (!master || !MACHINE_REQUIRED.includes(code)) return ''
   const art = String(article || '').trim().toLowerCase()
   const last = master.articleMachines?.[art]
   const hit = last && Object.entries(last).find(([c]) => sameCode(c, code))
   if (hit) return hit[1] as string
+  if (fromHistory) return fromHistory
   const types: Set<string> | undefined = Object.entries(master.typesFor || {}).find(([c]) => sameCode(c, code))?.[1] as any
   if (!types?.size) return ''
   const cands = (master.machines || []).filter((m: any) => types.has(String(m.machine_type || '').toLowerCase()))
@@ -97,15 +129,27 @@ interface RouteAssignmentProps {
   onUpdate: () => void
 }
 
-function buildRouteOptions(db: any, article?: string): { name: string; steps: { processCode: string; name: string }[] }[] {
+function buildRouteOptions(db: any, article?: string, extra: { codes: string[]; label: string }[] = []): { name: string; steps: { processCode: string; name: string }[] }[] {
   const options: { name: string; steps: { processCode: string; name: string }[] }[] = []
-  for (const rt of (db.processRouteMaster || [])) {
-    if (!rt.name || !(rt.steps || []).length) continue
-    options.push(rt)
-  }
-  const seen = new Set(options.map(o => (o.steps || []).map((s: any) => s.processCode).join('/')))
   const processNames: Record<string, string> = {}
   for (const p of (db.processList || [])) processNames[p.code] = p.name || p.code
+  // the order's own saved route and the route pre-filled from the Master come
+  // first (so they can always be selected, even if no template has them)
+  const seen = new Set<string>()
+  for (const x of extra) {
+    const codes = (x.codes || []).filter(Boolean)
+    const key = routeKeyOf(codes)
+    if (!codes.length || seen.has(key)) continue
+    seen.add(key)
+    options.push({ name: `${codes.join('/')}  [${x.label}]`, steps: codes.map(code => ({ processCode: code, name: processNames[code] || code })) })
+  }
+  for (const rt of (db.processRouteMaster || [])) {
+    if (!rt.name || !(rt.steps || []).length) continue
+    const key = routeKeyOf((rt.steps || []).map((s: any) => s.processCode))
+    if (seen.has(key)) continue
+    seen.add(key)
+    options.push(rt)
+  }
   const articleMap = db.articleProcessMap || {}
   const orderedArticles: string[] = []
   const artKey = String(article || '').trim().toLowerCase()
@@ -117,8 +161,8 @@ function buildRouteOptions(db: any, article?: string): { name: string; steps: { 
     const codes: string[] = Array.isArray(articleMap[a]) ? articleMap[a] : []
     if (!codes.length) continue
     const routeKey = codes.join('/')
-    if (seen.has(routeKey)) continue
-    seen.add(routeKey)
+    if (seen.has(routeKeyOf(codes))) continue
+    seen.add(routeKeyOf(codes))
     options.push({
       name: `${routeKey}  [${a}]`,
       steps: codes.map(code => ({ processCode: code, name: processNames[code] || code })),
@@ -137,6 +181,9 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
   const [editMode,            setEditMode]            = useState(false)
   const [batchLockStatus,     setBatchLockStatus]     = useState<'loading'|'editable'|'locked'>('loading')
   const [lockReason,          setLockReason]          = useState('')
+  const [suggestion,          setSuggestion]          = useState<Suggestion | null | undefined>(undefined)  // undefined = still looking
+  const [saveToMaster,        setSaveToMaster]        = useState(true)
+  const [isAdmin,             setIsAdmin]             = useState(false)
 
   // ── Confirmed check — top of render ───────────────────────────────────────
   const isConfirmed = !!(order.supervisor_confirmed || order.supervisorConfirmed)
@@ -145,15 +192,37 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     (Array.isArray(order.processRoute)  && order.processRoute.length  ? order.processRoute.join('/')  : '') ||
     order.routeTemplateName || ''
 
-  useEffect(() => { loadDb() }, [])
+  useEffect(() => { loadDb(); setIsAdmin(isAdminUser(getActiveUserRecord())) }, [])
+
+  // the route for this order's article (Master → article code → history)
+  useEffect(() => {
+    let off = false
+    setSuggestion(undefined)
+    suggestRoute(order.article).then(sg => { if (!off) setSuggestion(sg) })
+    return () => { off = true }
+  }, [order.id, order.article])
+
+  const savedRoute: string[] = (Array.isArray(order.process_route) && order.process_route.length ? order.process_route
+    : Array.isArray(order.processRoute) ? order.processRoute : []) || []
+
+  const selRoute = routeOptions[selectedTemplateIdx]
+  // where the pre-filled route came from (shown under the dropdown)
+  const selKey = selRoute ? routeKeyOf((selRoute.steps || []).map((s: any) => s.processCode)) : ''
+  const fromSuggestion = !!(suggestion?.route?.length && selKey === routeKeyOf(suggestion.route))
+  const offerMaster = isAdmin && !order.isRepair && suggestion !== undefined
+    && !(suggestion?.source === 'master' || suggestion?.source === 'master-code')
 
   useEffect(() => {
-    if (db) {
-      const opts = buildRouteOptions(db, order.article)
+    if (db && suggestion !== undefined) {
+      const extra: { codes: string[]; label: string }[] = []
+      if (savedRoute.length) extra.push({ codes: savedRoute, label: 'saved' })
+      if (suggestion?.route?.length) extra.push({ codes: suggestion.route,
+        label: suggestion.source === 'history' ? 'history' : `Master: ${suggestion.matched}` })
+      const opts = buildRouteOptions(db, order.article, extra)
       setRouteOptions(opts)
       if (!isConfirmed || editMode) initializeTemplate(db, opts)
     }
-  }, [db, order.id, editMode])
+  }, [db, order.id, editMode, suggestion])
 
   useEffect(() => {
     if (!isConfirmed) { setBatchLockStatus('editable'); return }
@@ -190,17 +259,13 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     if (order.routeTemplateName)
       defaultIdx = opts.findIndex(rt => rt.name === order.routeTemplateName)
     const existingRoute = order.process_route || order.processRoute
+    // 1. the order's own saved route  2. the route from the Master / history
     if (defaultIdx < 0 && Array.isArray(existingRoute) && existingRoute.length) {
-      defaultIdx = opts.findIndex(rt =>
-        (rt.steps || []).map((s: any) => s.processCode).join('/') === existingRoute.join('/')
-      )
+      defaultIdx = opts.findIndex(rt => routeKeyOf((rt.steps || []).map((s: any) => s.processCode)) === routeKeyOf(existingRoute))
     }
-    if (defaultIdx < 0 && order.article) {
-      const codes: string[] = database.articleProcessMap?.[String(order.article || '').trim().toLowerCase()] || []
-      if (codes.length)
-        defaultIdx = opts.findIndex(rt =>
-          (rt.steps || []).map((s: any) => s.processCode).join('/') === codes.join('/')
-        )
+    if (defaultIdx < 0 && suggestion?.route?.length) {
+      const key = routeKeyOf(suggestion.route)
+      defaultIdx = opts.findIndex(rt => routeKeyOf((rt.steps || []).map((s: any) => s.processCode)) === key)
     }
     if (defaultIdx < 0 && opts.length === 1) defaultIdx = 0
     if (defaultIdx >= 0) {
@@ -213,7 +278,6 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
     if (idx < 0) { setShowMachines(false); setMachineInputs({}); return }
     const rt = opts[idx]
     if (!rt) return
-    const qtyKg = parseFloat(order.qtyKg || order.qty_kg) || 0
     const machineSteps = (rt.steps || []).filter((s: any) => MACHINE_REQUIRED.includes(s.processCode))
     const inputs: {[key: string]: [string, string]} = {}
     // Load existing process_machines if in edit mode — these are stored as machine IDs,
@@ -224,11 +288,12 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
       const rec = (database.allMachines || database.machines || []).find((m: any) => m.id === idOrName)
       return rec ? rec.name : idOrName
     }
+    // Machines are NEVER filled in automatically — the supervisor picks them.
+    // Only machines already saved on this order are shown again.
     for (const step of machineSteps) {
       const existing = existingPM[step.processCode] || []
-      const smart    = suggestMachine(step.processCode, qtyKg, order.article, database) || ''
       inputs[step.processCode] = [
-        resolveMachineName(existing[0]) || smart,
+        resolveMachineName(existing[0]) || '',
         resolveMachineName(existing[1]) || '',
       ]
     }
@@ -326,6 +391,14 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         if (data.stale) { checkBatchLock(); onUpdate() }
         return
       }
+      // admin: the article had no Master route → keep this one in the Master
+      if (offerMaster && saveToMaster && order.article) {
+        const m = await fetch('/api/article-routes', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'upsert', article: articleForMaster(order.article), route: codes }) })
+          .then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+        if (!m.ok) alert('Route confirmed, but not saved to the Master: ' + (m.error || 'Unknown error'))
+        else suggestCache.delete(String(order.article).trim())
+      }
       setEditMode(false)
       onUpdate()
     } catch (err: any) { alert('Network error: ' + err.message) }
@@ -422,6 +495,25 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
           return <option key={idx} value={idx}>{rt.name.startsWith(codes) ? rt.name : `${rt.name}  (${codes})`}</option>
         })}
       </select>
+
+      {/* where the pre-filled route came from */}
+      {suggestion === undefined ? (
+        <div style={{ fontSize: '10px', color: '#9CA3AF', margin: '2px 0 6px' }}>Looking up the Master…</div>
+      ) : fromSuggestion ? (
+        <div style={{ fontSize: '10px', margin: '2px 0 6px', color: suggestion?.source === 'history' ? '#B45309' : '#059669', fontWeight: 600 }}>
+          {suggestion?.source === 'history'
+            ? `From history (${suggestion.count} batch${suggestion.count === 1 ? '' : 'es'}) — not in the Master`
+            : `✓ From Master: ${suggestion?.matched}`}
+        </div>
+      ) : !suggestion?.route?.length && selectedTemplateIdx < 0 ? (
+        <div style={{ fontSize: '10px', color: '#DC2626', margin: '2px 0 6px' }}>No Master route for this article — pick one</div>
+      ) : null}
+      {offerMaster && selectedTemplateIdx >= 0 && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: '#374151', margin: '0 0 6px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={saveToMaster} onChange={e => setSaveToMaster(e.target.checked)} />
+          Also save to Master for "{articleForMaster(order.article)}"
+        </label>
+      )}
 
       {showMachines && selectedRoute && (
         <div style={{ background: '#F9FAFB', borderRadius: '6px', padding: '10px', border: '1px solid #E5E7EB' }}>
