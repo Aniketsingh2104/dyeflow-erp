@@ -501,7 +501,8 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         <option value="-1">-- Select Route --</option>
         {routeOptions.map((rt, idx) => {
           const codes = (rt.steps || []).map((s: any) => s.processCode).join('/')
-          return <option key={idx} value={idx}>{rt.name.startsWith(codes) ? rt.name : `${rt.name}  (${codes})`}</option>
+          // only the route itself (no template / article name) — kept simple
+          return <option key={idx} value={idx}>{codes}</option>
         })}
       </select>
 
@@ -512,7 +513,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
         <div style={{ fontSize: '10px', margin: '2px 0 6px', color: suggestion?.source === 'history' ? '#B45309' : '#059669', fontWeight: 600 }}>
           {suggestion?.source === 'history'
             ? `From history (${suggestion.count} batch${suggestion.count === 1 ? '' : 'es'}) — not in the Master`
-            : `✓ From Master: ${suggestion?.matched}`}
+            : '✓ From Master'}
         </div>
       ) : !suggestion?.route?.length && selectedTemplateIdx < 0 ? (
         <div style={{ fontSize: '10px', color: '#DC2626', margin: '2px 0 6px' }}>No Master route for this article — pick one</div>
