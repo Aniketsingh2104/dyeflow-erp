@@ -17,6 +17,18 @@ const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> =
   'written-off':{ bg: 'var(--bg-secondary)',  color: 'var(--text-tertiary)', label: 'Written off' },
 }
 
+// [{ code: 'S', names: ['LJET-31'] }, { code: 'D', names: ['LJET-22'] }] in route order
+function machineLines(b: any, o: any, name: Record<string, string>): { code: string; names: string[] }[] {
+  const route: string[] = (b.process_route?.length ? b.process_route : o.process_route) || []
+  const src: Record<string, any> = Object.keys(b.process_machine_map || {}).length ? b.process_machine_map : (o.process_machines || {})
+  const codes = [...route.filter(c => src[c]), ...Object.keys(src).filter(c => !route.includes(c))]
+  const lines = codes.map(code => ({ code, names: ((Array.isArray(src[code]) ? src[code] : [src[code]]) as string[]).map(id => name[id]).filter(Boolean) }))
+    .filter(l => l.names.length)
+  if (lines.length) return lines
+  const single = b.machines?.name || o.machines?.name
+  return single ? [{ code: '', names: [single] }] : []
+}
+
 function Badge({ status }: { status: string }) {
   const b = STATUS_MAP[status] || { bg: 'var(--bg-secondary)', color: 'var(--text-tertiary)', label: status }
   return (
@@ -78,11 +90,14 @@ export default function SplittedOrdersPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [batchRes, orderRes, repairRes] = await Promise.all([
+      const [batchRes, orderRes, repairRes, machRes] = await Promise.all([
         fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/orders',  { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/repairing-orders',   { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch('/api/machines', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ data: [] })),
       ])
+      const machName: Record<string, string> = {}
+      for (const m of (machRes.data || []) as any[]) machName[m.id] = m.name
       const batches: any[] = batchRes.data || []
       setAllBatches(batches)
       const orders:  any[] = orderRes.data || []
@@ -128,6 +143,9 @@ export default function SplittedOrdersPage() {
           process_route:   (b.process_route?.length ? b.process_route : o.process_route) || [],
           // Machine: prefer batch machine (set by supervisor for repair) over order machine
           machine_name:    b.machines?.name || o.machines?.name || '-',
+          // every machine of this batch per process: the batch's own map (one machine
+          // per process, set at split), else the order's picks, else the single machine
+          machine_lines:   machineLines(b, o, machName),
         }
       }))
     } catch (e: any) {
@@ -166,7 +184,7 @@ export default function SplittedOrdersPage() {
     return rows.filter(row =>
       Object.entries(colFilters).every(([key, val]) => {
         if (!val.trim()) return true
-        const cellVal = String(row[key] ?? '').toLowerCase()
+        const cellVal = key === 'machine' ? (row.machine_lines || []).map((l: any) => l.code + ' ' + l.names.join(' ')).join(' ').toLowerCase() : String(row[key] ?? '').toLowerCase()
         return cellVal.includes(val.toLowerCase())
       })
     )
@@ -248,12 +266,15 @@ export default function SplittedOrdersPage() {
           </div>
         )
       case 'machine':
-        return row.machine_name !== '-' ? (
-          <span style={{fontSize:11,fontWeight:600,padding:'2px 8px',
-            background:'var(--purple-light)',color:'var(--purple)',borderRadius:4}}>
-            {row.machine_name}
-          </span>
-        ) : '-'
+        return row.machine_lines?.length ? row.machine_lines.map((l: any) => (
+          <div key={l.code} style={{ display:'flex', gap:4, alignItems:'flex-start', flexWrap:'wrap', marginBottom:2 }}>
+            {l.code && <span style={{ fontSize:10, fontWeight:700, color:'var(--text-tertiary)', minWidth:18 }}>{l.code}</span>}
+            {l.names.map((n: string) => (
+              <span key={n} style={{fontSize:11,fontWeight:600,padding:'2px 6px',
+                background:'var(--purple-light)',color:'var(--purple)',borderRadius:4}}>{n}</span>
+            ))}
+          </div>
+        )) : '-'
       case 'batch_id':
         return <strong style={{color:'var(--accent)'}}>{row.batch_id}</strong>
       case 'sub_prod_no':
