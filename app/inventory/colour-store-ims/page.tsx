@@ -75,6 +75,7 @@ function bandOf(stockKg: number | null, maxLevel: number | null): Band {
 export default function ColourStoreIMSPage() {
   const [chemicals, setChemicals] = useState<any[]>([])
   const [stock,     setStock]     = useState<any[]>([])
+  const [future,    setFuture]    = useState<any>(null)   // Future Requirement per chemical (lib/futureRequirement.ts)
   const [loading,   setLoading]   = useState(true)
   const [saving,    setSaving]    = useState(false)
 
@@ -101,7 +102,7 @@ export default function ColourStoreIMSPage() {
     setLoading(true)
     try {
       const res = await fetch('/api/colour-store', { cache: 'no-store' }).then(r => r.json())
-      if (res.ok) { setChemicals(res.chemicals || []); setStock(res.stock || []) }
+      if (res.ok) { setChemicals(res.chemicals || []); setStock(res.stock || []); setFuture(res.future || null) }
     } finally { setLoading(false) }
   }, [])
   useEffect(() => { load() }, [load])
@@ -146,15 +147,22 @@ export default function ColourStoreIMSPage() {
     const latestG  = latestDate ? dateValues[latestDate] : undefined
     const latestKg = latestG != null ? latestG / 1000 : null
     const band = bandOf(latestKg, maxLevel)
-    const reorder = (band === 'crit' || band === 'warn') && maxLevel != null
-      ? Math.max(0, maxLevel - (latestKg || 0)) : null
+    // Future Requirement: recipe g/kg × remaining dyeing kg of open orders (kg)
+    const fut = future?.byName?.[k] || null
+    const futureKg: number | null = fut ? fut.kg : null
+    // Order Kg = what is missing to cover MAX plus the future requirement
+    const reorder = maxLevel != null
+      ? Math.max(0, maxLevel + (futureKg || 0) - (latestKg || 0))
+      : (futureKg != null && futureKg > (latestKg || 0) ? futureKg - (latestKg || 0) : null)
     return {
-      ...c, leadTime, safety, avgCons, maxLevel, latestKg, band, reorder,
+      ...c, leadTime, safety, avgCons, maxLevel, latestKg, band, reorder: reorder && reorder > 0 ? reorder : (maxLevel != null ? 0 : null),
+      futureKg, futureOrders: fut?.orders || [],
+      short: futureKg != null && latestKg != null && futureKg > latestKg ? futureKg - latestKg : null,
       group: latest?.group_name ?? null,
       rate:  latest?.rate != null ? parseFloat(latest.rate) * 1000 : null,
       dateValues,
     }
-  }), [chemicals, latestByName, stockByNameDate, latestDate])
+  }), [chemicals, latestByName, stockByNameDate, latestDate, future])
 
   const groupOptions = useMemo(() => {
     const set = new Set<string>()
@@ -188,6 +196,7 @@ export default function ColourStoreIMSPage() {
         case 'avg':     return r.avgCons ?? -1
         case 'max':     return r.maxLevel ?? -1
         case 'reorder': return r.reorder ?? -1
+        case 'future': return r.futureKg ?? -1
         case 'stock':   return r.latestKg ?? -1
         default:        return rank[r.band as Band]
       }
@@ -273,10 +282,11 @@ export default function ColourStoreIMSPage() {
 
   const exportCsv = () => {
     const head = ['Item', 'Group', 'Rate per Kg', 'Lead days', 'Safety factor', 'Avg Kg/day',
-      'MAX Kg', 'Order Kg', ...shownDates.map(d => `${fmtDate(d)} Kg`)]
+      'MAX Kg', 'Future Req Kg', 'Order Kg', ...shownDates.map(d => `${fmtDate(d)} Kg`)]
     const body = sorted.map(r => [
       r.name, r.group ?? '', r.rate ?? '', r.leadTime ?? '', r.safety ?? '', r.avgCons ?? '',
       r.maxLevel != null ? r.maxLevel.toFixed(2) : '',
+      r.futureKg != null ? r.futureKg.toFixed(3) : '',
       r.reorder  != null ? r.reorder.toFixed(2)  : '',
       ...shownDates.map(d => { const g = r.dateValues[d]; return g != null ? (g / 1000).toFixed(3) : '' }),
     ])
@@ -466,6 +476,7 @@ export default function ColourStoreIMSPage() {
             <option value="name:-1">Name — Z to A</option>
             <option value="status:1">Status — critical first</option>
             <option value="reorder:-1">Order Kg — high to low</option>
+            <option value="future:-1">Future Req — high to low</option>
             <option value="max:-1">MAX Kg — high to low</option>
             <option value="stock:-1">Stock — high to low</option>
             <option value="rate:-1">Rate — high to low</option>
@@ -498,7 +509,9 @@ export default function ColourStoreIMSPage() {
                   <th onClick={() => toggleSort('avg')}
                     style={{ ...TH, width: 70, borderRight: '1px solid var(--border-medium)' }}>AVG KG/D{arrow('avg')}</th>
                   <th onClick={() => toggleSort('max')} style={{ ...TH, width: 74 }}>MAX KG{arrow('max')}</th>
-                  <th onClick={() => toggleSort('reorder')}
+                  <th onClick={() => toggleSort('future')} title="Recipe qty (g per kg) × remaining dyeing kg of open orders with that Lab No."
+                    style={{ ...TH, width: 96 }}>FUTURE REQ{arrow('future')}</th>
+                  <th onClick={() => toggleSort('reorder')} title="MAX + Future Req − latest stock"
                     style={{ ...TH, width: 84, borderRight: '2px solid var(--border-medium)' }}>ORDER KG{arrow('reorder')}</th>
                   {shownDates.map(d => {
                     const isLatest = d === latestDate
@@ -567,12 +580,18 @@ export default function ColourStoreIMSPage() {
                       <td style={{ ...TD, background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
                         {r.maxLevel != null ? n(r.maxLevel, 0) : '·'}
                       </td>
+                      <td title={r.futureOrders.length ? r.futureOrders.map((o: any) => `${o.order_number} · ${o.lab_no} · ${o.kg} kg`).join('\n') : undefined}
+                        style={{ ...TD, background: r.short != null ? '#FEF3C7' : 'var(--bg-secondary)', fontWeight: 600,
+                          color: r.short != null ? '#92400E' : r.futureKg != null ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
+                        {r.futureKg != null ? n(r.futureKg, r.futureKg < 10 ? 2 : 0) : '—'}
+                        {r.short != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400 }}>short {n(r.short, r.short < 10 ? 2 : 0)}</span>}
+                      </td>
                       <td style={{ ...TD, background: 'var(--bg-secondary)', fontWeight: 700,
                         borderRight: '2px solid var(--border-medium)',
                         color: r.reorder != null
                           ? (r.band === 'crit' ? ACCENT.crit : 'var(--text-primary)')
                           : 'var(--text-tertiary)' }}>
-                        {r.reorder != null ? n(r.reorder, 0) : '—'}
+                        {r.reorder != null && r.reorder > 0 ? n(r.reorder, 0) : '—'}
                       </td>
                       {shownDates.map(d => {
                         const g = r.dateValues[d]
@@ -609,6 +628,19 @@ export default function ColourStoreIMSPage() {
           <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--text-secondary)' }}>
             <span style={{ fontFamily: MONO, color: 'var(--text-tertiary)' }}>·</span> no upload that day
           </span>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Future Req = recipe g/kg × dyeing kg still open ({future?.orders ?? 0} order{future?.orders === 1 ? '' : 's'}) · amber = more than the stock
+          </span>
+          {!!future?.unmatchedNames?.length && (
+            <span title={future.unmatchedNames.join(', ')} style={{ fontSize: 12, color: '#92400E' }}>
+              ⚠ {future.unmatchedNames.length} recipe name{future.unmatchedNames.length === 1 ? '' : 's'} not in the Colour Chemical Master: {future.unmatchedNames.slice(0, 3).join(', ')}{future.unmatchedNames.length > 3 ? '…' : ''}
+            </span>
+          )}
+          {!!future?.unparsedQty?.length && (
+            <span title={future.unparsedQty.map((x: any) => `${x.lab_no} · ${x.name}: "${x.qty}"`).join('\n')} style={{ fontSize: 12, color: '#92400E' }}>
+              ⚠ {future.unparsedQty.length} recipe qty not a number (e.g. {future.unparsedQty[0].lab_no} · {future.unparsedQty[0].name}: "{future.unparsedQty[0].qty}")
+            </span>
+          )}
           <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-tertiary)' }}>
             Dotted underline = editable · grey block = computed · item column pins on scroll
           </span>

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
 import { dbSelect, dbSelectAll, sb } from '@/lib/supabase'
 import { lastByKey } from '@/lib/dedupe'
+import { computeFutureRequirement } from '@/lib/futureRequirement'
 
 // ── app/api/colour-store ── Colour Store IMS ─────────────────────────────
-// GET  -> { chemicals: colour_chemicals[], stock: colour_store_stock[] }
+// GET  -> { chemicals: colour_chemicals[], stock: colour_store_stock[], future }
+//         future = Future Requirement per chemical (lib/futureRequirement.ts)
 //         (client computes "latest per name" from the stock array — kept
 //         simple since history matters too, not just the latest snapshot)
 // POST { action: 'upload_stock', stockDate, rows: [{name, group, qty, rate}] }
@@ -27,7 +29,10 @@ export async function GET(req: NextRequest) {
   ])
   if (chemRes.error) return NextResponse.json({ ok: false, error: chemRes.error }, { status: 500 })
   if (stockRes.error) return NextResponse.json({ ok: false, error: stockRes.error }, { status: 500 })
-  return NextResponse.json({ ok: true, chemicals: chemRes.data || [], stock: stockRes.data || [] })
+  // Future Requirement per chemical from recipes × open dyeing orders (lib/futureRequirement.ts)
+  let future = null
+  try { future = await computeFutureRequirement((chemRes.data || []).map((c: any) => c.name)) } catch (e) { console.error('[colour-store] future requirement:', e) }
+  return NextResponse.json({ ok: true, chemicals: chemRes.data || [], stock: stockRes.data || [], future })
 }
 
 export async function POST(req: NextRequest) {
