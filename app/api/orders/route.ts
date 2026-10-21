@@ -34,6 +34,13 @@ export async function GET(req: NextRequest) {
   if (orderId)      query['id']            = `eq.${orderId}`
   if (orderNumber)  query['order_number']  = `eq.${orderNumber}`
 
+  // fields=lab_nos → just id + lab_no (Lab Recipe page suggestion list)
+  if (searchParams.get('fields') === 'lab_nos') {
+    const { data, error } = await dbSelect('orders', { ...query, lab_no: 'not.is.null' }, 'id,lab_no')
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true, data })
+  }
+
   const { data, error } = await dbSelect(
     'orders', query,
     'id,order_number,challan_no,party,article,color,shade_group,blend,' +

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
-import { dbSelect, dbSelectAll, dbInsert, dbUpdate, sb } from '@/lib/supabase'
+import { dbSelect, dbSelectAll, dbInsert, dbUpdate, dbDelete, sb, auditLog, currentUsername } from '@/lib/supabase'
+import { requireAdmin } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'lab', 'GET'); if (g.deny) return g.deny }
@@ -22,6 +23,16 @@ export async function GET(req: NextRequest) {
     if (recheck === '1')  query['is_recheck']  = 'eq.true'
     if (recheck === '0')  query['is_recheck']  = 'eq.false'
     const { data, error } = await dbSelect('lab_requests', query)
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    return NextResponse.json({ ok: true, data })
+  }
+
+  // Manual recipes by Lab No. (Lab → Receipe page "Add Recipe"); ?lab_no=… → that one
+  if (type === 'recipes') {
+    const query: Record<string, string> = { order: 'updated_at.desc' }
+    const labNo = searchParams.get('lab_no')
+    if (labNo) query['lab_no'] = `eq.${labNo.trim().toUpperCase()}`
+    const { data, error } = await dbSelectAll<any>('lab_recipes', query)
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     return NextResponse.json({ ok: true, data })
   }
@@ -217,6 +228,53 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Settings ─────────────────────────────────────────────────────
+
+  // ── Manual recipes by Lab No. ────────────────────────────────────────────
+  // save_recipe: new, or replace when the Lab No. already has one (the page
+  // asks "replace it?" and sends replace: true). delete_recipe: admin only.
+  if (action === 'save_recipe') {
+    const labNo = String(payload.labNo ?? '').replace(/\s+/g, ' ').trim().toUpperCase()
+    if (!labNo) return NextResponse.json({ ok: false, error: 'Lab No. is required.' }, { status: 400 })
+    if (labNo.length > 40) return NextResponse.json({ ok: false, error: 'Lab No. can be at most 40 characters.' }, { status: 400 })
+    const recipe = (Array.isArray(payload.recipe) ? payload.recipe : [])
+      .map((r: any) => ({ name: String(r?.name ?? '').trim().slice(0, 120), qty: String(r?.qty ?? '').trim().slice(0, 40) }))
+      .filter((r: any) => r.name)
+    if (!recipe.length) return NextResponse.json({ ok: false, error: 'Add at least one colour / chemical.' }, { status: 400 })
+    const text = (v: any, n = 120) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
+    const who = await currentUsername()
+    const { data: ex } = await dbSelect('lab_recipes', { lab_no: `eq.${labNo}`, limit: '1' }, 'id,recipe')
+    const existing = ex?.[0]
+    if (existing && existing.id !== id && !payload.replace) {
+      return NextResponse.json({ ok: false, exists: true, error: `${labNo} already has a recipe.` }, { status: 409 })
+    }
+    const row = { lab_no: labNo, party: text(payload.party), shade: text(payload.shade), article: text(payload.article),
+      remarks: text(payload.remarks, 500), recipe, updated_by: who, updated_at: new Date().toISOString() }
+    const target = existing?.id || id
+    if (target) {
+      const { error } = await dbUpdate('lab_recipes', { id: target }, row)
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await auditLog({ action: 'recipe_update', entity_type: 'lab_recipe', entity_id: target,
+        old_value: existing ? JSON.stringify(existing.recipe).slice(0, 400) : undefined,
+        new_value: `${labNo}: ${recipe.map((r: any) => `${r.name} ${r.qty}`.trim()).join(', ')}`.slice(0, 400) })
+      return NextResponse.json({ ok: true, id: target })
+    }
+    const { data, error } = await dbInsert('lab_recipes', { ...row, created_by: who })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    await auditLog({ action: 'recipe_create', entity_type: 'lab_recipe', entity_id: (data as any)?.id,
+      new_value: `${labNo}: ${recipe.map((r: any) => `${r.name} ${r.qty}`.trim()).join(', ')}`.slice(0, 400) })
+    return NextResponse.json({ ok: true, id: (data as any)?.id })
+  }
+
+  if (action === 'delete_recipe') {
+    const d = await requireAdmin(req); if (d) return d
+    if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
+    const { data: ex } = await dbSelect('lab_recipes', { id: `eq.${id}`, limit: '1' }, 'lab_no,recipe')
+    const { error } = await dbDelete('lab_recipes', { id })
+    if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+    await auditLog({ action: 'recipe_delete', entity_type: 'lab_recipe', entity_id: id,
+      old_value: ex?.[0] ? `${ex[0].lab_no}: ${JSON.stringify(ex[0].recipe).slice(0, 300)}` : undefined })
+    return NextResponse.json({ ok: true })
+  }
 
   if (action === 'update_setting') {
     if (!payload.key) return NextResponse.json({ ok: false, error: 'key required' }, { status: 400 })

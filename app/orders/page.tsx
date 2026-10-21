@@ -11,6 +11,7 @@ import {
 } from '@/lib/db'
 import { cleanSubProd, subProdFromRemarks } from '@/lib/subProd'
 import AutoSplitModal from '@/components/AutoSplitModal'
+import LabRecipeBox from '@/components/LabRecipeBox'
 import { getProcessList } from '@/lib/db'
 
 // ── Column definitions ──────────────────────────────────────────────────────
@@ -1086,6 +1087,7 @@ export default function OrdersPage() {
                 </div>
               ))}
             </div>
+            <LabRecipeBox labNo={selectedOrder.lab_no} />
             {(selectedOrder.process_route || []).length > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',

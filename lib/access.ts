@@ -93,7 +93,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
   },
   'repair-assign': { GET: 'staff', POST: { edit: ['/supervisor', '/repairing-order'] } },
   greige:  { GET: 'staff', POST: { edit: ['/greige'] } },
-  lab:     { GET: 'staff', POST: { edit: ['/lab'] } },
+  lab:     { GET: 'staff', POST: { edit: ['/lab'] }, delete_recipe: 'admin' },
   'colour-store': { GET: 'staff', POST: { edit: ['/inventory'] } },
   'colour-chemicals': { GET: 'staff', update_planning: { edit: ['/inventory', '/setup/colour-chemical-master'] }, POST: 'admin' },
   'date-plans': { GET: 'staff', POST: { edit: PLAN_PAGES } },
