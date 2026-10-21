@@ -475,7 +475,8 @@ export default function ColourStoreIMSPage() {
               color: 'var(--text-secondary)', cursor: 'pointer', marginLeft: 'auto' }}>Reset</button>
         </div>
 
-        <div style={{ overflow: 'auto', maxHeight: '68vh' }}>
+        {/* table minWidth 0: the global table rule (min-width 100 %) would stretch a few date columns across the screen */}
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 230px)' }}>
           {sorted.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-tertiary)', fontSize: 13 }}>
               {chemicals.length === 0
@@ -483,7 +484,7 @@ export default function ColourStoreIMSPage() {
                 : 'No items match these filters.'}
             </div>
           ) : (
-            <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content' }}>
+            <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: 0, tableLayout: 'fixed' }}>
               <thead>
                 <tr>
                   <th onClick={() => toggleSort('name')}
@@ -503,7 +504,7 @@ export default function ColourStoreIMSPage() {
                     const isLatest = d === latestDate
                     return (
                       <th key={d} onClick={() => toggleSort('stock')}
-                        style={{ ...TH, minWidth: 74, fontWeight: isLatest ? 800 : 700,
+                        style={{ ...TH, width: 96, minWidth: 96, fontWeight: isLatest ? 800 : 700,
                           color: isLatest ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
                         {shortDate(d)}
                       </th>
