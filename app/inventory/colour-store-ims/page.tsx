@@ -147,7 +147,7 @@ export default function ColourStoreIMSPage() {
     const latestG  = latestDate ? dateValues[latestDate] : undefined
     const latestKg = latestG != null ? latestG / 1000 : null
     const band = bandOf(latestKg, maxLevel)
-    // Future Requirement: recipe g/kg × remaining dyeing kg of open orders (kg)
+    // Future Requirement: recipe kg-per-kg × remaining dyeing kg of open orders (kg)
     const fut = future?.byName?.[k] || null
     const futureKg: number | null = fut ? fut.kg : null
     // Order Kg = what is missing to cover MAX plus the future requirement
@@ -509,7 +509,7 @@ export default function ColourStoreIMSPage() {
                   <th onClick={() => toggleSort('avg')}
                     style={{ ...TH, width: 70, borderRight: '1px solid var(--border-medium)' }}>AVG KG/D{arrow('avg')}</th>
                   <th onClick={() => toggleSort('max')} style={{ ...TH, width: 74 }}>MAX KG{arrow('max')}</th>
-                  <th onClick={() => toggleSort('future')} title="Recipe qty (g per kg) × remaining dyeing kg of open orders with that Lab No."
+                  <th onClick={() => toggleSort('future')} title="Recipe qty (per 1 kg of fabric) × remaining dyeing kg of open orders with that Lab No."
                     style={{ ...TH, width: 96 }}>FUTURE REQ{arrow('future')}</th>
                   <th onClick={() => toggleSort('reorder')} title="MAX + Future Req − latest stock"
                     style={{ ...TH, width: 84, borderRight: '2px solid var(--border-medium)' }}>ORDER KG{arrow('reorder')}</th>
@@ -583,7 +583,7 @@ export default function ColourStoreIMSPage() {
                       <td title={r.futureOrders.length ? r.futureOrders.map((o: any) => `${o.order_number} · ${o.lab_no} · ${o.kg} kg`).join('\n') : undefined}
                         style={{ ...TD, background: r.short != null ? '#FEF3C7' : 'var(--bg-secondary)', fontWeight: 600,
                           color: r.short != null ? '#92400E' : r.futureKg != null ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
-                        {r.futureKg != null ? n(r.futureKg, r.futureKg < 10 ? 2 : 0) : '—'}
+                        {r.futureKg != null ? n(r.futureKg, r.futureKg < 1 ? 3 : r.futureKg < 10 ? 2 : 0) : '—'}
                         {r.short != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400 }}>short {n(r.short, r.short < 10 ? 2 : 0)}</span>}
                       </td>
                       <td style={{ ...TD, background: 'var(--bg-secondary)', fontWeight: 700,
@@ -629,7 +629,7 @@ export default function ColourStoreIMSPage() {
             <span style={{ fontFamily: MONO, color: 'var(--text-tertiary)' }}>·</span> no upload that day
           </span>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Future Req = recipe g/kg × dyeing kg still open ({future?.orders ?? 0} order{future?.orders === 1 ? '' : 's'}) · amber = more than the stock
+            Future Req = recipe qty per kg × dyeing kg still open ({future?.orders ?? 0} order{future?.orders === 1 ? '' : 's'}) · amber = more than the stock
           </span>
           {!!future?.unmatchedNames?.length && (
             <span title={future.unmatchedNames.join(', ')} style={{ fontSize: 12, color: '#92400E' }}>

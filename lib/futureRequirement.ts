@@ -1,7 +1,8 @@
 // Future Requirement (Colour Store IMS): how much of each colour / chemical
 // the open orders still need.
-//   recipe qty = grams per 1 kg of fabric ("10" = 10 g/kg; "1%" = 10 g/kg)
-//   requirement kg = Σ qty × remaining dyeing kg ÷ 1000
+//   recipe qty = kg per 1 kg of fabric ("0.005" = 5 g per kg; "0.5%" = 0.005;
+//                "5 g" / "5 g/l" = 0.005)
+//   requirement kg = Σ qty × remaining dyeing kg
 // An order counts while its route has Dyeing (D) and that dyeing is not
 // finished: order kg minus the kg of its batches that already passed D.
 // Recipes come from the Recipe page (lab_recipes, by Lab No.) and from lab
@@ -18,15 +19,15 @@ export interface FutureResult {
   orders: number                              // open dyeing orders with a recipe
 }
 
-/** "10" → 10 g/kg · "5 g/l" → 5 · "1.5%" → 15 · "abc" → null */
-export function gramsPerKg(qty: any): number | null {
+/** kg of chemical per 1 kg of fabric: "0.005" → 0.005 · "0.5%" → 0.005 · "5 g" / "5 g/l" / "5gm" → 0.005 · "abc" → null */
+export function perKg(qty: any): number | null {
   const s = String(qty ?? '').trim().toLowerCase()
   const m = s.match(/-?\d+(\.\d+)?/)
   if (!m) return null
   const n = parseFloat(m[0])
   if (!isFinite(n) || n < 0) return null
-  if (/%/.test(s)) return n * 10
-  if (/\bkg\b/.test(s) && !/g\s*\/\s*kg/.test(s)) return n * 1000
+  if (/%/.test(s)) return n / 100
+  if (/\d\s*(g|gm|gms|gram|grams)\b/.test(s) && !/\d\s*kg\b/.test(s)) return n / 1000
   return n
 }
 
@@ -71,11 +72,11 @@ export async function computeFutureRequirement(masterNames: string[]): Promise<F
     for (const ing of recipes[ln]) {
       const name = String(ing?.name ?? '').trim()
       if (!name) continue
-      const g = gramsPerKg(ing.qty)
+      const g = perKg(ing.qty)
       if (g == null) { const k = `${ln}|${name}`; if (!unparsedSeen.has(k)) { unparsedSeen.add(k); out.unparsedQty.push({ lab_no: ln, name, qty: String(ing.qty ?? '') }) }; continue }
       const nk = key(name)
       if (!master.has(nk)) { unmatched.add(name); continue }
-      const kg = Math.round(g * remaining) / 1000
+      const kg = Math.round(g * remaining * 1000) / 1000
       const line = out.byName[nk] || (out.byName[nk] = { kg: 0, orders: [] })
       line.kg = Math.round((line.kg + kg) * 1000) / 1000
       line.orders.push({ order_number: o.order_number, kg: Math.round(remaining * 100) / 100, lab_no: ln })
