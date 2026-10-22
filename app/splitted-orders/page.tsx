@@ -5,6 +5,8 @@ import { isBatchFinished } from '@/lib/batchStatus'
 import { collabBlockMessage } from '@/lib/collab'
 import { usePermission } from '@/lib/permissions'
 import { SubProdEdit } from '@/components/SubProd'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileSplittedOrders from '@/components/MobileSplittedOrders'
 
 const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> = {
   new:          { bg: 'var(--accent-light)',   color: 'var(--accent)',   label: 'New'        },
@@ -80,6 +82,7 @@ export default function SplittedOrdersPage() {
   const [resizing,   setResizing]   = useState<{id:string;startX:number;startW:number}|null>(null)
   // Sub Prod No. can be changed by whoever may split (lib/access.ts set_sub_prod)
   const spPerm = usePermission(['/orders', '/supervisor', '/split-order', '/splitted-orders'])
+  const isMobile = useIsMobile()
 
   const showToast = (msg: string, err = false) => {
     setToast({msg, err})
@@ -348,6 +351,13 @@ export default function SplittedOrdersPage() {
   )
 
   const hasFilter = Object.values(colFilters).some(v => v.trim())
+
+  // ── Phone: card layout (components/MobileSplittedOrders.tsx)
+  if (isMobile) {
+    return <MobileSplittedOrders rows={filtered} total={rows.length} canEdit={spPerm.canEdit} toast={toast}
+      onSubProd={(row, v) => { setRows(p => p.map(r => r.id === row.id ? { ...r, sub_prod_no: v } : r)); showToast(`✓ ${row.batch_id}: Sub Prod No. ${v || 'cleared'}`) }}
+      onDone={handleDone} onDelete={handleDelete} onRefresh={load} />
+  }
 
   return (
     <div className="content" style={{display:'flex',flexDirection:'column',height:'calc(100vh - 42px)',padding:'12px 16px 0'}}>
