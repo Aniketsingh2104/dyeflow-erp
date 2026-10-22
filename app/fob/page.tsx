@@ -1,6 +1,8 @@
 'use client'
 import { SubProdCell } from '@/components/SubProd'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 import ReprocessModal from '@/components/ReprocessModal'
 
 import { useEffect, useState, useCallback } from 'react'
@@ -54,6 +56,7 @@ const COLUMNS = [
 
 export default function FobPage() {
   const [isAdmin, setIsAdmin] = useState(false)
+  const isMobile = useIsMobile()
   useEffect(() => { setIsAdmin(isAdminUser(getActiveUserRecord())) }, [])
   const [records,     setRecords]     = useState<any[]>([])
   const [loading,     setLoading]     = useState(true)
@@ -188,6 +191,81 @@ export default function FobPage() {
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
       height:'60vh', color:'var(--text-tertiary)', fontSize:14 }}>Loading FOB records…</div>
   )
+
+  const modals = (<>
+      {/* Edit modal */}
+      {editModal && (
+        <div className="modal-overlay" onClick={() => setEditModal(null)}>
+          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Edit FOB Record — {editModal.batch_id_str || editModal.batch_id}</span>
+              <button className="small" onClick={() => setEditModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
+              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+              <strong style={{ color:'var(--purple)' }}>{editModal.batch_id_str}</strong>
+              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
+                {editModal.party} · {editModal.color} · {editModal.fob_kg} Kg · {editModal.process_code}
+              </span>
+            </div>
+            <div style={{ fontSize:12, color:'var(--text-secondary)', marginBottom:12 }}>
+              Status: <strong>{FOB_STATUS_LABEL[editModal.status || 'open'] || editModal.status}</strong> — change it with
+              the Mark Sent / Approved / Reprocess buttons, so the batch moves with it.
+            </div>
+            <div className="form-group" style={{ marginBottom:14 }}>
+              <label>Notes / Resolution</label>
+              <textarea value={editData.notes} rows={3}
+                onChange={e => setEditData((p: any) => ({ ...p, notes:e.target.value }))} />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={handleUpdate} disabled={saving}>
+                {saving ? 'Saving…' : '✓ Save'}
+              </button>
+              <button onClick={() => setEditModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {reprocessModal && (
+        <ReprocessModal
+          record={reprocessModal}
+          onClose={() => setReprocessModal(null)}
+          onConfirm={handleFobReprocess}
+          saving={saving}
+          sourceLabel="FOB"
+          kgField="fob_kg"
+        />
+      )}
+  </>)
+
+  // ── Phone: card list (components/MobileRecordCards.tsx)
+  if (isMobile) {
+    const ST: Record<string, [string, string, string]> = { open: ['#FEE2E2', '#991B1B', 'Open'], sent: ['#DBEAFE', '#1E40AF', '📤 Sent'], approved: ['#DCFCE7', '#16A34A', '✓ Approved'], repairing: ['#FEF3C7', '#D97706', '🔄 Repairing'] }
+    return (
+      <>
+        <MobileRecordCards title="FOB" rows={filtered} idOf={r => r.id} onRefresh={load}
+          tabs={[{ key: 'open', label: 'Open', match: r => r.status === 'open' || r.status === 'sent' }, { key: 'repairing', label: 'Repairing', match: r => r.status === 'repairing' },
+                 { key: 'approved', label: 'Approved', match: r => r.status === 'approved' }, { key: 'all', label: 'All', match: () => true }]}
+          searchFields={r => [r.batch_id_str, r.sub_prod_no, r.order_number, r.party, r.color, r.fob_type, r.article]}
+          head={r => { const st = ST[r.status] || ['var(--bg-secondary)', 'var(--text-secondary)', r.status]; return {
+            title: r.batch_id_str || r.batch_id, subProd: r.sub_prod_no, line1: `${r.order_number} · ${r.party}`, line2: `${r.article} · ${r.color}`,
+            big: String(r.fob_kg ?? r.kg ?? ''), bigUnit: 'Kg', small: fmtDateTime(r.sent_at || r.created_at),
+            chip: { text: st[2], bg: st[0], fg: st[1] }, edge: r.status === 'approved' ? '#16A34A' : r.status === 'repairing' ? '#D97706' : r.status === 'sent' ? '#2563EB' : '#DC2626',
+            tags: [{ text: `at ${r.process_code || '?'}`, bg: '#E0E7FF', fg: '#3730A3' }, { text: r.fob_type === 'rolling' ? '🟣 Rolling FOB' : '🔵 Dyeing FOB', bg: '#F3E8FF', fg: '#7C3AED' },
+                   ...(r.sent_at ? [{ text: `📤 ${new Date(r.sent_at).toLocaleDateString('en-GB')}`, bg: '#DBEAFE', fg: '#2563EB' }] : [])] } }}
+          details={r => [['Batch kg', r.kg], ['Mtr', r.qty_mtr], ['Taka', r.no_of_taka], ['Machine', r.machine], ['Lab No.', r.lab_no], ['Lot', r.lot_no], ['Challan', r.challan_no], ['Blend', r.blend], ['GSM', r.gsm], ['Supervisor', r.supervisor], ['Finish', r.type_of_finish], ['Notes', r.notes]]}
+          actions={r => (<>
+            {!r.sent_at && r.status === 'open' && <button className="edit-only" onClick={() => handleMarkSent(r.id)} disabled={saving} style={mbtn('#2563EB', '#fff', undefined, true)}>📤 Mark Sent</button>}
+            {(r.status === 'open' || r.status === 'sent') && <button className="edit-only" onClick={() => handleFobApproved(r)} disabled={saving} style={mbtn('#16A34A', '#fff')}>✓ Approved</button>}
+            {(r.status === 'open' || r.status === 'sent') && <button className="edit-only" onClick={() => setReprocessModal(r)} disabled={saving} style={mbtn('#D97706', '#fff')}>🔄 Reprocess</button>}
+            <button className="edit-only" onClick={() => { setEditModal(r); setEditData({ notes: r.notes || '' }) }} style={mbtn('var(--bg-primary)', 'var(--text-primary)', 'var(--border-medium)', !(isAdmin && r.status === 'approved'))}>Edit</button>
+            {isAdmin && r.status === 'approved' && <button onClick={() => handleDelete(r.id)} style={mbtn('var(--bg-primary)', 'var(--danger)', 'var(--danger)')}>Delete</button>}
+          </>)}
+          batchLink={r => r.batch_id_str ? `/batches/${encodeURIComponent(r.batch_id_str)}` : null} />
+        {modals}
+      </>
+    )
+  }
 
   return (
     <div className="content" style={{ display:'flex', flexDirection:'column',
@@ -453,49 +531,7 @@ export default function FobPage() {
         )}
       </div>
 
-      {/* Edit modal */}
-      {editModal && (
-        <div className="modal-overlay" onClick={() => setEditModal(null)}>
-          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Edit FOB Record — {editModal.batch_id_str || editModal.batch_id}</span>
-              <button className="small" onClick={() => setEditModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
-              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-              <strong style={{ color:'var(--purple)' }}>{editModal.batch_id_str}</strong>
-              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
-                {editModal.party} · {editModal.color} · {editModal.fob_kg} Kg · {editModal.process_code}
-              </span>
-            </div>
-            <div style={{ fontSize:12, color:'var(--text-secondary)', marginBottom:12 }}>
-              Status: <strong>{FOB_STATUS_LABEL[editModal.status || 'open'] || editModal.status}</strong> — change it with
-              the Mark Sent / Approved / Reprocess buttons, so the batch moves with it.
-            </div>
-            <div className="form-group" style={{ marginBottom:14 }}>
-              <label>Notes / Resolution</label>
-              <textarea value={editData.notes} rows={3}
-                onChange={e => setEditData((p: any) => ({ ...p, notes:e.target.value }))} />
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={handleUpdate} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Save'}
-              </button>
-              <button onClick={() => setEditModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-      {reprocessModal && (
-        <ReprocessModal
-          record={reprocessModal}
-          onClose={() => setReprocessModal(null)}
-          onConfirm={handleFobReprocess}
-          saving={saving}
-          sourceLabel="FOB"
-          kgField="fob_kg"
-        />
-      )}
+      {modals}
     </div>
   )
 }

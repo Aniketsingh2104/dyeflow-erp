@@ -1,6 +1,8 @@
 'use client'
 
 import { SubProdCell } from '@/components/SubProd'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 import { useEffect, useState, useCallback } from 'react'
 
 function fmtDateTime(d: any) {
@@ -50,6 +52,7 @@ export default function RepairingOrderPage() {
   const [showColMenu,   setShowColMenu]   = useState(false)
 
   const [editModal,     setEditModal]     = useState<any>(null)
+  const isMobile = useIsMobile()
   const [editData,      setEditData]      = useState<any>({})
   const [splitModal,    setSplitModal]    = useState<any>(null)
   const [splitParts,    setSplitParts]    = useState<any[]>([])
@@ -211,6 +214,200 @@ export default function RepairingOrderPage() {
       Loading repairing orders...
     </div>
   )
+
+  const modals = (<>
+      {editModal && (
+        <div className="modal-overlay" onClick={() => setEditModal(null)}>
+          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Update Repairing Order</span>
+              <button className="small" onClick={() => setEditModal(null)}>X</button>
+            </div>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+              <strong style={{ color:'var(--accent)' }}>{editModal.batch_id_str || editModal.batch_id}</strong>
+              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
+                {editModal.party} · {editModal.color} · {editModal.repair_kg} Kg
+              </span>
+            </div>
+            <div className="form-group" style={{ marginBottom:12 }}>
+              <label>Status</label>
+              <select value={editData.status}
+                onChange={e => setEditData((p:any) => ({ ...p, status:e.target.value }))}>
+                <option value="pending">Pending</option>
+                <option value="In Repair">In Repair</option>
+                <option value="completed">Completed</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom:12 }}>
+              <label>Repair Kg</label>
+              <input type="number" value={editData.repair_kg || ''}
+                onChange={e => setEditData((p:any) => ({ ...p, repair_kg:parseFloat(e.target.value)||0 }))} />
+            </div>
+            <div className="form-group" style={{ marginBottom:14 }}>
+              <label>Notes</label>
+              <textarea value={editData.notes} rows={3}
+                onChange={e => setEditData((p:any) => ({ ...p, notes:e.target.value }))} />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={handleUpdate} disabled={saving}>
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+              <button onClick={() => setEditModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {splitModal && (
+        <div className="modal-overlay" onClick={() => setSplitModal(null)}>
+          <div className="modal" style={{ maxWidth:620 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Split — {splitModal.batch_id_str}</span>
+              <button className="small" onClick={() => setSplitModal(null)}>X</button>
+            </div>
+            <div style={{ background:'#FFF5F5', borderRadius:8, padding:'10px 14px',
+              marginBottom:14, border:'1px solid #FCA5A5', fontSize:13 }}>
+              <strong style={{ color:'#DC2626' }}>{splitModal.batch_id_str}</strong>
+              <span style={{ marginLeft:8, color:'#374151' }}>
+                {splitModal.color} · Repair: <strong>{splitModal.repair_kg} Kg</strong>
+              </span>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
+                Original batch keeps its ID · New splits: {getSplitId(splitModal.batch_id_str, 1)}, {getSplitId(splitModal.batch_id_str, 2)}...
+              </div>
+            </div>
+            <table style={{ width:'100%', borderCollapse:'collapse', marginBottom:12 }}>
+              <thead>
+                <tr style={{ background:'var(--bg-secondary)' }}>
+                  {['BATCH ID','KG','MTR','TAKA','MACHINE',''].map(h => (
+                    <th key={h} style={{ padding:'6px 8px', fontSize:11, textAlign:'left',
+                      borderBottom:'1px solid var(--border-light)', fontWeight:700,
+                      color:'var(--text-tertiary)', textTransform:'uppercase' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {splitParts.map((part, i) => (
+                  <tr key={i} style={{ borderBottom:'1px solid var(--border-light)' }}>
+                    <td style={{ padding:'6px 8px', fontSize:11, fontWeight:700, color:'#DC2626' }}>
+                      {i === 0 ? splitModal.batch_id_str : getSplitId(splitModal.batch_id_str, i)}
+                    </td>
+                    {(['kg','mtr','taka'] as const).map(f => (
+                      <td key={f} style={{ padding:'6px 8px' }}>
+                        <input type="number" value={(part as any)[f] || ''}
+                          onChange={e => setSplitParts(p => p.map((b,j) => j===i ? {...b,[f]:e.target.value} : b))}
+                          style={{ width:75, padding:'4px 6px', fontSize:12,
+                            border:'1px solid var(--border-medium)', borderRadius:4 }} />
+                      </td>
+                    ))}
+                    <td style={{ padding:'6px 8px' }}>
+                      <select value={part.machine_id || ''}
+                        onChange={e => setSplitParts(p => p.map((b,j) => j===i ? {...b, machine_id:e.target.value} : b))}
+                        style={{ padding:'4px 8px', fontSize:11, border:'1px solid var(--border-medium)',
+                          borderRadius:4, minWidth:130 }}>
+                        <option value="">— Machine —</option>
+                        {machines.map((m:any) => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{ padding:'6px 8px' }}>
+                      {splitParts.length > 2 && (
+                        <button className="xs danger"
+                          onClick={() => setSplitParts(p => p.filter((_,j) => j !== i))}>X</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+              <button className="small"
+                onClick={() => setSplitParts(p => [...p, { kg:0, mtr:0, taka:0, machine_id:'' }])}>
+                Add Batch
+              </button>
+              <button className="small"
+                onClick={() => {
+                  const total = parseFloat(splitModal.repair_kg) || 0
+                  const per   = +(total / splitParts.length).toFixed(1)
+                  setSplitParts(p => p.map(b => ({ ...b, kg: per })))
+                }}>
+                Auto-Balance
+              </button>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={saveSplits} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Splits'}
+              </button>
+              <button onClick={() => setSplitModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assignModal && (
+        <div className="modal-overlay" onClick={() => setAssignModal(null)}>
+          <div className="modal" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Reassign — {assignModal.batch_id_str}</span>
+              <button className="small" onClick={() => setAssignModal(null)}>X</button>
+            </div>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+              <strong>{assignModal.batch_id_str}</strong>
+              <span style={{ marginLeft:8, color:'var(--text-secondary)' }}>
+                {assignModal.party} · {assignModal.color} · {assignModal.repair_kg} Kg
+              </span>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
+                Current Supervisor: <strong>{assignModal.supervisor || 'Unassigned'}</strong>
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom:16 }}>
+              <label>Select New Supervisor</label>
+              <select value={chosenSup} onChange={e => setChosenSup(e.target.value)}>
+                <option value="">— Select Supervisor —</option>
+                {supervisors.map((s:any) => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={doReassign} disabled={saving || !chosenSup}>
+                {saving ? 'Saving...' : 'Reassign'}
+              </button>
+              <button onClick={() => setAssignModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+  </>)
+
+  // ── Phone: card list (components/MobileRecordCards.tsx)
+  if (isMobile) {
+    return (
+      <>
+        <MobileRecordCards title="Repairing Orders" rows={filtered} idOf={r => r.id} onRefresh={load}
+          tabs={[{ key: 'waiting', label: 'To split', match: r => r.batch_status === 'repairing' }, { key: 'done', label: 'Split done', match: r => r.batch_status !== 'repairing' }, { key: 'all', label: 'All', match: () => true }]}
+          searchFields={r => [r.batch_id_str, r.sub_prod_no, r.order_number, r.party, r.color, r.article, r.supervisor]}
+          head={r => ({
+            title: r.batch_id_str || '-', subProd: r.sub_prod_no, line1: `${r.order_number} · ${r.party}`, line2: `${r.article} · ${r.color}`,
+            big: String(r.repair_kg ?? ''), bigUnit: 'Kg repair', small: fmtDateTime(r.created_at),
+            chip: r.batch_status === 'repairing' ? { text: 'Waiting to split', bg: '#FEF3C7', fg: '#92400E' } : { text: '✓ Split done', bg: '#DCFCE7', fg: '#166534' },
+            edge: r.batch_status === 'repairing' ? '#D97706' : '#16A34A',
+            tags: [{ text: r.source_type === 'fob' ? 'FOB' : 'Faulty', bg: '#FEE2E2', fg: '#991B1B' }, { text: r.reprocess_type || '', bg: 'var(--bg-secondary)', fg: 'var(--text-secondary)' },
+                   { text: `👷 ${r.supervisor || 'unassigned'}`, bg: '#E0E7FF', fg: '#3730A3' }].filter(t => t.text) })}
+          details={r => [['Repair mtr', r.repair_mtr], ['Repair taka', r.repair_taka], ['Batch kg', r.batch_kg], ['Machine', r.machine], ['Route', (r.process_route || r.batch_route || []).join(' → ')], ['Lab No.', r.lab_no], ['Challan', r.challan_no], ['GSM', r.gsm], ['Finish', r.type_of_finish], ['Notes', r.notes]]}
+          actions={r => (<>
+            {r.batch_status === 'repairing' && <button onClick={() => openSplitModal(r)} disabled={saving} style={mbtn('var(--bg-primary)', 'var(--accent)', 'var(--accent)')}>✂ Split</button>}
+            {r.batch_status === 'repairing' && <button onClick={() => doFullSplit(r)} disabled={saving} style={mbtn('#7C3AED', '#fff')}>▶ Full Split</button>}
+            <button onClick={() => { setAssignModal(r); setChosenSup(r.supervisor || '') }} disabled={saving} style={mbtn('#FFFBEB', '#92400E', '#D97706')}>👤 Reassign</button>
+            <button onClick={() => { setEditModal(r); setEditData({ status: r.status, notes: r.notes || '', repair_kg: r.repair_kg }) }} style={mbtn('var(--bg-primary)', 'var(--text-primary)', 'var(--border-medium)')}>Edit</button>
+            <button onClick={() => handleDelete(r)} disabled={saving} style={mbtn('var(--bg-primary)', '#DC2626', '#DC2626', true)}>Delete</button>
+          </>)}
+          batchLink={r => r.batch_id_str && r.batch_id_str !== '-' ? `/batches/${encodeURIComponent(r.batch_id_str)}` : null} />
+        {modals}
+      </>
+    )
+  }
 
   return (
     <div className="content" style={{ display:'flex', flexDirection:'column',
@@ -445,169 +642,7 @@ export default function RepairingOrderPage() {
         )}
       </div>
 
-      {editModal && (
-        <div className="modal-overlay" onClick={() => setEditModal(null)}>
-          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Update Repairing Order</span>
-              <button className="small" onClick={() => setEditModal(null)}>X</button>
-            </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-              <strong style={{ color:'var(--accent)' }}>{editModal.batch_id_str || editModal.batch_id}</strong>
-              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
-                {editModal.party} · {editModal.color} · {editModal.repair_kg} Kg
-              </span>
-            </div>
-            <div className="form-group" style={{ marginBottom:12 }}>
-              <label>Status</label>
-              <select value={editData.status}
-                onChange={e => setEditData((p:any) => ({ ...p, status:e.target.value }))}>
-                <option value="pending">Pending</option>
-                <option value="In Repair">In Repair</option>
-                <option value="completed">Completed</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom:12 }}>
-              <label>Repair Kg</label>
-              <input type="number" value={editData.repair_kg || ''}
-                onChange={e => setEditData((p:any) => ({ ...p, repair_kg:parseFloat(e.target.value)||0 }))} />
-            </div>
-            <div className="form-group" style={{ marginBottom:14 }}>
-              <label>Notes</label>
-              <textarea value={editData.notes} rows={3}
-                onChange={e => setEditData((p:any) => ({ ...p, notes:e.target.value }))} />
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={handleUpdate} disabled={saving}>
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-              <button onClick={() => setEditModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {splitModal && (
-        <div className="modal-overlay" onClick={() => setSplitModal(null)}>
-          <div className="modal" style={{ maxWidth:620 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Split — {splitModal.batch_id_str}</span>
-              <button className="small" onClick={() => setSplitModal(null)}>X</button>
-            </div>
-            <div style={{ background:'#FFF5F5', borderRadius:8, padding:'10px 14px',
-              marginBottom:14, border:'1px solid #FCA5A5', fontSize:13 }}>
-              <strong style={{ color:'#DC2626' }}>{splitModal.batch_id_str}</strong>
-              <span style={{ marginLeft:8, color:'#374151' }}>
-                {splitModal.color} · Repair: <strong>{splitModal.repair_kg} Kg</strong>
-              </span>
-              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
-                Original batch keeps its ID · New splits: {getSplitId(splitModal.batch_id_str, 1)}, {getSplitId(splitModal.batch_id_str, 2)}...
-              </div>
-            </div>
-            <table style={{ width:'100%', borderCollapse:'collapse', marginBottom:12 }}>
-              <thead>
-                <tr style={{ background:'var(--bg-secondary)' }}>
-                  {['BATCH ID','KG','MTR','TAKA','MACHINE',''].map(h => (
-                    <th key={h} style={{ padding:'6px 8px', fontSize:11, textAlign:'left',
-                      borderBottom:'1px solid var(--border-light)', fontWeight:700,
-                      color:'var(--text-tertiary)', textTransform:'uppercase' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {splitParts.map((part, i) => (
-                  <tr key={i} style={{ borderBottom:'1px solid var(--border-light)' }}>
-                    <td style={{ padding:'6px 8px', fontSize:11, fontWeight:700, color:'#DC2626' }}>
-                      {i === 0 ? splitModal.batch_id_str : getSplitId(splitModal.batch_id_str, i)}
-                    </td>
-                    {(['kg','mtr','taka'] as const).map(f => (
-                      <td key={f} style={{ padding:'6px 8px' }}>
-                        <input type="number" value={(part as any)[f] || ''}
-                          onChange={e => setSplitParts(p => p.map((b,j) => j===i ? {...b,[f]:e.target.value} : b))}
-                          style={{ width:75, padding:'4px 6px', fontSize:12,
-                            border:'1px solid var(--border-medium)', borderRadius:4 }} />
-                      </td>
-                    ))}
-                    <td style={{ padding:'6px 8px' }}>
-                      <select value={part.machine_id || ''}
-                        onChange={e => setSplitParts(p => p.map((b,j) => j===i ? {...b, machine_id:e.target.value} : b))}
-                        style={{ padding:'4px 8px', fontSize:11, border:'1px solid var(--border-medium)',
-                          borderRadius:4, minWidth:130 }}>
-                        <option value="">— Machine —</option>
-                        {machines.map((m:any) => (
-                          <option key={m.id} value={m.id}>{m.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td style={{ padding:'6px 8px' }}>
-                      {splitParts.length > 2 && (
-                        <button className="xs danger"
-                          onClick={() => setSplitParts(p => p.filter((_,j) => j !== i))}>X</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-              <button className="small"
-                onClick={() => setSplitParts(p => [...p, { kg:0, mtr:0, taka:0, machine_id:'' }])}>
-                Add Batch
-              </button>
-              <button className="small"
-                onClick={() => {
-                  const total = parseFloat(splitModal.repair_kg) || 0
-                  const per   = +(total / splitParts.length).toFixed(1)
-                  setSplitParts(p => p.map(b => ({ ...b, kg: per })))
-                }}>
-                Auto-Balance
-              </button>
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={saveSplits} disabled={saving}>
-                {saving ? 'Saving...' : 'Save Splits'}
-              </button>
-              <button onClick={() => setSplitModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {assignModal && (
-        <div className="modal-overlay" onClick={() => setAssignModal(null)}>
-          <div className="modal" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Reassign — {assignModal.batch_id_str}</span>
-              <button className="small" onClick={() => setAssignModal(null)}>X</button>
-            </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-              <strong>{assignModal.batch_id_str}</strong>
-              <span style={{ marginLeft:8, color:'var(--text-secondary)' }}>
-                {assignModal.party} · {assignModal.color} · {assignModal.repair_kg} Kg
-              </span>
-              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
-                Current Supervisor: <strong>{assignModal.supervisor || 'Unassigned'}</strong>
-              </div>
-            </div>
-            <div className="form-group" style={{ marginBottom:16 }}>
-              <label>Select New Supervisor</label>
-              <select value={chosenSup} onChange={e => setChosenSup(e.target.value)}>
-                <option value="">— Select Supervisor —</option>
-                {supervisors.map((s:any) => (
-                  <option key={s.id} value={s.name}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={doReassign} disabled={saving || !chosenSup}>
-                {saving ? 'Saving...' : 'Reassign'}
-              </button>
-              <button onClick={() => setAssignModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modals}
     </div>
   )
 }

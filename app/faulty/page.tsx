@@ -1,6 +1,8 @@
 'use client'
 import { SubProdCell } from '@/components/SubProd'
 import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 
 import { useEffect, useState, useCallback } from 'react'
 import ReprocessModal from '@/components/ReprocessModal'
@@ -50,6 +52,7 @@ const COLUMNS = [
 
 export default function FaultyPage() {
   const [isAdmin, setIsAdmin] = useState(false)
+  const isMobile = useIsMobile()
   useEffect(() => { setIsAdmin(isAdminUser(getActiveUserRecord())) }, [])
   const [records,      setRecords]      = useState<any[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -187,6 +190,130 @@ export default function FaultyPage() {
       Loading faulty records…
     </div>
   )
+
+  const modals = (<>
+      {/* Edit modal */}
+      {editModal && (
+        <div className="modal-overlay" onClick={() => setEditModal(null)}>
+          <div className="modal" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Edit Faulty Record — {editModal.batch_id_str || editModal.batch_id}</span>
+              <button className="small" onClick={() => setEditModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+              <strong style={{ color:'var(--danger)' }}>{editModal.batch_id_str}</strong>
+              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
+                {editModal.party} · {editModal.color} · {editModal.faulty_kg} Kg · {editModal.process_code}
+              </span>
+            </div>
+            <div className="form-group" style={{ marginBottom:12 }}>
+              <label>Status</label>
+              <select value={editData.status}
+                onChange={e => setEditData((p: any) => ({ ...p, status:e.target.value }))}>
+                {/* Only Written Off can be set by hand — Mark OK / Reprocess move the batch too */}
+                <option value={editModal.status}>{(editModal.status || 'open').replace(/^./, (c: string) => c.toUpperCase())} (current)</option>
+                {(editModal.status || 'open') === 'open' && <option value="written-off">Written Off (batch finished, not reprocessed)</option>}
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom:12 }}>
+              <label>Notes</label>
+              <textarea value={editData.notes} rows={3}
+                onChange={e => setEditData((p: any) => ({ ...p, notes:e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ marginBottom:14 }}>
+              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+                <input type="checkbox" checked={!!editData.if_ok}
+                  onChange={e => setEditData((p: any) => ({ ...p, if_ok:e.target.checked }))}
+                  style={{ accentColor:'var(--success)' }} />
+                Mark as "If OK" (batch passes inspection)
+              </label>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={handleUpdate} disabled={saving}>
+                {saving ? 'Saving…' : '✓ Save'}
+              </button>
+              <button onClick={() => setEditModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Mark OK Modal */}
+      {okModal && (
+        <div className="modal-overlay" onClick={() => setOkModal(null)}>
+          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Mark Batch as OK</span>
+              <button className="small" onClick={() => setOkModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'#F0FDF4', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#16A34A', marginBottom:4 }}>
+                ✓ Batch passes inspection
+              </div>
+              <div style={{ fontSize:12, color:'#374151' }}>
+                <strong>{okModal.batch_id_str}</strong> was faulty at <strong>{okModal.process_code}</strong>
+              </div>
+              <div style={{ fontSize:12, color:'#6B7280', marginTop:6 }}>
+                {(() => {
+                  const route = okModal.process_route || []
+                  const idx = route.findIndex((c: string) => c.toUpperCase() === okModal.process_code?.toUpperCase() || c === okModal.process_code)
+                  const next = idx >= 0 && idx < route.length - 1 ? route[idx + 1] : null
+                  return next
+                    ? `→ Batch will be sent to ${next} process`
+                    : '→ Batch has no next process — will be marked complete'
+                })()}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button onClick={() => setOkModal(null)}>Cancel</button>
+              <button onClick={handleMarkOk} disabled={saving}
+                style={{ padding:'8px 20px', fontSize:13, fontWeight:700, border:'none',
+                  borderRadius:6, cursor:'pointer', background:'#16A34A', color:'white' }}>
+                {saving ? 'Processing…' : '✓ Confirm OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reprocess Modal — Full or Partial */}
+      {reprocessModal && (
+        <ReprocessModal
+          record={reprocessModal}
+          onClose={() => setReprocessModal(null)}
+          onConfirm={handleReprocess}
+          saving={saving}
+          sourceLabel="Faulty"
+          kgField="faulty_kg"
+        />
+      )}
+  </>)
+
+  // ── Phone: card list (components/MobileRecordCards.tsx)
+  if (isMobile) {
+    const ST: Record<string, [string, string, string]> = { open: ['#FEE2E2', '#991B1B', 'Open'], repairing: ['#FEF3C7', '#D97706', '🔄 In repair'], resolved: ['#DCFCE7', '#16A34A', '✓ Resolved'], 'written-off': ['var(--bg-secondary)', 'var(--text-tertiary)', '✕ Written off'] }
+    return (
+      <>
+        <MobileRecordCards title="Faulty" rows={filtered} idOf={r => r.id} onRefresh={load}
+          tabs={[{ key: 'open', label: 'Open', match: r => r.status === 'open' }, { key: 'repairing', label: 'In repair', match: r => r.status === 'repairing' },
+                 { key: 'closed', label: 'Closed', match: r => r.status === 'resolved' || r.status === 'written-off' }, { key: 'all', label: 'All', match: () => true }]}
+          searchFields={r => [r.batch_id_str, r.sub_prod_no, r.order_number, r.party, r.color, r.faulty_type, r.article]}
+          head={r => { const st = ST[r.status] || ['var(--bg-secondary)', 'var(--text-secondary)', r.status]; return {
+            title: r.batch_id_str || r.batch_id, subProd: r.sub_prod_no, line1: `${r.order_number} · ${r.party}`, line2: `${r.article} · ${r.color}`,
+            big: String(r.faulty_kg ?? r.kg ?? ''), bigUnit: 'Kg faulty', small: fmtDateTime(r.sent_at || r.created_at),
+            chip: { text: st[2], bg: st[0], fg: st[1] }, edge: r.status === 'open' ? '#DC2626' : r.status === 'repairing' ? '#D97706' : r.status === 'resolved' ? '#16A34A' : '#9CA3AF',
+            tags: [{ text: `at ${r.process_code || '?'}`, bg: '#E0E7FF', fg: '#3730A3' }, { text: r.faulty_type || 'Defect', bg: '#FEE2E2', fg: '#991B1B' }, ...(r.if_ok ? [{ text: '✓ OK', bg: '#DCFCE7', fg: '#166534' }] : [])] } }}
+          details={r => [['Batch kg', r.kg], ['Mtr', r.qty_mtr], ['Taka', r.no_of_taka], ['Machine', r.machine], ['Lab No.', r.lab_no], ['Lot', r.lot_no], ['Challan', r.challan_no], ['Blend', r.blend], ['GSM', r.gsm], ['Supervisor', r.supervisor], ['Finish', r.type_of_finish], ['Notes', r.notes]]}
+          actions={r => (<>
+            {r.status === 'open' && <button className="edit-only" onClick={() => setOkModal(r)} style={mbtn('#16A34A', '#fff')}>✓ Mark OK</button>}
+            {r.status === 'open' && <button className="edit-only" onClick={() => { setReprocessModal(r); setReprocessReason('') }} style={mbtn('#D97706', '#fff')}>🔄 Reprocess</button>}
+            <button className="edit-only" onClick={() => { setEditModal(r); setEditData({ status: r.status, notes: r.notes || '', if_ok: r.if_ok }) }} style={mbtn('var(--bg-primary)', 'var(--text-primary)', 'var(--border-medium)', r.status !== 'open')}>Edit</button>
+            {isAdmin && (r.status === 'resolved' || r.status === 'written-off') && <button onClick={() => handleDelete(r.id)} style={mbtn('var(--bg-primary)', 'var(--danger)', 'var(--danger)')}>Delete</button>}
+          </>)}
+          batchLink={r => r.batch_id_str ? `/batches/${encodeURIComponent(r.batch_id_str)}` : null} />
+        {modals}
+      </>
+    )
+  }
 
   return (
     <div className="content" style={{ display:'flex', flexDirection:'column',
@@ -432,100 +559,7 @@ export default function FaultyPage() {
         )}
       </div>
 
-      {/* Edit modal */}
-      {editModal && (
-        <div className="modal-overlay" onClick={() => setEditModal(null)}>
-          <div className="modal" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Edit Faulty Record — {editModal.batch_id_str || editModal.batch_id}</span>
-              <button className="small" onClick={() => setEditModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-              <strong style={{ color:'var(--danger)' }}>{editModal.batch_id_str}</strong>
-              <span style={{ color:'var(--text-secondary)', marginLeft:8 }}>
-                {editModal.party} · {editModal.color} · {editModal.faulty_kg} Kg · {editModal.process_code}
-              </span>
-            </div>
-            <div className="form-group" style={{ marginBottom:12 }}>
-              <label>Status</label>
-              <select value={editData.status}
-                onChange={e => setEditData((p: any) => ({ ...p, status:e.target.value }))}>
-                {/* Only Written Off can be set by hand — Mark OK / Reprocess move the batch too */}
-                <option value={editModal.status}>{(editModal.status || 'open').replace(/^./, (c: string) => c.toUpperCase())} (current)</option>
-                {(editModal.status || 'open') === 'open' && <option value="written-off">Written Off (batch finished, not reprocessed)</option>}
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom:12 }}>
-              <label>Notes</label>
-              <textarea value={editData.notes} rows={3}
-                onChange={e => setEditData((p: any) => ({ ...p, notes:e.target.value }))} />
-            </div>
-            <div className="form-group" style={{ marginBottom:14 }}>
-              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
-                <input type="checkbox" checked={!!editData.if_ok}
-                  onChange={e => setEditData((p: any) => ({ ...p, if_ok:e.target.checked }))}
-                  style={{ accentColor:'var(--success)' }} />
-                Mark as "If OK" (batch passes inspection)
-              </label>
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={handleUpdate} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Save'}
-              </button>
-              <button onClick={() => setEditModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Mark OK Modal */}
-      {okModal && (
-        <div className="modal-overlay" onClick={() => setOkModal(null)}>
-          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Mark Batch as OK</span>
-              <button className="small" onClick={() => setOkModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'#F0FDF4', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'#16A34A', marginBottom:4 }}>
-                ✓ Batch passes inspection
-              </div>
-              <div style={{ fontSize:12, color:'#374151' }}>
-                <strong>{okModal.batch_id_str}</strong> was faulty at <strong>{okModal.process_code}</strong>
-              </div>
-              <div style={{ fontSize:12, color:'#6B7280', marginTop:6 }}>
-                {(() => {
-                  const route = okModal.process_route || []
-                  const idx = route.findIndex((c: string) => c.toUpperCase() === okModal.process_code?.toUpperCase() || c === okModal.process_code)
-                  const next = idx >= 0 && idx < route.length - 1 ? route[idx + 1] : null
-                  return next
-                    ? `→ Batch will be sent to ${next} process`
-                    : '→ Batch has no next process — will be marked complete'
-                })()}
-              </div>
-            </div>
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={() => setOkModal(null)}>Cancel</button>
-              <button onClick={handleMarkOk} disabled={saving}
-                style={{ padding:'8px 20px', fontSize:13, fontWeight:700, border:'none',
-                  borderRadius:6, cursor:'pointer', background:'#16A34A', color:'white' }}>
-                {saving ? 'Processing…' : '✓ Confirm OK'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Reprocess Modal — Full or Partial */}
-      {reprocessModal && (
-        <ReprocessModal
-          record={reprocessModal}
-          onClose={() => setReprocessModal(null)}
-          onConfirm={handleReprocess}
-          saving={saving}
-          sourceLabel="Faulty"
-          kgField="faulty_kg"
-        />
-      )}
+      {modals}
     </div>
   )
 }
