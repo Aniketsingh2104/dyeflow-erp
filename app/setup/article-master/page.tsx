@@ -189,7 +189,8 @@ export default function ArticleMasterPage() {
   }
 
   const filtered = mappings.filter(m => {
-    const matchSearch = !search.trim() || m.article.toLowerCase().includes(search.toLowerCase())
+    const q = search.trim().toLowerCase()
+    const matchSearch = !q || m.article.toLowerCase().includes(q) || m.supervisor.toLowerCase().includes(q)
     const matchSup    = !filterSup || m.supervisor === filterSup
     return matchSearch && matchSup
   })
@@ -198,7 +199,7 @@ export default function ArticleMasterPage() {
   mappings.forEach(m => { supCounts[m.supervisor] = (supCounts[m.supervisor] || 0) + 1 })
 
   return (
-    <div className="content" style={{ maxWidth: 1100, margin: '0 auto' }}>
+    <div className="content" style={{ padding: '16px 20px' }}>
 
       {/* Toast — top right, no blink */}
       {toast && (
@@ -207,97 +208,94 @@ export default function ArticleMasterPage() {
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>Article → Supervisor Map</div>
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-            <code style={{ fontSize: 11, background: 'var(--bg-secondary)', padding: '1px 6px', borderRadius: 4 }}>article_supervisor_map</code> · {mappings.length} mappings
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Article → Supervisor Map</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Which supervisor an article's orders go to · {mappings.length} mappings
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search article or supervisor…"
+            style={{ width: 280, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+          <label style={{ cursor: 'pointer' }}>
+            <input ref={fileRef} type="file" accept=".json,.xlsx,.xls,.csv" onChange={handleImport}
+              style={{ position: 'absolute', opacity: 0, width: 1, height: 1, overflow: 'hidden' }} />
+            <span style={{ padding: '9px 14px', fontSize: 14, fontWeight: 700, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              📥 Import JSON / Excel
+            </span>
+          </label>
+          <button className="small" onClick={exportJson} disabled={!mappings.length} style={{ padding: '9px 14px', fontSize: 14 }}>📤 Export JSON</button>
+          <button className="small" onClick={() => load(false)} title="Refresh" style={{ padding: '9px 12px', fontSize: 14 }}>↻</button>
+          <button className="primary" onClick={openAdd} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ Add Mapping</button>
         </div>
       </div>
 
       {importStatus && (
-        <div style={{ background: importStatus.startsWith('❌') ? '#FEE2E2' : importStatus.startsWith('✅') ? '#D1FAE5' : '#EFF6FF', border: `1px solid ${importStatus.startsWith('❌') ? '#FCA5A5' : importStatus.startsWith('✅') ? '#6EE7B7' : '#BFDBFE'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 12, fontWeight: 600, color: importStatus.startsWith('❌') ? '#991B1B' : importStatus.startsWith('✅') ? '#065F46' : '#1E40AF' }}>
+        <div style={{ background: importStatus.startsWith('❌') ? '#FEE2E2' : importStatus.startsWith('✅') ? '#D1FAE5' : '#EFF6FF', border: `1px solid ${importStatus.startsWith('❌') ? '#FCA5A5' : importStatus.startsWith('✅') ? '#6EE7B7' : '#BFDBFE'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, fontWeight: 600, color: importStatus.startsWith('❌') ? '#991B1B' : importStatus.startsWith('✅') ? '#065F46' : '#1E40AF' }}>
           {importStatus}
         </div>
       )}
 
-      {/* Supervisor filter chips */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <button onClick={() => setFilterSup('')}
-          style={{ padding: '5px 12px', fontSize: 12, fontWeight: 600, border: `2px solid ${!filterSup ? 'var(--accent)' : 'var(--border-light)'}`, borderRadius: 20, background: !filterSup ? 'var(--accent)' : 'var(--bg-primary)', color: !filterSup ? '#fff' : 'var(--text-secondary)', cursor: 'pointer' }}>
-          All ({mappings.length})
-        </button>
+      {/* Count cards — click to filter by supervisor */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div onClick={() => setFilterSup('')} style={{ background: 'var(--bg-primary)', border: `2px solid ${!filterSup ? 'var(--accent)' : 'var(--border-light)'}`, borderRadius: 10, padding: '10px 16px', minWidth: 120, cursor: 'pointer' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>All articles</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{mappings.length}</div>
+        </div>
         {Object.entries(supCounts).sort((a, b) => b[1] - a[1]).map(([sup, count]) => (
-          <button key={sup} onClick={() => setFilterSup(filterSup === sup ? '' : sup)}
-            style={{ padding: '5px 12px', fontSize: 12, fontWeight: 600, border: `2px solid ${filterSup === sup ? supColor(sup) : 'var(--border-light)'}`, borderRadius: 20, background: filterSup === sup ? supColor(sup) : 'var(--bg-primary)', color: filterSup === sup ? '#fff' : 'var(--text-secondary)', cursor: 'pointer' }}>
-            {sup} ({count})
-          </button>
+          <div key={sup} onClick={() => setFilterSup(filterSup === sup ? '' : sup)}
+            style={{ background: 'var(--bg-primary)', border: `2px solid ${filterSup === sup ? supColor(sup) : 'var(--border-light)'}`, borderRadius: 10, padding: '10px 16px', minWidth: 120, cursor: 'pointer' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{sup}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: supColor(sup) }}>{count}</div>
+          </div>
         ))}
       </div>
 
-      {/* Action bar */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button className="primary" onClick={openAdd}>+ Add Mapping</button>
-        <label style={{ cursor: 'pointer' }}>
-          <input ref={fileRef} type="file" accept=".json,.xlsx,.xls,.csv" onChange={handleImport}
-            style={{ position: 'absolute', opacity: 0, width: 1, height: 1, overflow: 'hidden' }} />
-          <span style={{ padding: '7px 14px', fontSize: 13, fontWeight: 600, border: '1px solid var(--accent)', borderRadius: 6, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            📥 Import JSON / Excel
-          </span>
-        </label>
-        <button className="small" onClick={exportJson} disabled={!mappings.length}>📤 Export JSON</button>
-        <button className="small" onClick={() => load(false)}>↻</button>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search article…"
-          style={{ marginLeft: 'auto', width: 220, fontSize: 12 }} />
-        <span style={{ fontSize: 12, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
-          {filtered.length} / {mappings.length}
-        </span>
-      </div>
-
-      {/* Table — never unmounts, no loading spinner after first load */}
-      <div className="card" style={{ padding: 0 }}>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>Loading from Supabase…</div>
-        ) : (
-          <>
-            <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 280px)', overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
-                  <tr>
-                    {['#', 'ARTICLE', 'SUPERVISOR', 'ACTIONS'].map(h => (
-                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 ? (
-                    <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                      {search ? `No articles matching "${search}"` : 'No mappings yet.'}
-                    </td></tr>
-                  ) : filtered.map((m, i) => (
-                    <tr key={m.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
-                      <td style={{ padding: '8px 14px', color: 'var(--text-tertiary)', fontSize: 11, width: 48 }}>{i + 1}</td>
-                      <td style={{ padding: '8px 14px', fontWeight: 500, maxWidth: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.article}>{m.article}</td>
-                      <td style={{ padding: '8px 14px' }}>
-                        <span style={{ background: supColor(m.supervisor) + '18', color: supColor(m.supervisor), padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                          {m.supervisor}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 14px', whiteSpace: 'nowrap' }}>
-                        <button className="xs" onClick={() => openEdit(m)} style={{ marginRight: 6 }}>Edit</button>
-                        <button className="xs danger" onClick={() => deleteMapping(m)}>Remove</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ padding: '8px 14px', borderTop: '1px solid var(--border-light)', fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {filtered.length} · <strong>article_supervisor_map</strong> · Supabase
-            </div>
-          </>
-        )}
+      {/* Table */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 800 }}>
+          <colgroup>
+            <col style={{ width: 60 }} /><col /><col style={{ width: '22%' }} /><col style={{ width: 170 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
+            <tr>
+              {['#', 'Article', 'Supervisor', 'Actions'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+                {search ? `No articles matching "${search}"` : mappings.length === 0 ? 'No mappings yet. Click "+ Add Mapping" or import a JSON / Excel file.' : 'No results.'}
+              </td></tr>
+            ) : filtered.map((m, i) => (
+              <tr key={m.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
+                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{i + 1}</td>
+                <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.article}>{m.article}</td>
+                <td style={{ padding: '12px 16px' }}>
+                  <span style={{ background: supColor(m.supervisor) + '18', color: supColor(m.supervisor), padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    {m.supervisor}
+                  </span>
+                </td>
+                <td style={{ padding: '12px 16px' }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="small" onClick={() => openEdit(m)}>Edit</button>
+                    <button className="small danger" onClick={() => deleteMapping(m)}>Remove</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)', position: 'sticky', bottom: 0, background: 'var(--bg-primary)' }}>
+          Showing {filtered.length} of {mappings.length}
+        </div>
       </div>
 
       {/* Modal */}
