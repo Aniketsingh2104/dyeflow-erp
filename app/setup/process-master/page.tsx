@@ -137,92 +137,94 @@ export default function ProcessMasterPage() {
   )
 
   return (
-    <div className="content" style={{ maxWidth: 900, margin: '0 auto', padding: '16px 20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+    <div className="content" style={{ padding: '16px 20px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Process Master</div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Create and manage FMS process steps.
-            <strong> {processes.filter(p => p.is_enabled).length} of {processes.length}</strong> processes enabled.
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Process Master</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            The process steps batches go through, in sheet order · Faulty / FOB say where those can be raised
           </div>
         </div>
-        <button className="primary" onClick={openAdd}>+ Add Process</button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input type="text" placeholder="Search code or name…" value={search} onChange={e => setSearch(e.target.value)}
+            style={{ width: 260, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+          <button className="small" onClick={load} title="Refresh" style={{ padding: '9px 12px', fontSize: 14 }}>↻</button>
+          <button className="primary" onClick={openAdd} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ Add Process</button>
+        </div>
       </div>
 
-      <input type="text" placeholder="Search by code or name…" value={search} onChange={e => setSearch(e.target.value)}
-        style={{ marginBottom: 14, maxWidth: 280, padding: '7px 10px', fontSize: 12,
-          border: '1px solid var(--border-medium)', borderRadius: 6,
-          background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+      {/* Count cards */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[['Processes', processes.length, 'var(--accent)'],
+          ['Enabled', processes.filter(p => p.is_enabled).length, '#059669'],
+          ['Disabled', processes.filter(p => !p.is_enabled).length, 'var(--text-tertiary)'],
+          ['Faulty allowed', processes.filter(p => p.allow_faulty).length, '#EF4444'],
+          ['FOB allowed', processes.filter(p => p.allow_fob).length, '#7C3AED']].map(([label, value, color]) => (
+          <div key={String(label)} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: String(color) }}>{value}</div>
+          </div>
+        ))}
+      </div>
 
-      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
-          <thead style={{ background: 'var(--bg-secondary)' }}>
+      {/* Table */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900 }}>
+          <colgroup>
+            <col style={{ width: 60 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 80 }} /><col style={{ width: 130 }} />
+            <col style={{ width: 100 }} /><col style={{ width: 100 }} /><col style={{ width: 100 }} /><col style={{ width: 160 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
             <tr>
-              {['#','Code','Name','Days','Status','Faulty','FOB','Move','Actions'].map(h => (
-                <th key={h} style={{ padding: '9px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700,
-                  color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
-                  borderBottom: '1px solid var(--border-light)' }}>{h}</th>
+              {['#', 'Code', 'Name', 'Days', 'Status', 'Faulty', 'FOB', 'Move', 'Actions'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: ['#', 'Days', 'Faulty', 'FOB'].includes(h) ? 'center' : 'left', fontSize: 12, fontWeight: 700,
+                  color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                {processes.length === 0 ? 'No processes. Click "+ Add Process".' : 'No results.'}
+              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+                {processes.length === 0 ? 'No processes yet. Click "+ Add Process".' : 'No results.'}
               </td></tr>
             ) : (
               filtered.map((p, idx) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid var(--border-light)',
-                  background: idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)' }}>
-                  <td style={{ padding: '9px 10px', color: 'var(--text-tertiary)', fontWeight: 600, textAlign: 'center' }}>
-                    {p.display_order}
+                  background: idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', opacity: p.is_enabled ? 1 : 0.6 }}>
+                  <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontWeight: 700, textAlign: 'center' }}>{p.display_order}</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <span style={{ background: '#E6F0FF', color: '#3366CC', padding: '4px 12px', borderRadius: 6, fontWeight: 800, fontSize: 13 }}>{p.code}</span>
                   </td>
-                  <td style={{ padding: '9px 10px' }}>
-                    <span style={{ background: 'var(--accent-light)', color: 'var(--accent-dark)',
-                      padding: '3px 9px', borderRadius: 20, fontWeight: 700, fontSize: 12 }}>{p.code}</span>
-                  </td>
-                  <td style={{ padding: '9px 10px', fontWeight: 500, fontSize: 13 }}>{p.name}</td>
-                  <td style={{ padding: '9px 10px', color: 'var(--text-secondary)', fontSize: 12, textAlign: 'center' }}>
-                    {p.default_days}d
-                  </td>
-                  <td style={{ padding: '9px 10px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', margin: 0 }}>
-                      <input type="checkbox" checked={p.is_enabled} onChange={() => toggleEnabled(p)} style={{ width: 'auto', cursor: 'pointer' }} />
-                      <span style={{ fontSize: 11, fontWeight: 600, color: p.is_enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
-                        {p.is_enabled ? 'Enabled' : 'Disabled'}
-                      </span>
+                  <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15 }}>{p.name}</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center' }}>{p.default_days} d</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', margin: 0 }}>
+                      <input type="checkbox" checked={p.is_enabled} onChange={() => toggleEnabled(p)} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#059669' }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: p.is_enabled ? '#059669' : 'var(--text-tertiary)' }}>{p.is_enabled ? 'Enabled' : 'Disabled'}</span>
                     </label>
                   </td>
-                  <td style={{ padding: '9px 10px', textAlign: 'center' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', margin: 0 }}>
-                      <input type="checkbox" checked={p.allow_faulty} onChange={() => toggleFaulty(p)}
-                        style={{ width: 'auto', cursor: 'pointer', accentColor: '#EF4444' }} />
-                      <span style={{ fontSize: 10, fontWeight: 600, color: p.allow_faulty ? '#EF4444' : 'var(--text-tertiary)' }}>
-                        {p.allow_faulty ? 'ON' : 'OFF'}
-                      </span>
-                    </label>
+                  <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                    <input type="checkbox" checked={p.allow_faulty} onChange={() => toggleFaulty(p)} title="Faulty can be raised at this process"
+                      style={{ width: 18, height: 18, cursor: 'pointer', accentColor: '#EF4444' }} />
                   </td>
-                  <td style={{ padding: '9px 10px', textAlign: 'center' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', margin: 0 }}>
-                      <input type="checkbox" checked={p.allow_fob} onChange={() => toggleFob(p)}
-                        style={{ width: 'auto', cursor: 'pointer', accentColor: '#7C3AED' }} />
-                      <span style={{ fontSize: 10, fontWeight: 600, color: p.allow_fob ? '#7C3AED' : 'var(--text-tertiary)' }}>
-                        {p.allow_fob ? 'ON' : 'OFF'}
-                      </span>
-                    </label>
+                  <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                    <input type="checkbox" checked={p.allow_fob} onChange={() => toggleFob(p)} title="FOB can be raised at this process"
+                      style={{ width: 18, height: 18, cursor: 'pointer', accentColor: '#7C3AED' }} />
                   </td>
-                  <td style={{ padding: '9px 10px' }}>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button className="xs" onClick={() => moveUp(processes.indexOf(p))} disabled={processes.indexOf(p) === 0}>↑</button>
-                      <button className="xs" onClick={() => moveDown(processes.indexOf(p))} disabled={processes.indexOf(p) === processes.length - 1}>↓</button>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="small" onClick={() => moveUp(processes.indexOf(p))} disabled={processes.indexOf(p) === 0} title="Move up">↑</button>
+                      <button className="small" onClick={() => moveDown(processes.indexOf(p))} disabled={processes.indexOf(p) === processes.length - 1} title="Move down">↓</button>
                     </div>
                   </td>
-                  <td style={{ padding: '9px 10px' }}>
-                    <div style={{ display: 'flex', gap: 5 }}>
-                      <button className="xs" onClick={() => openEdit(p)}>Edit</button>
-                      <button className="xs danger" onClick={() => del(p)}>Delete</button>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="small" onClick={() => openEdit(p)}>Edit</button>
+                      <button className="small danger" onClick={() => del(p)}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -230,6 +232,9 @@ export default function ProcessMasterPage() {
             )}
           </tbody>
         </table>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)' }}>
+          Showing {filtered.length} of {processes.length}
+        </div>
       </div>
 
       {showModal && (
