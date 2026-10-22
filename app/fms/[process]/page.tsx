@@ -7,6 +7,8 @@ import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
 import { collabBlockMessage, getCollabInfo } from '@/lib/collab'
 import { getUrgency, URGENCY_CELL_STYLE } from '@/lib/dateUrgency'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileFmsSheet from '@/components/MobileFmsSheet'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +97,7 @@ export default function FmsProcessPage() {
   const processCode = canonicalCode(decodeURIComponent(String(params?.process || '')))
 
   const [rows,     setRows]     = useState<any[]>([])
+  const isMobile = useIsMobile()
   const [allBatches, setAllBatches] = useState<any[]>([])
   const [loading,  setLoading]  = useState(true)
   const [search,   setSearch]   = useState('')
@@ -438,6 +441,102 @@ export default function FmsProcessPage() {
     </div>
   )
 
+  const modals = (<>
+      {/* Faulty modal */}
+      {faultyModal && (
+        <div className="modal-overlay" onClick={() => setFaultyModal(null)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Mark Batch as Faulty</span>
+              <button className="small" onClick={() => setFaultyModal(null)}>✕</button>
+            </div>
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8,
+              padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
+              <strong style={{ color: 'var(--accent)' }}>{faultyModal.batch_id}</strong>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
+                {faultyModal.party} · {faultyModal.color} · {faultyModal.kg} Kg
+              </span>
+            </div>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label>Fault reason / remark *</label>
+              <textarea value={faultyReason} rows={3} autoFocus
+                placeholder="e.g. Shade variation, Crease mark, Uneven dyeing…"
+                onChange={e => setFaultyReason(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setFaultyModal(null)}>Cancel</button>
+              <button style={{ background: 'var(--danger)', color: '#fff', border: 'none',
+                padding: '8px 16px', borderRadius: 6, fontWeight: 700, cursor: 'pointer',
+                opacity: faultyReason.trim() ? 1 : 0.5 }}
+                disabled={!faultyReason.trim() || saving}
+                onClick={handleFaulty}>
+                {saving ? 'Saving…' : 'Mark as Faulty'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FOB modal */}
+      {fobModal && (
+        <div className="modal-overlay" onClick={() => setFobModal(null)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Raise FOB Entry</span>
+              <button className="small" onClick={() => setFobModal(null)}>✕</button>
+            </div>
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8,
+              padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
+              <strong style={{ color: 'var(--purple)' }}>{fobModal.batch_id}</strong>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
+                {fobModal.party} · {processCode}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+              {(['dyeing','rolling'] as const).map(t => (
+                <button key={t} onClick={() => setFobType(t)} style={{
+                  flex: 1, padding: 8, fontSize: 13, fontWeight: fobType === t ? 700 : 400,
+                  border: `1px solid ${fobType === t ? 'var(--accent)' : 'var(--border-medium)'}`,
+                  borderRadius: 6, cursor: 'pointer',
+                  background: fobType === t ? 'var(--accent)' : 'var(--bg-primary)',
+                  color: fobType === t ? '#fff' : 'var(--text-primary)' }}>
+                  {t === 'dyeing' ? '🔵 Dyeing FOB' : '🟣 Rolling FOB'}
+                </button>
+              ))}
+            </div>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label>Reason / remark *</label>
+              <textarea value={fobReason} rows={3} autoFocus
+                placeholder={fobType === 'dyeing' ? 'e.g. Shade variation, Patta…' : 'e.g. Roller mark, Crease…'}
+                onChange={e => setFobReason(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setFobModal(null)}>Cancel</button>
+              <button className="primary" onClick={handleFob}
+                disabled={!fobReason.trim() || saving}>
+                {saving ? 'Saving…' : 'Add FOB Entry'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+  </>)
+
+  // ── Phone: card layout, same rows and actions (components/MobileFmsSheet.tsx)
+  if (isMobile) {
+    return (
+      <>
+        <MobileFmsSheet processCode={processCode} rows={displayRows} allBatches={allBatches} saving={saving} now={now} delay={delayMeta}
+          canEdit={true} counts={{ overdue: overdueCount, dueSoon: dueSoonCount }} search={search} setSearch={setSearch}
+          onDone={handleDone}
+          onFaulty={row => { const block = collabBlockMessage(row, processCode, allBatches); if (block) { alert(block); return } setFaultyModal(row); setFaultyReason('') }}
+          onFob={row => { const block = collabBlockMessage(row, processCode, allBatches); if (block) { alert(block); return } setFobModal(row); setFobType('dyeing'); setFobReason('') }}
+          onRollback={handleRollback} onRefresh={loadRows} fmt={(d) => fmtDateTime(d)} />
+        {modals}
+      </>
+    )
+  }
+
   return (
     <div className="content" style={{ display: 'flex', flexDirection: 'column',
       height: 'calc(100vh - 42px)', padding: '12px 16px 0' }}>
@@ -735,84 +834,7 @@ export default function FmsProcessPage() {
         )}
       </div>
 
-      {/* Faulty modal */}
-      {faultyModal && (
-        <div className="modal-overlay" onClick={() => setFaultyModal(null)}>
-          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Mark Batch as Faulty</span>
-              <button className="small" onClick={() => setFaultyModal(null)}>✕</button>
-            </div>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8,
-              padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
-              <strong style={{ color: 'var(--accent)' }}>{faultyModal.batch_id}</strong>
-              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
-                {faultyModal.party} · {faultyModal.color} · {faultyModal.kg} Kg
-              </span>
-            </div>
-            <div className="form-group" style={{ marginBottom: 14 }}>
-              <label>Fault reason / remark *</label>
-              <textarea value={faultyReason} rows={3} autoFocus
-                placeholder="e.g. Shade variation, Crease mark, Uneven dyeing…"
-                onChange={e => setFaultyReason(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setFaultyModal(null)}>Cancel</button>
-              <button style={{ background: 'var(--danger)', color: '#fff', border: 'none',
-                padding: '8px 16px', borderRadius: 6, fontWeight: 700, cursor: 'pointer',
-                opacity: faultyReason.trim() ? 1 : 0.5 }}
-                disabled={!faultyReason.trim() || saving}
-                onClick={handleFaulty}>
-                {saving ? 'Saving…' : 'Mark as Faulty'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* FOB modal */}
-      {fobModal && (
-        <div className="modal-overlay" onClick={() => setFobModal(null)}>
-          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Raise FOB Entry</span>
-              <button className="small" onClick={() => setFobModal(null)}>✕</button>
-            </div>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 8,
-              padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
-              <strong style={{ color: 'var(--purple)' }}>{fobModal.batch_id}</strong>
-              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
-                {fobModal.party} · {processCode}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-              {(['dyeing','rolling'] as const).map(t => (
-                <button key={t} onClick={() => setFobType(t)} style={{
-                  flex: 1, padding: 8, fontSize: 13, fontWeight: fobType === t ? 700 : 400,
-                  border: `1px solid ${fobType === t ? 'var(--accent)' : 'var(--border-medium)'}`,
-                  borderRadius: 6, cursor: 'pointer',
-                  background: fobType === t ? 'var(--accent)' : 'var(--bg-primary)',
-                  color: fobType === t ? '#fff' : 'var(--text-primary)' }}>
-                  {t === 'dyeing' ? '🔵 Dyeing FOB' : '🟣 Rolling FOB'}
-                </button>
-              ))}
-            </div>
-            <div className="form-group" style={{ marginBottom: 14 }}>
-              <label>Reason / remark *</label>
-              <textarea value={fobReason} rows={3} autoFocus
-                placeholder={fobType === 'dyeing' ? 'e.g. Shade variation, Patta…' : 'e.g. Roller mark, Crease…'}
-                onChange={e => setFobReason(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setFobModal(null)}>Cancel</button>
-              <button className="primary" onClick={handleFob}
-                disabled={!fobReason.trim() || saving}>
-                {saving ? 'Saving…' : 'Add FOB Entry'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modals}
     </div>
   )
 }
