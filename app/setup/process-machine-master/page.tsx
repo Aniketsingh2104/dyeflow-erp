@@ -24,6 +24,8 @@ export default function ProcessMachineMasterPage() {
   const [editingArt,   setEditingArt]   = useState('')
   const [form,         setForm]         = useState({ article: '', processRoute: [] as string[], qa: false })
   const [importStatus, setImportStatus] = useState('')
+  const [search,       setSearch]       = useState('')
+  const [qaFilter,     setQaFilter]     = useState<'all' | 'qa' | 'noqa'>('all')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -131,120 +133,116 @@ export default function ProcessMachineMasterPage() {
     reader.readAsText(file)
   }
 
+  const q = search.trim().toLowerCase()
   const ruleEntries = Object.entries(rules)
+    .filter(([art, route]) => (!q || art.includes(q) || route.join('/').toLowerCase().includes(q))
+      && (qaFilter === 'all' || (qaFilter === 'qa') === !!qaMap[art]))
+    .sort((x, y) => x[0].localeCompare(y[0]))
+  const total = Object.keys(rules).length
+  const qaCount = Object.keys(rules).filter(a => qaMap[a]).length
+  const routeCount = new Set(Object.values(rules).map(r => r.join('/'))).size
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
-      {/* Import */}
-      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10,
-        padding: '14px 18px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>📄 Import Intelligence from JSON</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Upload <code>article_process_routes.json</code> — format: <code>{'"Article": ["C", "D", "F"]'}</code> or <code>{'"Article": { "processRoute": ["D","F"], "qa": true }'}</code>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Article → Process Route</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Default route suggested when an order of this article is assigned · QA → Packing → Dispatch are added by the system
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-          {importStatus && (
-            <span style={{ fontSize: 12, fontWeight: 500,
-              color: importStatus.startsWith('✅') ? 'var(--success)' : 'var(--danger)' }}>{importStatus}</span>
-          )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search article or route…"
+            style={{ width: 280, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           <input ref={fileRef} type="file" accept=".json" onChange={handleJsonFile} style={{ display: 'none' }} />
-          <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
-            borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-            onClick={() => fileRef.current?.click()}>📄 Upload JSON File</button>
+          <button onClick={() => fileRef.current?.click()} title='JSON format: "Article": { "r": "D/F", "qa": true }  or  "Article": ["D","F"]'
+            style={{ padding: '9px 14px', fontSize: 14, fontWeight: 700, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer' }}>
+            📥 Upload JSON
+          </button>
+          <button className="small" onClick={() => load()} title="Refresh" style={{ padding: '9px 12px', fontSize: 14 }}>↻</button>
+          <button className="primary" onClick={() => openAdd()} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ Add Rule</button>
+        </div>
+      </div>
+
+      {importStatus && (
+        <div style={{ background: importStatus.startsWith('❌') ? '#FEE2E2' : importStatus.startsWith('✅') ? '#D1FAE5' : '#EFF6FF', border: `1px solid ${importStatus.startsWith('❌') ? '#FCA5A5' : importStatus.startsWith('✅') ? '#6EE7B7' : '#BFDBFE'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, fontWeight: 600, color: importStatus.startsWith('❌') ? '#991B1B' : importStatus.startsWith('✅') ? '#065F46' : '#1E40AF' }}>
+          {importStatus}
+        </div>
+      )}
+
+      {/* Count cards — click to filter */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {([['all', 'All rules', total, 'var(--accent)'], ['qa', 'With QA', qaCount, '#B45309'], ['noqa', 'Without QA', total - qaCount, '#3366CC']] as const).map(([k, label, value, color]) => (
+          <div key={k} onClick={() => setQaFilter(k)} style={{ background: 'var(--bg-primary)', border: `2px solid ${qaFilter === k ? color : 'var(--border-light)'}`, borderRadius: 10, padding: '10px 16px', minWidth: 130, cursor: 'pointer' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+          </div>
+        ))}
+        <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Different routes</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-secondary)' }}>{routeCount}</div>
         </div>
       </div>
 
       {/* Table */}
-      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '12px 16px', borderBottom: '1px solid var(--border-light)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Article → Process Route Rules</span>
-            <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)',
-              padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{ruleEntries.length} rules</span>
-          </div>
-          <button style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px',
-            borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }} onClick={() => openAdd()}>
-            + Add Rule
-          </button>
-        </div>
-        <div style={{ overflowX: 'auto', maxHeight: 440, overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-secondary)', zIndex: 5 }}>
-              <tr>
-                {['Article','Default Process Route','QA','Actions'].map(h => (
-                  <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
-                    color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
-                    borderBottom: '1px solid var(--border-light)' }}>{h}</th>
-                ))}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900 }}>
+          <colgroup>
+            <col style={{ width: 60 }} /><col style={{ width: '38%' }} /><col /><col style={{ width: 90 }} /><col style={{ width: 170 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
+            <tr>
+              {['#', 'Article', 'Default Process Route', 'QA', 'Actions'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: h === 'QA' ? 'center' : 'left', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+            ) : ruleEntries.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+                {total === 0 ? 'No rules yet. Upload a JSON file or click "+ Add Rule".' : 'No results.'}
+              </td></tr>
+            ) : ruleEntries.map(([art, route], i) => (
+              <tr key={art} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
+                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{i + 1}</td>
+                <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15, textTransform: 'uppercase', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={art}>{art}</td>
+                <td style={{ padding: '12px 16px' }}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {route.map((code, ci) => (
+                      <span key={ci} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ background: '#E6F0FF', color: '#3366CC', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700 }}>{code}</span>
+                        {ci < route.length - 1 && <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>→</span>}
+                      </span>
+                    ))}
+                    {qaMap[art] && <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>→</span>
+                      <span style={{ background: '#FEF3C7', color: '#B45309', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700 }}>QA</span>
+                    </span>}
+                  </div>
+                </td>
+                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                  <input type="checkbox" checked={!!qaMap[art]} onChange={() => toggleQa(art)}
+                    title="This article needs QA (QA → Packing → Dispatch)" style={{ width: 18, height: 18, cursor: 'pointer', accentColor: '#B45309' }} />
+                </td>
+                <td style={{ padding: '12px 16px' }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="small" onClick={() => openAdd(art)}>Edit</button>
+                    <button className="small danger" onClick={() => del(art)}>Remove</button>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
-              ) : ruleEntries.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                  No rules. Upload JSON or click "+ Add Rule".
-                </td></tr>
-              ) : (
-                ruleEntries.map(([art, route], i) => (
-                  <tr key={art} style={{ background: i%2===0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
-                    borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '11px 14px', fontWeight: 500 }}>{art}</td>
-                    <td style={{ padding: '11px 14px' }}>
-                      {Array.isArray(route) && route.length > 0 ? (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                          {route.map((code, ci) => (
-                            <span key={ci} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                              <span style={{ background: '#E6F0FF', color: '#3366CC', padding: '2px 8px',
-                                borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{code}</span>
-                              {ci < route.length - 1 && <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>→</span>}
-                            </span>
-                          ))}
-                        </div>
-                      ) : <span style={{ color: 'var(--text-tertiary)' }}>-</span>}
-                    </td>
-                    <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                      <input type="checkbox" checked={!!qaMap[art]} onChange={() => toggleQa(art)}
-                        title="This article needs QA (QA → Packing → Dispatch)" style={{ width: 'auto', cursor: 'pointer' }} />
-                    </td>
-                    <td style={{ padding: '11px 14px', whiteSpace: 'nowrap' }}>
-                      <button className="xs" onClick={() => openAdd(art)} style={{ marginRight: 6 }}>Edit</button>
-                      <button className="xs danger" onClick={() => del(art)}>Remove</button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)', position: 'sticky', bottom: 0, background: 'var(--bg-primary)' }}>
+          Showing {ruleEntries.length} of {total}
         </div>
       </div>
-
-      {/* Quick setup pills */}
-      {articles.length > 0 && (
-        <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '14px 16px' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Quick Setup — All Known Articles</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {articles.map(art => {
-              const rule = rules[art]
-              const done = rule && Array.isArray(rule) && rule.length > 0
-              return (
-                <div key={art} onClick={() => openAdd(art)}
-                  style={{ border: `1.5px solid ${done ? '#1D9E75' : 'var(--border-medium)'}`,
-                    background: done ? '#EAF3DE' : 'var(--bg-secondary)', borderRadius: 6,
-                    padding: '7px 12px', fontSize: 12, cursor: 'pointer' }}>
-                  <div style={{ fontWeight: 600 }}>{art}</div>
-                  <div style={{ fontSize: 11, marginTop: 2, color: done ? '#27500A' : 'var(--text-tertiary)' }}>
-                    {done ? `✓ ${rule.length} steps` : 'Click to configure'}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
