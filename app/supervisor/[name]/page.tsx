@@ -8,6 +8,8 @@ import ColumnSettingsModal from './ColumnSettingsModal'
 import { ColumnConfig, DEFAULT_COLUMNS, loadColumnConfig, saveColumnConfig, resetColumnConfig } from './column-config'
 import { useSupervisorFilter } from '@/lib/permissions'
 import { AccessDenied } from '@/lib/AccessDenied'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileSupervisorSheet from '@/components/MobileSupervisorSheet'
 
 export default function SupervisorDetailPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: supervisorSlug } = use(params)
@@ -34,6 +36,8 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   const [repairSplitParts,    setRepairSplitParts]    = useState<any[]>([])
   const [repairAssignModal,   setRepairAssignModal]   = useState<any>(null)
   const [repairSaving,        setRepairSaving]        = useState(false)
+  const isMobile = useIsMobile()
+  const [mobileSearch, setMobileSearch] = useState('')
   const [repairToast,         setRepairToast]         = useState('')
   const [supervisorsList,     setSupervisorsList]     = useState<any[]>([])
   const [machinesList,        setMachinesList]        = useState<any[]>([])
@@ -489,6 +493,136 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     return <AccessDenied pageName={`Supervisor — ${fullSupervisorName}`} />
   }
 
+  const modals = (<>
+      {/* Repair toast */}
+      {repairToast && (
+        <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999,
+          background:'var(--success)', color:'white', borderRadius:8,
+          padding:'10px 18px', fontSize:13, fontWeight:600,
+          boxShadow:'0 4px 16px rgba(0,0,0,0.15)' }}>
+          {repairToast}
+        </div>
+      )}
+
+      {/* Repair Split Modal */}
+      {repairSplitModal && (
+        <div className="modal-overlay" onClick={() => setRepairSplitModal(null)}>
+          <div className="modal" style={{ maxWidth:600 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">✂ Split Repair Batch — {repairSplitModal.batch_id}</span>
+              <button className="small" onClick={() => setRepairSplitModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'#FFF5F5', borderRadius:8, padding:'10px 14px',
+              marginBottom:14, fontSize:13, border:'1px solid #FCA5A5' }}>
+              <strong style={{ color:'#DC2626' }}>{repairSplitModal.batch_id}</strong>
+              <span style={{ marginLeft:8, color:'#374151' }}>
+                {repairSplitModal.color} · Total: <strong>{repairSplitModal.kg} Kg</strong>
+              </span>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
+                Original batch keeps its ID · New splits get -S1, -S2... suffix
+              </div>
+            </div>
+            <table style={{ width:'100%', borderCollapse:'collapse', marginBottom:10 }}>
+              <thead>
+                <tr style={{ background:'var(--bg-secondary)' }}>
+                  {['BATCH ID','KG','MTR','TAKA','MACHINE',''].map(h => (
+                    <th key={h} style={{ padding:'6px 8px', fontSize:11, textAlign:'left',
+                      borderBottom:'1px solid var(--border-light)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {repairSplitParts.map((part, i) => (
+                  <tr key={i} style={{ borderBottom:'1px solid var(--border-light)' }}>
+                    <td style={{ padding:'6px 8px', fontSize:12, fontWeight:700, color:'#DC2626' }}>
+                      {i === 0 ? repairSplitModal.batch_id : getRepairSplitId(repairSplitModal.batch_id, i)}
+                    </td>
+                    {(['kg','mtr','taka'] as const).map(f => (
+                      <td key={f} style={{ padding:'6px 8px' }}>
+                        <input type="number" value={part[f]}
+                          onChange={e => setRepairSplitParts(p => p.map((b,j) => j===i?{...b,[f]:e.target.value}:b))}
+                          style={{ width:75, padding:'4px 6px', fontSize:12,
+                            border:'1px solid var(--border-medium)', borderRadius:4 }} />
+                      </td>
+                    ))}
+                    <td style={{ padding:'6px 8px' }}>
+                      <select value={part.machine_id||''} 
+                        onChange={e => setRepairSplitParts(p => p.map((b,j) => j===i?{...b,machine_id:e.target.value}:b))}
+                        style={{ padding:'4px 8px', fontSize:11, border:'1px solid var(--border-medium)',
+                          borderRadius:4, minWidth:120 }}>
+                        <option value="">— Machine —</option>
+                        {machinesList.map((m:any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding:'6px 8px' }}>
+                      {repairSplitParts.length > 2 && (
+                        <button className="xs danger"
+                          onClick={() => setRepairSplitParts(p => p.filter((_,j) => j!==i))}>✕</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+              <button className="small"
+                onClick={() => setRepairSplitParts(p => [...p, { kg:0, mtr:0, taka:0, machine_id:repairSplitModal.machine_id||'' }])}>
+                ➕ Add Batch
+              </button>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="primary" onClick={saveRepairSplits} disabled={repairSaving}>
+                {repairSaving ? 'Saving…' : '✓ Save Splits'}
+              </button>
+              <button onClick={() => setRepairSplitModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Repair Reassign Modal */}
+      {repairAssignModal && (
+        <div className="modal-overlay" onClick={() => setRepairAssignModal(null)}>
+          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">👤 Reassign — {repairAssignModal.batch_id}</span>
+              <button className="small" onClick={() => setRepairAssignModal(null)}>✕</button>
+            </div>
+            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
+              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
+              <strong>{repairAssignModal.batch_id}</strong>
+              <span style={{ marginLeft:8, color:'var(--text-secondary)' }}>
+                {repairAssignModal.party} · {repairAssignModal.color} · {repairAssignModal.repair_kg} Kg
+              </span>
+              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
+                Current: {repairAssignModal.supervisor_name || 'Unassigned'}
+              </div>
+            </div>
+            <RepairReassignPicker
+              supervisors={supervisorsList}
+              current={repairAssignModal.supervisor_name}
+              onAssign={doRepairReassign}
+              onClose={() => setRepairAssignModal(null)}
+              saving={repairSaving}
+            />
+          </div>
+        </div>
+      )}
+  </>)
+
+  // ── Phone: card layout (components/MobileSupervisorSheet.tsx)
+  if (isMobile) {
+    return (
+      <>
+        <MobileSupervisorSheet name={fullSupervisorName || decodedSlug.toUpperCase()} color={String(color)} tab={activeTab} setTab={setActiveTab} stats={stats}
+          orders={getInboxOrders()} repairs={faultyBatches} search={mobileSearch} setSearch={setMobileSearch}
+          onToggle={toggleCheck} onUpdate={loadData} fmt={formatDateTime} repairSaving={repairSaving}
+          onRepairSplit={openRepairSplitModal} onRepairFullSplit={doRepairFullSplit} onRepairReassign={r => setRepairAssignModal(r)} />
+        {modals}
+      </>
+    )
+  }
+
   return (
     <div className="content" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 40px)', padding: '20px', gap: '10px' }}>
       {/* Header */}
@@ -699,120 +833,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
         <ColumnSettingsModal columns={columns} onSave={handleSaveColumns} onClose={() => setShowColumnSettings(false)} onReset={handleResetColumns} />
       )}
 
-      {/* Repair toast */}
-      {repairToast && (
-        <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999,
-          background:'var(--success)', color:'white', borderRadius:8,
-          padding:'10px 18px', fontSize:13, fontWeight:600,
-          boxShadow:'0 4px 16px rgba(0,0,0,0.15)' }}>
-          {repairToast}
-        </div>
-      )}
-
-      {/* Repair Split Modal */}
-      {repairSplitModal && (
-        <div className="modal-overlay" onClick={() => setRepairSplitModal(null)}>
-          <div className="modal" style={{ maxWidth:600 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">✂ Split Repair Batch — {repairSplitModal.batch_id}</span>
-              <button className="small" onClick={() => setRepairSplitModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'#FFF5F5', borderRadius:8, padding:'10px 14px',
-              marginBottom:14, fontSize:13, border:'1px solid #FCA5A5' }}>
-              <strong style={{ color:'#DC2626' }}>{repairSplitModal.batch_id}</strong>
-              <span style={{ marginLeft:8, color:'#374151' }}>
-                {repairSplitModal.color} · Total: <strong>{repairSplitModal.kg} Kg</strong>
-              </span>
-              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
-                Original batch keeps its ID · New splits get -S1, -S2... suffix
-              </div>
-            </div>
-            <table style={{ width:'100%', borderCollapse:'collapse', marginBottom:10 }}>
-              <thead>
-                <tr style={{ background:'var(--bg-secondary)' }}>
-                  {['BATCH ID','KG','MTR','TAKA','MACHINE',''].map(h => (
-                    <th key={h} style={{ padding:'6px 8px', fontSize:11, textAlign:'left',
-                      borderBottom:'1px solid var(--border-light)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {repairSplitParts.map((part, i) => (
-                  <tr key={i} style={{ borderBottom:'1px solid var(--border-light)' }}>
-                    <td style={{ padding:'6px 8px', fontSize:12, fontWeight:700, color:'#DC2626' }}>
-                      {i === 0 ? repairSplitModal.batch_id : getRepairSplitId(repairSplitModal.batch_id, i)}
-                    </td>
-                    {(['kg','mtr','taka'] as const).map(f => (
-                      <td key={f} style={{ padding:'6px 8px' }}>
-                        <input type="number" value={part[f]}
-                          onChange={e => setRepairSplitParts(p => p.map((b,j) => j===i?{...b,[f]:e.target.value}:b))}
-                          style={{ width:75, padding:'4px 6px', fontSize:12,
-                            border:'1px solid var(--border-medium)', borderRadius:4 }} />
-                      </td>
-                    ))}
-                    <td style={{ padding:'6px 8px' }}>
-                      <select value={part.machine_id||''} 
-                        onChange={e => setRepairSplitParts(p => p.map((b,j) => j===i?{...b,machine_id:e.target.value}:b))}
-                        style={{ padding:'4px 8px', fontSize:11, border:'1px solid var(--border-medium)',
-                          borderRadius:4, minWidth:120 }}>
-                        <option value="">— Machine —</option>
-                        {machinesList.map((m:any) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                      </select>
-                    </td>
-                    <td style={{ padding:'6px 8px' }}>
-                      {repairSplitParts.length > 2 && (
-                        <button className="xs danger"
-                          onClick={() => setRepairSplitParts(p => p.filter((_,j) => j!==i))}>✕</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-              <button className="small"
-                onClick={() => setRepairSplitParts(p => [...p, { kg:0, mtr:0, taka:0, machine_id:repairSplitModal.machine_id||'' }])}>
-                ➕ Add Batch
-              </button>
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button className="primary" onClick={saveRepairSplits} disabled={repairSaving}>
-                {repairSaving ? 'Saving…' : '✓ Save Splits'}
-              </button>
-              <button onClick={() => setRepairSplitModal(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Repair Reassign Modal */}
-      {repairAssignModal && (
-        <div className="modal-overlay" onClick={() => setRepairAssignModal(null)}>
-          <div className="modal" style={{ maxWidth:440 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">👤 Reassign — {repairAssignModal.batch_id}</span>
-              <button className="small" onClick={() => setRepairAssignModal(null)}>✕</button>
-            </div>
-            <div style={{ background:'var(--bg-secondary)', borderRadius:8,
-              padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-              <strong>{repairAssignModal.batch_id}</strong>
-              <span style={{ marginLeft:8, color:'var(--text-secondary)' }}>
-                {repairAssignModal.party} · {repairAssignModal.color} · {repairAssignModal.repair_kg} Kg
-              </span>
-              <div style={{ fontSize:11, color:'#6B7280', marginTop:4 }}>
-                Current: {repairAssignModal.supervisor_name || 'Unassigned'}
-              </div>
-            </div>
-            <RepairReassignPicker
-              supervisors={supervisorsList}
-              current={repairAssignModal.supervisor_name}
-              onAssign={doRepairReassign}
-              onClose={() => setRepairAssignModal(null)}
-              saving={repairSaving}
-            />
-          </div>
-        </div>
-      )}
+      {modals}
     </div>
   )
 }
