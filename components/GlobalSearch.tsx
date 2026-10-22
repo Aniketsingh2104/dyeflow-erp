@@ -14,7 +14,9 @@ interface SearchResult {
   badgeColor?: string
 }
 
-export default function GlobalSearch() {
+// compact: a 🔍 button (phone menu bar) that opens the search box full width
+export default function GlobalSearch({ compact = false }: { compact?: boolean } = {}) {
+  const [expanded, setExpanded] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [open, setOpen] = useState(false)
@@ -99,7 +101,7 @@ export default function GlobalSearch() {
   const navigate = (path: string) => {
     seq.current++
     router.push(path)
-    setOpen(false)
+    setOpen(false); setExpanded(false)
     setQuery('')
     setResults([])
   }
@@ -113,10 +115,19 @@ export default function GlobalSearch() {
 
   const typeIcon: Record<string, string> = { order: '📋', batch: '📦', machine: '⚙', supervisor: '👷' }
 
+  if (compact && !expanded) {
+    return (
+      <button aria-label="Search" onClick={() => { setExpanded(true); setTimeout(() => inputRef.current?.focus(), 50) }}
+        style={{ width: 40, height: 40, border: 'none', background: 'transparent', fontSize: 18, padding: 0 }}>🔍</button>
+    )
+  }
   return (
-    <div ref={boxRef} style={{ position: 'relative', flex: '1 1 0', maxWidth: 320, minWidth: 160 }}>
+    <div ref={boxRef} style={compact
+      ? { position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100, background: 'var(--bg-primary)', padding: '7px 10px', borderBottom: '1px solid var(--border-light)', display: 'flex', gap: 6, alignItems: 'center' }
+      : { position: 'relative', flex: '1 1 0', maxWidth: 320, minWidth: 160 }}>
+      {compact && <button onClick={() => { setExpanded(false); setOpen(false); setQuery('') }} style={{ border: 'none', background: 'transparent', fontSize: 18, width: 36, height: 36 }}>←</button>}
       {/* Input */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', flex: 1 }}>
         <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: 'var(--text-tertiary)', pointerEvents: 'none' }}>🔍</span>
         <input
           ref={inputRef}
@@ -128,7 +139,7 @@ export default function GlobalSearch() {
           onKeyDown={handleKeyDown}
           style={{
             width: '100%', padding: '6px 10px 6px 30px',
-            fontSize: 12, border: '1px solid var(--border-medium)',
+            fontSize: compact ? 16 : 12, border: '1px solid var(--border-medium)',
             borderRadius: 6, background: 'var(--bg-secondary)',
             color: 'var(--text-primary)', outline: 'none',
             boxSizing: 'border-box'
@@ -147,7 +158,7 @@ export default function GlobalSearch() {
       {/* Dropdown */}
       {open && query.trim() && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0,
+          position: 'absolute', top: 'calc(100% + 6px)', left: compact ? 10 : 0, right: compact ? 10 : 0,
           background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
           borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
           zIndex: 9999, overflow: 'hidden', maxHeight: 380, overflowY: 'auto'

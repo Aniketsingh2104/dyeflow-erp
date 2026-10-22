@@ -8,6 +8,7 @@ import { getActiveUserRecord, isAdminUser } from '@/lib/permissions'
 import { pageAccess, machinePaths } from '@/lib/pageAccess'
 import { isBatchFinished } from '@/lib/batchStatus'
 import { SECTIONS, sectionOf } from '@/lib/machineSections'
+import { useIsMobile } from '@/lib/useIsMobile'
 
 // same matching as the server (lib/pageAccess.ts) — a machine sheet counts by
 // its id or by its name slug (what User Management stores)
@@ -26,6 +27,10 @@ export default function Navigation() {
   const navRef   = useRef<HTMLDivElement>(null)
 
   const [openDropdown,    setOpenDropdown]    = useState<string | null>(null)
+  const isMobile = useIsMobile()
+  const [drawer, setDrawer] = useState(false)           // phone: the ☰ menu
+  const [openGroup, setOpenGroup] = useState<string | null>(null)
+  useEffect(() => { setDrawer(false) }, [pathname])      // close the menu after choosing a page
   const [machines,        setMachines]        = useState<NavItem[]>([])
   const [fmsItems,        setFmsItems]        = useState<NavItem[]>([])
   const [supervisorItems, setSupervisorItems] = useState<NavItem[]>([])
@@ -287,6 +292,69 @@ export default function Navigation() {
     ...section,
     items: filterItems(section.items),
   })).filter(section => section.items.length > 0)
+
+  // ── Phone: ☰ bar + slide-in menu with the same groups ─────────────────────
+  if (isMobile) {
+    const current = filteredSections.flatMap(s => s.items).find(i => !i.header && isActive(i.path))
+    return (
+      <nav ref={navRef} className="mobile-nav" style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-light)', position: 'sticky', top: 0, zIndex: 100 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 50, padding: '0 10px' }}>
+          <button aria-label="Menu" onClick={() => setDrawer(true)}
+            style={{ width: 40, height: 40, border: 'none', background: 'transparent', fontSize: 22, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>☰</button>
+          <Link href="/" style={{ textDecoration: 'none', color: 'var(--text-primary)', fontWeight: 800, fontSize: 15, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {current ? current.name.replace(/^[^A-Za-z0-9]+\s*/, '') : 'DyeFlow'}
+          </Link>
+          <GlobalSearch compact />
+          <NotificationCenter />
+          <DarkModeToggle />
+        </div>
+
+        {drawer && (
+          <div onClick={() => setDrawer(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 }}>
+            <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 'min(320px, 86vw)',
+              background: 'var(--bg-primary)', boxShadow: '4px 0 24px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: '1px solid var(--border-light)' }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16 }}>DyeFlow ERP</div>
+                  {loggedInUser && <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>👤 {loggedInUser}</div>}
+                </div>
+                <button onClick={() => setDrawer(false)} style={{ width: 36, height: 36, border: 'none', background: 'transparent', fontSize: 20 }}>✕</button>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}>
+                <Link href="/" style={{ display: 'block', padding: '12px 16px', fontSize: 15, fontWeight: 600, textDecoration: 'none',
+                  color: pathname === '/' ? 'var(--accent)' : 'var(--text-primary)', borderBottom: '1px solid var(--border-light)' }}>🏠 Dashboard</Link>
+                <Link href="/mobile" style={{ display: 'block', padding: '12px 16px', fontSize: 15, fontWeight: 600, textDecoration: 'none',
+                  color: 'var(--text-primary)', borderBottom: '1px solid var(--border-light)' }}>📱 Floor View</Link>
+                {filteredSections.map(section => {
+                  const open = openGroup === section.label || section.items.some(i => !i.header && isActive(i.path)) && openGroup === null
+                  return (
+                    <div key={section.label} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                      <button onClick={() => setOpenGroup(open ? '' : section.label)}
+                        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px',
+                          fontSize: 15, fontWeight: 700, border: 'none', background: 'transparent', color: 'var(--text-primary)', textAlign: 'left' }}>
+                        {section.label}<span style={{ fontSize: 12, color: 'var(--text-tertiary)', transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+                      </button>
+                      {open && section.items.map(item => item.header ? (
+                        <div key={item.path} style={{ padding: '6px 16px 2px 28px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>{item.name}</div>
+                      ) : (
+                        <Link key={item.path + item.name} href={item.path}
+                          style={{ display: 'block', padding: '11px 16px 11px 28px', fontSize: 14, textDecoration: 'none',
+                            color: isActive(item.path) ? 'var(--accent)' : 'var(--text-primary)', fontWeight: isActive(item.path) ? 700 : 400,
+                            background: isActive(item.path) ? 'var(--accent-light)' : 'transparent' }}>{item.name}</Link>
+                      ))}
+                    </div>
+                  )
+                })}
+                <Link href="/ai-assistant" style={{ display: 'block', padding: '12px 16px', fontSize: 15, fontWeight: 600, textDecoration: 'none', color: 'var(--accent-dark)' }}>🤖 AI Assistant</Link>
+                <Link href="/setup" style={{ display: 'block', padding: '12px 16px', fontSize: 15, fontWeight: 600, textDecoration: 'none', color: 'var(--text-primary)' }}>⚙ Setup</Link>
+              </div>
+              <button onClick={handleLogout} style={{ margin: 12, padding: '12px', fontSize: 15, fontWeight: 700, color: 'var(--danger)', background: 'var(--danger-light)', border: '1px solid var(--danger)', borderRadius: 8 }}>Logout</button>
+            </div>
+          </div>
+        )}
+      </nav>
+    )
+  }
 
   return (
     <nav ref={navRef} style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-light)', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100 }}>
