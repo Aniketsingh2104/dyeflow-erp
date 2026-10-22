@@ -5,6 +5,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import ReprocessModal from '@/components/ReprocessModal'
 
 function fmtDateTime(d: any) {
@@ -70,8 +71,9 @@ export default function FaultyPage() {
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const res = await fetch('/api/faulty', { cache: 'no-store' }).then(r => r.json())
       if (res.ok) setRecords(res.data || [])
@@ -80,6 +82,7 @@ export default function FaultyPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   const filtered = records.filter(r => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
@@ -381,7 +384,8 @@ export default function FaultyPage() {
             </div>
           )}
         </div>
-        <button className="small" onClick={load}>⟳</button>
+        <RefreshStamp />
+        <button className="small" onClick={() => load()}>⟳</button>
       </div>
 
       {toast && (

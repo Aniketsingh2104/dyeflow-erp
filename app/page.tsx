@@ -6,6 +6,7 @@ import { buildDbContext, fetchAnomalyContext, AnomalyItem } from '@/lib/dbContex
 import { useSupervisorFilter } from '@/lib/permissions'
 import { isBatchFinished } from '@/lib/batchStatus'
 import { SubProdCell, SubProdTag } from '@/components/SubProd'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 
 interface AiInsight { text: string; type: 'urgent' | 'info' | 'good' }
 
@@ -378,10 +379,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboard()
-    const t = setInterval(loadDashboard, 120000)
     window.addEventListener('dyeflow-db-updated', loadDashboard)
-    return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', loadDashboard) }
+    return () => { window.removeEventListener('dyeflow-db-updated', loadDashboard) }
   }, [loadDashboard])
+  useAutoRefresh(loadDashboard)   // interval from Factory Settings (default 30 s), plus when the tab comes back
 
   const newCount    = orders.filter(o => o.status === 'new').length
   const inProcess   = orders.filter(o => ['assigned','splitting','in-process'].includes(o.status)).length
@@ -410,7 +411,7 @@ export default function DashboardPage() {
         {lastRefreshed && (
           <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)', display: 'inline-block' }} />
-            Updated {lastRefreshed} · auto-refreshes every 2 min
+            <RefreshStamp style={{ fontSize: 11 }} />
             <button onClick={loadDashboard} style={{ fontSize: 11, border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', padding: '1px 4px', borderRadius: 4 }}>↻ Refresh</button>
           </div>
         )}

@@ -90,9 +90,11 @@ export function NotificationCenter() {
 
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, 120_000)
+    const t = setInterval(refresh, 60_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }   // back to the tab → fresh count
     window.addEventListener('dyeflow-db-updated', refresh)
-    return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', refresh) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(t); window.removeEventListener('dyeflow-db-updated', refresh); document.removeEventListener('visibilitychange', onVisible) }
   }, [refresh])
 
   // Close on outside click

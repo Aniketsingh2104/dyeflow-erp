@@ -2,6 +2,7 @@
 
 import { dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { getCollabInfo } from '@/lib/collab'
 import { SubProdCell } from '@/components/SubProd'
 import { useIsMobile } from '@/lib/useIsMobile'
@@ -82,8 +83,9 @@ export default function FirstProcessBatchPage() {
   const colMenuRef = useRef<HTMLDivElement>(null)
 
   // ── Load ──────────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const [bRes, oRes, dpRes, repairRes] = await Promise.all([
         fetch('/api/batches', { cache:'no-store' }).then(r=>r.json()),
@@ -168,6 +170,7 @@ export default function FirstProcessBatchPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   // ── Column resize ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -371,7 +374,8 @@ export default function FirstProcessBatchPage() {
             title={selectedBatches.size === 0 ? 'Select batches with planned dates to send' : ''}>
             {sending ? 'Sending…' : `🚀 Send to Process${selectedBatches.size > 0 ? ` (${selectedBatches.size})` : ''}`}
           </button>
-          <button onClick={load}
+          <RefreshStamp />
+          <button onClick={() => load()}
             style={{ padding:'6px 10px', fontSize:13, border:'1px solid var(--border-medium)',
               borderRadius:6, background:'var(--bg-primary)', cursor:'pointer',
               color:'var(--text-secondary)' }}>⟳</button>

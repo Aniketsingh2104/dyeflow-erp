@@ -4,6 +4,7 @@ import { SubProdCell } from '@/components/SubProd'
 import { withSubProd } from '@/lib/subProd'
 import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useRef, useState } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
 import { usePermission, useSupervisorFilter } from '@/lib/permissions'
@@ -392,6 +393,7 @@ export default function MachinePage() {
       console.error('Machine page loadData error:', err)
     }
   }
+  useAutoRefresh(() => loadData(), { enabled: !permLoading && canView })   // Factory Settings interval, plus when the tab comes back
 
   // ── Plan numbers are saved by the server (action 'plan_numbers'): it works
   // out each planned date and merges the number into the batch's plan in the
@@ -788,6 +790,7 @@ export default function MachinePage() {
               <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} />
               Show done ({doneRows})
             </label>
+            <RefreshStamp />
             {canEdit && <button
               onClick={runNumbering}
               style={{

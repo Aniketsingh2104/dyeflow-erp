@@ -3,6 +3,7 @@
 import { SubProdCell } from '@/components/SubProd'
 import { canonicalCode, sameCode, dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { useParams, useRouter } from 'next/navigation'
 import { getBatches, getOrders, markProcessDone, markBatchFaulty } from '@/lib/db'
 import { collabBlockMessage, getCollabInfo } from '@/lib/collab'
@@ -139,8 +140,9 @@ export default function FmsProcessPage() {
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
-  const loadRows = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, rows update in place
+  const loadRows = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const [batchRes, orderRes, dpRes, fobRes] = await Promise.all([
         getBatches(),
@@ -277,6 +279,7 @@ export default function FmsProcessPage() {
     window.addEventListener('dyeflow-db-updated', h)
     return () => window.removeEventListener('dyeflow-db-updated', h)
   }, [loadRows])
+  useAutoRefresh(() => loadRows(true))
 
   // ── Column resize ───────────────────────────────────────────────────────────
 
@@ -575,7 +578,8 @@ export default function FmsProcessPage() {
             ⚙ Columns ({visible.length}/{cols.length})
           </button>
           <button className="small" onClick={() => router.push('/fms')}>← Back</button>
-          <button className="small" onClick={loadRows}>⟳</button>
+          <RefreshStamp />
+          <button className="small" onClick={() => loadRows()}>⟳</button>
         </div>
       </div>
 

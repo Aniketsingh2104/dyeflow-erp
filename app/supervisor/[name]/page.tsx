@@ -2,6 +2,7 @@
 
 import { SubProdCell } from '@/components/SubProd'
 import { use, useEffect, useState, useMemo, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { useRouter } from 'next/navigation'
 import RouteAssignment from './RouteAssignment'
 import ColumnSettingsModal from './ColumnSettingsModal'
@@ -42,7 +43,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
   const [supervisorsList,     setSupervisorsList]     = useState<any[]>([])
   const [machinesList,        setMachinesList]        = useState<any[]>([])
 
-  useEffect(() => { loadData() }, [decodedSlug]) // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it // loadData is now async, effect just fires it
+  useEffect(() => { loadData() }, [decodedSlug]) // loadData is async, the effect just fires it
 
   useEffect(() => {
     if (decodedSlug) {
@@ -162,6 +163,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
       console.error('loadData error:', err)
     }
   }
+  useAutoRefresh(() => loadData())   // Factory Settings interval, plus when the tab comes back
 
   const handleFilterChange = (columnId: string, value: string) => {
     setFilters(prev => ({ ...prev, [columnId]: value }))
@@ -635,6 +637,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
           <TabButton id="faulty" label="🔧 Repair Queue" count={stats.faulty} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <RefreshStamp />
           {[['INBOX', stats.inbox], ['FAULTY', stats.faulty]].map(([label, count]) => (
             <div key={label as string} style={{ background: 'white', borderRadius: '8px', padding: '6px 10px', border: '1px solid #E5E7EB', textAlign: 'center', minWidth: '56px' }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: (count as number) > 0 ? color : '#1F2937' }}>{count as number}</div>

@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { useRouter } from 'next/navigation'
 import {
   getOrders, createOrder, updateOrder, deleteOrder,
@@ -139,8 +140,9 @@ export default function OrdersPage() {
 
   // ── Load all data ──────────────────────────────────────────────────────────
 
-  const loadAll = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, rows update in place
+  const loadAll = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     const [ordersRes, supsRes, machRes, custRes, procRes] = await Promise.all([
       getOrders(),
       getSupervisors(),
@@ -178,6 +180,7 @@ export default function OrdersPage() {
       window.removeEventListener('dyeflow-refresh',    handle)
     }
   }, [loadAll])
+  useAutoRefresh(() => loadAll(true))
 
   useEffect(() => {
     const onNew = () => openNewModal()
@@ -677,7 +680,8 @@ export default function OrdersPage() {
             color: priorityMode ? 'var(--purple)' : 'var(--text-primary)', cursor: 'pointer' }}>
           {priorityMode ? '✔ Priority Mode' : '↕ Set Priority'}
         </button>
-        <button onClick={loadAll} title="Refresh"
+        <RefreshStamp style={{ marginRight: 6 }} />
+        <button onClick={() => loadAll()} title="Refresh"
           style={{ padding: '6px 10px', fontSize: 13, border: '1px solid var(--border-medium)',
             borderRadius: 5, background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           ⟳

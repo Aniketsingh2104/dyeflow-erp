@@ -26,6 +26,7 @@
 // all-or-nothing against the Colour Chemical Master.
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { toCsv } from '@/lib/csv'
 import * as XLSX from 'xlsx'
 
@@ -98,14 +99,16 @@ export default function ColourStoreIMSPage() {
   const [editPlanValue, setEditPlanValue] = useState('')
   const [rowError,      setRowError]      = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const res = await fetch('/api/colour-store', { cache: 'no-store' }).then(r => r.json())
       if (res.ok) { setChemicals(res.chemicals || []); setStock(res.stock || []); setFuture(res.future || null) }
     } finally { setLoading(false) }
   }, [])
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   const latestByName = useMemo(() => {
     const m: Record<string, any> = {}
@@ -356,7 +359,8 @@ export default function ColourStoreIMSPage() {
           <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-tertiary)' }}>
             {chemicals.length} ITEMS · {allDates.length} DATES{latestDate ? ` · LATEST ${fmtDate(latestDate)}` : ''}
           </span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <RefreshStamp />
             <button onClick={exportCsv} style={{ ...CTRL, fontWeight: 600, cursor: 'pointer' }}>Export</button>
             <button onClick={() => setUploadOpen(o => !o)}
               style={{ ...CTRL, background: 'var(--text-primary)', color: 'var(--bg-primary)',

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { isBatchFinished } from '@/lib/batchStatus'
 import { collabBlockMessage } from '@/lib/collab'
 import { usePermission } from '@/lib/permissions'
@@ -90,8 +91,9 @@ export default function SplittedOrdersPage() {
   }
 
   // ── Load ──────────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const [batchRes, orderRes, repairRes, machRes] = await Promise.all([
         fetch('/api/batches', { cache: 'no-store' }).then(r => r.json()),
@@ -159,6 +161,7 @@ export default function SplittedOrdersPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   // ── Column resize ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -380,7 +383,8 @@ export default function SplittedOrdersPage() {
           <button className="small" onClick={() => setShowCols(v => !v)}>
             ⚙ Columns ({visible.length}/{cols.length})
           </button>
-          <button className="small" onClick={load}>⟳ Refresh</button>
+          <RefreshStamp />
+          <button className="small" onClick={() => load()}>⟳ Refresh</button>
         </div>
       </div>
 

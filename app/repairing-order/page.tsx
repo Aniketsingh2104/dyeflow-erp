@@ -4,6 +4,7 @@ import { SubProdCell } from '@/components/SubProd'
 import { useIsMobile } from '@/lib/useIsMobile'
 import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 import { useEffect, useState, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 
 function fmtDateTime(d: any) {
   if (!d) return '-'
@@ -63,8 +64,9 @@ export default function RepairingOrderPage() {
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const [repRes, supRes, machRes] = await Promise.all([
         fetch('/api/repairing-orders', { cache:'no-store' }).then(r=>r.json()),
@@ -78,6 +80,7 @@ export default function RepairingOrderPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   const filtered = records.filter(r => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
@@ -471,7 +474,8 @@ export default function RepairingOrderPage() {
             </div>
           )}
         </div>
-        <button className="small" onClick={load}>Refresh</button>
+        <RefreshStamp />
+        <button className="small" onClick={() => load()}>Refresh</button>
       </div>
 
       {toast && (

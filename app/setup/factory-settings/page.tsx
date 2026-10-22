@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { AUTO_REFRESH_OPTIONS, resetAutoRefreshCache } from '@/components/useAutoRefresh'
 
 interface FactorySettings {
   orderPrefix: string
@@ -16,11 +17,13 @@ interface FactorySettings {
   cycleTimeMin: string
   minLoadPct: string
   maxLoadPct: string
+  /** floor sheets re-fetch by themselves every N seconds (0 = off) — components/useAutoRefresh.tsx */
+  autoRefreshSec: number
 }
 
 const DEFAULTS: FactorySettings = {
   orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '', sundayHoliday: true,
-  elongationPct: '14', cycleTimeMin: '1.7', minLoadPct: '60', maxLoadPct: '80',
+  elongationPct: '14', cycleTimeMin: '1.7', minLoadPct: '60', maxLoadPct: '80', autoRefreshSec: 30,
 }
 
 // Defined OUTSIDE the page component — a component defined inside render is a
@@ -59,6 +62,7 @@ export default function FactorySettingsPage() {
       if (data.ok && data.value) {
         const s = { ...DEFAULTS, ...data.value }
         for (const k of ['elongationPct', 'cycleTimeMin', 'minLoadPct', 'maxLoadPct'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
+        s.autoRefreshSec = Number.isFinite(Number(s.autoRefreshSec)) ? Number(s.autoRefreshSec) : 30
         setForm(s)
       }
     } finally { setLoading(false) }
@@ -66,7 +70,7 @@ export default function FactorySettingsPage() {
 
   useEffect(() => { load() }, [load])
 
-  const handleChange = (field: keyof FactorySettings, value: string | boolean) => {
+  const handleChange = (field: keyof FactorySettings, value: string | boolean | number) => {
     setForm(prev => ({ ...prev, [field]: value }))
   }
 
@@ -88,6 +92,7 @@ export default function FactorySettingsPage() {
       const data = await res.json()
       if (!data.ok) throw new Error(data.error)
       setForm(clean)
+      resetAutoRefreshCache()
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
@@ -171,6 +176,21 @@ export default function FactorySettingsPage() {
         <Field label="Cycle time (min)" value={form.cycleTimeMin} onChange={v => handleChange('cycleTimeMin', v)} placeholder="1.7" note="Default 1.7" />
         <Field label="Min batch load %" value={form.minLoadPct} onChange={v => handleChange('minLoadPct', v)} placeholder="60" note="Default 60 % of the machine size (Capacity)" />
         <Field label="Max batch load %" value={form.maxLoadPct} onChange={v => handleChange('maxLoadPct', v)} placeholder="80" note="Default 80 % of the machine size (Capacity)" />
+      </div>
+
+      {/* Auto refresh */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Auto Refresh</div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 12 }}>
+          Floor sheets (Dashboard, Orders, Machine / FMS / Supervisor sheets, Faulty, FOB…) fetch fresh data by themselves while the tab is open,
+          and straight away when you come back to the tab. Paused while a dialog is open or you are typing. Setup pages still use the ↻ button.
+        </div>
+        <select value={form.autoRefreshSec} onChange={e => handleChange('autoRefreshSec', Number(e.target.value) as any)}
+          style={{ width: 240, padding: '8px 10px', fontSize: 13, border: '1px solid var(--border-medium)', borderRadius: 6, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+          {AUTO_REFRESH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>Default: every 30 seconds. Open tabs pick up a change within 10 minutes, or on their next page load.</div>
       </div>
 
       <div style={{ display: 'flex', gap: 10 }}>

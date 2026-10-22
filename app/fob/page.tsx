@@ -6,6 +6,7 @@ import MobileRecordCards, { mbtn } from '@/components/MobileRecordCards'
 import ReprocessModal from '@/components/ReprocessModal'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 
 // fob_records.status values (see lib/recordStatus.ts)
 const FOB_STATUS_LABEL: Record<string, string> = {
@@ -73,8 +74,9 @@ export default function FobPage() {
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3000) }
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent = auto-refresh: no spinner, the table just updates in place
+  const load = useCallback(async (silent: boolean | unknown = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const url = typeFilter !== 'all' ? `/api/fob?type=${typeFilter}` : '/api/fob'
       const res = await fetch(url, { cache:'no-store' }).then(r => r.json())
@@ -83,6 +85,7 @@ export default function FobPage() {
   }, [typeFilter])
 
   useEffect(() => { load() }, [load])
+  useAutoRefresh(() => load(true))
 
   const filtered = records.filter(r => {
     if (statusFilter !== 'all' && (r.status || 'open') !== statusFilter) return false
@@ -343,7 +346,8 @@ export default function FobPage() {
             </div>
           )}
         </div>
-        <button className="small" onClick={load}>⟳</button>
+        <RefreshStamp />
+        <button className="small" onClick={() => load()}>⟳</button>
       </div>
 
       {toast && (
