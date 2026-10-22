@@ -56,32 +56,70 @@ export default function MachineMasterPage() {
     else { setShowModal(false); setForm({ name: '', machine_type: '', capacity: 200, nozzles: '', reel_speed: '', section: 'Others' }); load() }
   }
 
+  // "23-10-2026" / "23/10/2026" / "2026-10-23" / Excel date → "2026-10-23"; anything else → null
+  const parseDate = (v: any): string | null => {
+    if (v == null || v === '') return null
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
+    const t = String(v).trim()
+    let m = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/)                    // dd-mm-yyyy
+    if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+    m = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)                        // yyyy-mm-dd
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+    m = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2})$/)                       // dd-mm-yy
+    if (m) return `20${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+    const d = new Date(t); return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+  }
+
+  // Columns are found by header name (any order). Machines that already exist
+  // are UPDATED with the columns present in the file; new names are created.
+  // Columns: Machine Name · Section · Machine Type · Capacity (Kg) · Nozzles ·
+  // Reel Speed (m/min) · Active (Yes/No) · Numbering Base Date (dd-mm-yyyy)
   const processImport = async (rows: any[][]) => {
     if (rows.length < 2) { setImportStatus('❌ File appears empty.'); return }
-    let header = rows[0].map((h: any) => String(h || '').trim().toLowerCase())
-    let nameIdx = header.findIndex(h => h.includes('name') || h.includes('jet') || h.includes('no'))
-    let typeIdx = header.findIndex(h => h.includes('type'))
-    let capIdx  = header.findIndex(h => h.includes('capacity') || h.includes('cap'))
-    if (nameIdx < 0) { nameIdx = 0; typeIdx = 1; capIdx = 2 }
+    const header = rows[0].map((h: any) => String(h || '').trim().toLowerCase())
+    const find = (...keys: string[]) => header.findIndex(h => keys.some(k => h.includes(k)))
+    let nameIdx = find('machine name', 'name')
+    if (nameIdx < 0) nameIdx = find('jet', 'machine')
+    const typeIdx = find('type')
+    const capIdx  = find('capacity', 'cap')
+    const secIdx  = find('section')
+    const nozIdx  = find('nozzle')
+    const reelIdx = find('reel', 'speed')
+    const actIdx  = find('active', 'enabled')
+    const dateIdx = find('numbering', 'base date')
+    if (nameIdx < 0) { setImportStatus('❌ No "Machine Name" column found in the first row.'); return }
 
-    let added = 0, skipped = 0
-    const existing = new Set(machines.map(m => m.name.toLowerCase()))
+    let added = 0, updated = 0, skipped = 0, badDates = 0
+    const byName = new Map(machines.map(m => [m.name.trim().toLowerCase(), m]))
+    const num = (v: string, int = false) => { const n = int ? parseInt(v) : parseFloat(v); return isFinite(n) ? n : null }
 
     for (let i = 1; i < rows.length; i++) {
-      const row = rows[i]
+      const row = rows[i] || []
       const get = (idx: number) => idx >= 0 && row[idx] != null ? String(row[idx]).trim() : ''
       const name = get(nameIdx)
-      if (!name || existing.has(name.toLowerCase())) { skipped++; continue }
-      const data = await api('create', {
-        name, machine_type: get(typeIdx), capacity: parseInt(get(capIdx)) || 200,
-        status: 'idle', is_active: true,
-      })
-      if (data.ok) { existing.add(name.toLowerCase()); added++ } else skipped++
+      if (!name) { skipped++; continue }
+      const patch: Record<string, any> = {}
+      if (typeIdx >= 0 && get(typeIdx)) patch.machine_type = get(typeIdx)
+      if (capIdx  >= 0 && num(get(capIdx)) !== null) patch.capacity = num(get(capIdx))
+      if (secIdx  >= 0 && get(secIdx)) patch.section = get(secIdx)
+      if (nozIdx  >= 0 && get(nozIdx) !== '') patch.nozzles = num(get(nozIdx), true)
+      if (reelIdx >= 0 && get(reelIdx) !== '') patch.reel_speed = num(get(reelIdx))
+      if (actIdx  >= 0 && get(actIdx)) patch.is_active = !/^(n|no|0|false|off)$/i.test(get(actIdx))
+      if (dateIdx >= 0 && get(dateIdx) !== '') { const d = parseDate(row[dateIdx]); if (d) patch.numbering_base_date = d; else badDates++ }
+
+      const ex = byName.get(name.toLowerCase())
+      if (ex) {
+        const r = await api('update', { id: ex.id, ...patch })
+        if (r.ok) updated++; else skipped++
+      } else {
+        const r = await api('create', { name, status: 'idle', is_active: true, capacity: 200, ...patch })
+        if (r.ok) { byName.set(name.toLowerCase(), r.data?.[0] || { id: '', name }); added++ } else skipped++
+      }
     }
-    setImportStatus(`✅ Imported ${added} machines${skipped ? `, ${skipped} skipped` : ''}`)
+    setImportStatus(`✅ Imported: ${added} new, ${updated} updated${skipped ? `, ${skipped} skipped` : ''}${badDates ? ` · ${badDates} base dates not understood (use dd-mm-yyyy)` : ''}`)
     load()
     if (fileRef.current) fileRef.current.value = ''
-    setTimeout(() => setImportStatus(''), 5000)
+    setTimeout(() => setImportStatus(''), 8000)
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,11 +154,12 @@ export default function MachineMasterPage() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>📄 Import Machines from Excel / CSV</div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            Columns: <strong>Name, Type, Capacity</strong>. Existing machines with same name are skipped.
+            Columns (first row, any order): <strong>Machine Name, Section, Machine Type, Capacity (Kg), Nozzles, Reel Speed (m/min), Active, Numbering Base Date</strong> (dd-mm-yyyy).
+            A machine that already exists is updated with the columns in the file; a new name is created.
           </div>
           <div style={{ background: 'var(--bg-secondary)', borderRadius: 5, padding: '4px 10px',
             fontSize: 11, fontFamily: 'monospace', display: 'inline-block', marginTop: 6 }}>
-            Example: Long Tube Jet 1, Jet, 500
+            Example: Long Tube Jet No. 28, LongJet, LJET, 500, 4, 280, Yes, 23-10-2026
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
