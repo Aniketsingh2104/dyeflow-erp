@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import Link from 'next/link'
 import { workRoute, TAIL_CODES } from '@/lib/routeTail'
 
 interface RouteTemplate { id: string; name: string; route: string[]; steps: any[]; updated_at: string }
@@ -18,6 +17,7 @@ export default function ProcessRouteMasterPage() {
   const [formName,    setFormName]    = useState('')
   const [formRoute,   setFormRoute]   = useState<string[]>([])
   const [toast,       setToast]       = useState('')
+  const [search,      setSearch]      = useState('')
 
   const load = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLoading(true)
@@ -140,12 +140,16 @@ export default function ProcessRouteMasterPage() {
     load(false)
   }
 
+  const q = search.trim().toLowerCase()
+  const filtered = templates.filter(t => !q || t.name.toLowerCase().includes(q)
+    || (t.route || []).some(c => c.toLowerCase().includes(q) || (procNameMap[c] || '').toLowerCase().includes(q)))
+
   const StepBadge = ({ code, name }: { code: string; name: string }) => (
-    <span title={name} style={{ background: '#E6F0FF', color: '#3366CC', padding: '3px 9px', borderRadius: 4, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{code}</span>
+    <span title={name} style={{ background: '#E6F0FF', color: '#3366CC', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{code}</span>
   )
 
   return (
-    <div className="content" style={{ maxWidth: 900, margin: '0 auto', padding: '16px 20px' }}>
+    <div className="content" style={{ padding: '16px 20px' }}>
 
       {toast && (
         <div style={{ position: 'fixed', top: 16, right: 20, zIndex: 9999, background: toast.startsWith('⚠') ? '#FEF3C7' : '#D1FAE5', border: `1px solid ${toast.startsWith('⚠') ? '#FCD34D' : '#6EE7B7'}`, borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: toast.startsWith('⚠') ? '#92400E' : '#065F46', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
@@ -153,83 +157,92 @@ export default function ProcessRouteMasterPage() {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>🛤 Process Route Master</div>
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-            <code style={{ fontSize: 11, background: 'var(--bg-secondary)', padding: '1px 6px', borderRadius: 4 }}>process_route_templates</code> · {templates.length} templates
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Process Route Master</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Ready-made process routes shown in the Route dropdown on supervisor sheets · {templates.length} templates
           </div>
         </div>
-        <Link href="/setup"><button className="small">← Setup</button></Link>
-      </div>
-
-      <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1E40AF' }}>
-        <strong>How it works:</strong> Templates appear in the Route dropdown on supervisor inbox pages.
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-        <button onClick={openNew} style={{ padding: '9px 18px', fontSize: 13, fontWeight: 700, border: 'none', borderRadius: 7, background: '#185FA5', color: '#fff', cursor: 'pointer' }}>
-          + New Template
-        </button>
-        <button onClick={importFromArticleMap} style={{ padding: '9px 18px', fontSize: 13, fontWeight: 600, border: '1px solid #185FA5', borderRadius: 7, background: '#EFF6FF', color: '#185FA5', cursor: 'pointer' }}>
-          ↓ Import from Article Map ({Object.keys(articleMap).length} articles)
-        </button>
-        <button className="small" onClick={() => load(false)}>↻</button>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-tertiary)', alignSelf: 'center' }}>
-          {templates.length} templates
-        </span>
-      </div>
-
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>Loading…</div>
-      ) : templates.length === 0 ? (
-        <div style={{ background: 'var(--bg-primary)', border: '2px dashed var(--border-medium)', borderRadius: 12, padding: 48, textAlign: 'center' }}>
-          <div style={{ fontSize: 36, marginBottom: 10 }}>🛤</div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>No route templates yet</div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search template or process…"
+            style={{ width: 280, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+          <button onClick={importFromArticleMap} style={{ padding: '9px 14px', fontSize: 14, fontWeight: 700, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer' }}>
+            ↓ Import from Article Map ({Object.keys(articleMap).length})
+          </button>
+          <button className="small" onClick={() => load(false)} title="Refresh" style={{ padding: '9px 12px', fontSize: 14 }}>↻</button>
+          <button className="primary" onClick={openNew} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ New Template</button>
         </div>
-      ) : (
-        <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead style={{ background: 'var(--bg-secondary)' }}>
-              <tr>
-                {['#', 'Template Name', 'Route (in order)', 'Steps', 'Actions'].map(h => (
-                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {templates.map((t, i) => {
-                const route = t.route || t.steps?.map((s: any) => s.processCode) || []
-                const steps = t.steps || route.map((c: string) => ({ processCode: c, name: procNameMap[c] || c }))
-                return (
-                  <tr key={t.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '10px 14px', color: 'var(--text-tertiary)', fontWeight: 600 }}>{i + 1}</td>
-                    <td style={{ padding: '10px 14px', fontWeight: 700 }}>{t.name}</td>
-                    <td style={{ padding: '10px 14px' }}>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {steps.map((s: any, si: number) => (
-                          <span key={si} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <StepBadge code={s.processCode} name={s.name} />
-                            {si < steps.length - 1 && <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>→</span>}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 14px', textAlign: 'center', color: 'var(--text-secondary)' }}>{steps.length}</td>
-                    <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                      <button className="xs" style={{ marginRight: 6 }} onClick={() => openEdit(t)}>Edit</button>
-                      <button className="xs danger" onClick={() => deleteTemplate(t.id, t.name)}>Remove</button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <div style={{ padding: '8px 14px', borderTop: '1px solid var(--border-light)', fontSize: 11, color: 'var(--text-tertiary)' }}>
-            {templates.length} templates · process_route_templates · Supabase
+      </div>
+
+      {/* Count cards */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[['Templates', templates.length, 'var(--accent)'],
+          ['Processes available', processList.length, '#3366CC'],
+          ['Article routes', Object.keys(articleMap).length, 'var(--text-tertiary)'],
+          ['Longest route', templates.reduce((m, t) => Math.max(m, (t.route || []).length), 0) + ' steps', '#B45309']].map(([label, value, color]) => (
+          <div key={String(label)} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '10px 16px', minWidth: 140 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: String(color) }}>{value}</div>
           </div>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900 }}>
+          <colgroup>
+            <col style={{ width: 60 }} /><col style={{ width: '26%' }} /><col /><col style={{ width: 90 }} /><col style={{ width: 170 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
+            <tr>
+              {['#', 'Template Name', 'Route (in order)', 'Steps', 'Actions'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: h === 'Steps' ? 'center' : 'left', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+                {templates.length === 0 ? 'No route templates yet. Click "+ New Template" or import from the Article Map.' : 'No results.'}
+              </td></tr>
+            ) : filtered.map((t, i) => {
+              const route = t.route || t.steps?.map((s: any) => s.processCode) || []
+              const steps = t.steps || route.map((c: string) => ({ processCode: c, name: procNameMap[c] || c }))
+              return (
+                <tr key={t.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
+                  <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{i + 1}</td>
+                  <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.name}>{t.name}</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {steps.map((s: any, si: number) => (
+                        <span key={si} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <StepBadge code={s.processCode} name={s.name} />
+                          {si < steps.length - 1 && <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>→</span>}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: 'var(--text-secondary)' }}>{steps.length}</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="small" onClick={() => openEdit(t)}>Edit</button>
+                      <button className="small danger" onClick={() => deleteTemplate(t.id, t.name)}>Remove</button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)', position: 'sticky', bottom: 0, background: 'var(--bg-primary)' }}>
+          Showing {filtered.length} of {templates.length}
         </div>
-      )}
+      </div>
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
