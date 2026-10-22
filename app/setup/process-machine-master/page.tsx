@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { workRoute, routeHasQa, TAIL_CODES } from '@/lib/routeTail'
+import { usePagination, PaginationBar } from '@/components/Pagination'
 
 interface ProcessDef { id: string; code: string; name: string; is_enabled: boolean; display_order: number }
 
@@ -141,6 +142,8 @@ export default function ProcessMachineMasterPage() {
   const total = Object.keys(rules).length
   const qaCount = Object.keys(rules).filter(a => qaMap[a]).length
   const routeCount = new Set(Object.values(rules).map(r => r.join('/'))).size
+  const pg = usePagination(ruleEntries, 'dyeflow_pg_article_route')
+  useEffect(() => { pg.resetPage() }, [search, qaFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
@@ -207,9 +210,9 @@ export default function ProcessMachineMasterPage() {
               <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
                 {total === 0 ? 'No rules yet. Upload a JSON file or click "+ Add Rule".' : 'No results.'}
               </td></tr>
-            ) : ruleEntries.map(([art, route], i) => (
+            ) : pg.rows.map(([art, route], i) => (
               <tr key={art} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
-                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{i + 1}</td>
+                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{pg.start + i + 1}</td>
                 <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15, textTransform: 'uppercase', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={art}>{art}</td>
                 <td style={{ padding: '12px 16px' }}>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -239,9 +242,7 @@ export default function ProcessMachineMasterPage() {
             ))}
           </tbody>
         </table>
-        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)', position: 'sticky', bottom: 0, background: 'var(--bg-primary)' }}>
-          Showing {ruleEntries.length} of {total}
-        </div>
+        <PaginationBar {...pg} rowsShown={pg.rows.length} />
       </div>
 
       {showModal && (

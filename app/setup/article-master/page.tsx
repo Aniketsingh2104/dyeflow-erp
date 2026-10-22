@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { usePagination, PaginationBar } from '@/components/Pagination'
 
 interface Mapping { id: string; article: string; supervisor: string; updated_at: string }
 
@@ -194,6 +195,8 @@ export default function ArticleMasterPage() {
     const matchSup    = !filterSup || m.supervisor === filterSup
     return matchSearch && matchSup
   })
+  const pg = usePagination(filtered, 'dyeflow_pg_article_sup')
+  useEffect(() => { pg.resetPage() }, [search, filterSup]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const supCounts: Record<string, number> = {}
   mappings.forEach(m => { supCounts[m.supervisor] = (supCounts[m.supervisor] || 0) + 1 })
@@ -274,9 +277,9 @@ export default function ArticleMasterPage() {
               <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
                 {search ? `No articles matching "${search}"` : mappings.length === 0 ? 'No mappings yet. Click "+ Add Mapping" or import a JSON / Excel file.' : 'No results.'}
               </td></tr>
-            ) : filtered.map((m, i) => (
+            ) : pg.rows.map((m, i) => (
               <tr key={m.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
-                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{i + 1}</td>
+                <td style={{ padding: '12px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{pg.start + i + 1}</td>
                 <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.article}>{m.article}</td>
                 <td style={{ padding: '12px 16px' }}>
                   <span style={{ background: supColor(m.supervisor) + '18', color: supColor(m.supervisor), padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>
@@ -293,9 +296,7 @@ export default function ArticleMasterPage() {
             ))}
           </tbody>
         </table>
-        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-tertiary)', position: 'sticky', bottom: 0, background: 'var(--bg-primary)' }}>
-          Showing {filtered.length} of {mappings.length}
-        </div>
+        <PaginationBar {...pg} rowsShown={pg.rows.length} />
       </div>
 
       {/* Modal */}
