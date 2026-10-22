@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useIsMobile } from '@/lib/useIsMobile'
 
 interface Batch {
   batchId: string
@@ -55,6 +56,7 @@ const groupByColorProcess = (batches: Batch[]) => {
 }
 
 export default function BatchCollaborationModal({ isOpen, onClose, availableBatches, machineCapacity, machineName, onConfirm }: BatchCollaborationModalProps) {
+  const isMobile = useIsMobile()   // phone: full screen, the two columns stack
   const [collabGroups,    setCollabGroups]    = useState<CollabGroup[]>([])
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set())
   const [selectedProcess, setSelectedProcess] = useState<string>('')
@@ -112,12 +114,12 @@ export default function BatchCollaborationModal({ isOpen, onClose, availableBatc
   }
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }}>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding: isMobile ? 0 : 20 }}>
       {/* Modal box — fixed height so inner panels can scroll */}
-      <div style={{ background:'white', borderRadius:12, width:'100%', maxWidth:1100, height:'88vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 25px -5px rgba(0,0,0,0.1)' }}>
+      <div style={{ background:'white', borderRadius: isMobile ? 0 : 12, width:'100%', maxWidth:1100, height: isMobile ? '100dvh' : '88vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 25px -5px rgba(0,0,0,0.1)' }}>
 
         {/* ── Header (fixed) ─────────────────────────────────────────────── */}
-        <div style={{ padding:'16px 24px', borderBottom:'1px solid #E2E8F0', flexShrink:0, display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
+        <div style={{ padding: isMobile ? '12px 14px' : '16px 24px', borderBottom:'1px solid #E2E8F0', flexShrink:0, display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
           <div>
             <div style={{ fontSize:17, fontWeight:700 }}>Review batch collaboration — {machineName}</div>
             <div style={{ fontSize:12, color:'#718096', marginTop:2 }}>Capacity: <strong>{machineCapacity} Kg</strong> · Target: <strong>{targetKg} Kg (80%)</strong></div>
@@ -127,7 +129,7 @@ export default function BatchCollaborationModal({ isOpen, onClose, availableBatc
         </div>
 
         {/* ── Body (fills remaining height, no overflow) ─────────────────── */}
-        <div style={{ flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, padding:20, overflow:'hidden', minHeight:0 }}>
+        <div style={{ flex:1, display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gridTemplateRows: isMobile ? '1fr auto' : undefined, gap: isMobile ? 10 : 20, padding: isMobile ? 10 : 20, overflow: isMobile ? 'auto' : 'hidden', minHeight:0 }}>
 
           {/* ── LEFT COLUMN ── */}
           <div style={{ display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0 }}>

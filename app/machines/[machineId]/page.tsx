@@ -15,6 +15,8 @@ import { isBatchFinished } from '@/lib/batchStatus'
 import { sameCode } from '@/lib/processCodes'
 import { collabBlockMessage } from '@/lib/collab'
 import { markProcessDone } from '@/lib/db'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileMachineSheet from '@/components/MobileMachineSheet'
 
 // Helper functions
 const getShadeTypeByColor = (color: string): string => {
@@ -121,6 +123,7 @@ export default function MachinePage() {
   const [showColumnMenu, setShowColumnMenu] = useState(false)
   // finished rows (this process done) are hidden unless asked for
   const [showDone, setShowDone] = useState(false)
+  const isMobile = useIsMobile()
   const [rawBatches, setRawBatches] = useState<any[]>([])   // every batch — for the collab check
   const enterSaved = useRef<Set<string>>(new Set())          // Enter saved this cell — skip the blur save
   
@@ -629,6 +632,30 @@ export default function MachinePage() {
   const numberedBatches = batches.filter(b => b.planNumber && b.planNumber > 0).length
   const unnumberedBatches = batches.filter(b => !b.procDone && !(b.planNumber > 0)).length
   const doneRows = batches.filter(b => b.procDone).length
+
+  // ── Phone: card layout, same data and actions (components/MobileMachineSheet.tsx)
+  if (isMobile) {
+    return (
+      <>
+        <MobileMachineSheet machine={machine} rows={filteredBatches} canEdit={canEdit}
+          shadeFilter={shadeFilter} setShadeFilter={setShadeFilter} showDone={showDone} setShowDone={setShowDone}
+          counts={{ total: totalBatches, active: activeBatches, numbered: numberedBatches, unnumbered: unnumberedBatches, done: doneRows }}
+          onPlanNumber={(row, v) => updatePlanNumber(row.id, row.currentProcess, v, row.date_calc_plan_raw)}
+          onDone={handleDone} onFaulty={row => toggleFaulty(row.id, row.orderId, row.faulty || false)}
+          onRunNumbering={runNumbering} onRefresh={loadData} />
+        <BatchCollaborationModal
+          isOpen={showCollabModal}
+          onClose={() => setShowCollabModal(false)}
+          availableBatches={collabBatches.map(b => ({
+            batchId: b.rowKey || b.batchId, batchIdLabel: withSubProd(b.batchId, b.subProdNo), orderNumber: b.orderNo, orderId: b.orderId,
+            color: b.color, processCode: b.currentProcess, processName: b.processName, kg: parseFloat(b.kg) || 0, type: b.type, note: b.note || '' }))}
+          machineCapacity={machine?.capacity || 500}
+          machineName={machine?.name || machineId}
+          onConfirm={handleCollaborationConfirm}
+        />
+      </>
+    )
+  }
 
   return (
     <div className="content">
