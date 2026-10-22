@@ -275,7 +275,7 @@ export default function Navigation() {
         { name: 'Customer Master', path: '/setup/customer-master' },
         { name: 'Article→Supervisor Map', path: '/setup/article-master' },
         { name: 'Process Route Master', path: '/setup/process-route-master' },
-        { name: 'Process & Machine Map', path: '/setup/process-machine-master' },
+        { name: 'Article → Process Route Rule', path: '/setup/process-machine-master' },
         { name: 'Process Master', path: '/setup/process-master' },
         { name: 'Machine Master', path: '/setup/machine-master' },
         { name: 'User Management', path: '/setup/user-management' },

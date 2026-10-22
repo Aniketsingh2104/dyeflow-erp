@@ -35,7 +35,7 @@ const GROUPS: { label: string; items: Master[] }[] = [
     items: [
       { path: '/setup/article-master',         icon: '🧵', title: 'Article → Supervisor Map', desc: 'Which supervisor gets each article automatically', api: '/api/article-supervisor-map' },
       { path: '/setup/process-route-master',   icon: '🗺', title: 'Process Route Master',     desc: 'Saved route templates', api: '/api/route-templates' },
-      { path: '/setup/process-machine-master', icon: '🔗', title: 'Article → Route Map',      desc: 'Default process route for each article' },
+      { path: '/setup/process-machine-master', icon: '🔗', title: 'Article → Process Route Rule', desc: 'Default process route for each article' },
     ],
   },
   {

@@ -97,7 +97,7 @@ export const STATIC_PAGES: PageDef[] = [
   { path: '/setup/customer-master',       label: 'Customer Master',         group: 'Setup' },
   { path: '/setup/article-master',        label: 'Article→Supervisor Map',  group: 'Setup' },
   { path: '/setup/process-route-master',  label: 'Process Route Master',    group: 'Setup' },
-  { path: '/setup/process-machine-master',label: 'Process & Machine Map',   group: 'Setup' },
+  { path: '/setup/process-machine-master',label: 'Article → Process Route Rule', group: 'Setup' },
   { path: '/setup/process-master',        label: 'Process Master',          group: 'Setup' },
   { path: '/setup/machine-master',        label: 'Machine Master',          group: 'Setup' },
   { path: '/setup/user-management',       label: 'User Management',         group: 'Setup' },

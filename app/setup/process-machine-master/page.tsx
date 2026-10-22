@@ -148,7 +148,7 @@ export default function ProcessMachineMasterPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>Article → Process Route</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Article → Process Route Rule</div>
           <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
             Default route suggested when an order of this article is assigned · QA → Packing → Dispatch are added by the system
           </div>
