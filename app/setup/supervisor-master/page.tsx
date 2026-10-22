@@ -66,61 +66,76 @@ export default function SupervisorMasterPage() {
   )
 
   return (
-    <div style={{ padding: '16px 20px', maxWidth: 1100, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+    <div className="content" style={{ padding: '16px 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>Supervisor Master</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Supervisor Master</div>
           <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
-            Manage supervisor details · {supervisors.length} total
+            Supervisors and the machine sections their sheets open with
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <input type="text" placeholder="Search supervisors…" value={search} onChange={e => setSearch(e.target.value)}
+            style={{ width: 280, padding: '9px 12px', fontSize: 14,
+              border: '1px solid var(--border-medium)', borderRadius: 8,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
+          <button className="primary" onClick={openAdd} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ Add Supervisor</button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-        <input type="text" placeholder="Search supervisors…" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ flex: 1, maxWidth: 320, padding: '7px 10px', fontSize: 13,
-            border: '1px solid var(--border-medium)', borderRadius: 6,
-            background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
-        <button className="primary" onClick={openAdd}>+ Add Supervisor</button>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[['Supervisors', supervisors.length, 'var(--accent)'],
+          ...SECTIONS.map(sec => [sec, supervisors.filter(x => (x.default_sections || []).includes(sec)).length, '#3366CC'] as [string, number, string]),
+          ['All machines', supervisors.filter(x => !(x.default_sections || []).length).length, 'var(--text-tertiary)']].map(([label, value, color]) => (
+          <div key={String(label)} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10,
+            padding: '10px 16px', minWidth: 120 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: String(color) }}>{value}</div>
+          </div>
+        ))}
       </div>
 
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900 }}>
+          <colgroup>
+            <col style={{ width: '22%' }} /><col style={{ width: '26%' }} /><col style={{ width: '18%' }} />
+            <col style={{ width: '12%' }} /><col style={{ width: '10%' }} /><col style={{ width: '12%' }} />
+          </colgroup>
           <thead style={{ background: 'var(--bg-secondary)' }}>
             <tr>
               {['Name','Machine Sections','Email','Phone','Created','Actions'].map(h => (
-                <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700,
-                  color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
-                  borderBottom: '1px solid var(--border-light)' }}>{h}</th>
+                <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700,
+                  color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em',
+                  borderBottom: '2px solid var(--border-light)' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading…</td></tr>
+              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
                 {supervisors.length === 0 ? 'No supervisors yet. Click "+ Add Supervisor" to create one.' : 'No results.'}
               </td></tr>
             ) : (
               filtered.map((s, i) => (
                 <tr key={s.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                   borderBottom: '1px solid var(--border-light)' }}>
-                  <td style={{ padding: '12px 14px', fontWeight: 600, fontSize: 13 }}>{s.name}</td>
-                  <td style={{ padding: '12px 14px', fontSize: 12 }}>
+                  <td style={{ padding: '14px 16px', fontWeight: 700, fontSize: 15 }}>{s.name}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 13 }}>
                     {(s.default_sections || []).length
-                      ? (s.default_sections || []).map(x => <span key={x} style={{ background: '#E6F0FF', color: '#3366CC', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600, marginRight: 4 }}>{x}</span>)
+                      ? (s.default_sections || []).map(x => <span key={x} style={{ display: 'inline-block', background: '#E6F0FF', color: '#3366CC', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700, marginRight: 6, marginBottom: 2 }}>{x}</span>)
                       : <span style={{ color: 'var(--text-tertiary)' }}>All machines</span>}
                   </td>
-                  <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>{s.email || '-'}</td>
-                  <td style={{ padding: '12px 14px', fontSize: 12 }}>{s.phone || '-'}</td>
-                  <td style={{ padding: '12px 14px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                  <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.email || '-'}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 13 }}>{s.phone || '-'}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text-tertiary)' }}>
                     {s.created_at ? new Date(s.created_at).toLocaleDateString('en-GB') : '-'}
                   </td>
-                  <td style={{ padding: '12px 14px' }}>
+                  <td style={{ padding: '14px 16px' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="xs" onClick={() => openEdit(s)}>Edit</button>
-                      <button className="xs danger" onClick={() => del(s.id, s.name)}>Delete</button>
+                      <button className="small" onClick={() => openEdit(s)}>Edit</button>
+                      <button className="small danger" onClick={() => del(s.id, s.name)}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -132,7 +147,7 @@ export default function SupervisorMasterPage() {
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
             <div className="modal-header">
               <span className="modal-title">{editing ? 'Edit Supervisor' : 'Add New Supervisor'}</span>
               <button className="small" onClick={() => setShowModal(false)}>✕</button>
@@ -151,13 +166,21 @@ export default function SupervisorMasterPage() {
               <div className="form-group">
                 <label>Machine Sections (shown first on this supervisor's sheet)</label>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {SECTIONS.map(x => (
-                    <label key={x} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={form.sections.includes(x)} onChange={() => toggleSection(x)} style={{ width: 'auto' }} /> {x}
-                    </label>
-                  ))}
+                  {SECTIONS.map(x => {
+                    const on = form.sections.includes(x)
+                    return (
+                      <button key={x} type="button" onClick={() => toggleSection(x)}
+                        style={{ padding: '7px 14px', borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                          border: '1px solid ' + (on ? '#3366CC' : 'var(--border-medium)'),
+                          background: on ? '#3366CC' : 'var(--bg-primary)', color: on ? '#fff' : 'var(--text-secondary)' }}>
+                        {on ? '✓ ' : ''}{x}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>None ticked = all machines are listed.</div>
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 6 }}>
+                  {form.sections.length ? `Sheet opens with ${form.sections.join(' + ')} machines; other sections can still be ticked per batch.` : 'None selected = every machine is listed.'}
+                </div>
               </div>
               <div className="form-group">
                 <label>Phone (Optional)</label>

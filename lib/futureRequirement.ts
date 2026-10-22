@@ -10,6 +10,7 @@
 import { dbSelectAll } from '@/lib/supabase'
 import { canonicalCode } from '@/lib/processCodes'
 import { isBatchFinished } from '@/lib/batchStatus'
+import { labNoKey } from '@/lib/labNo'
 
 export interface FutureLine { kg: number; orders: { order_number: string; kg: number; lab_no: string }[] }
 export interface FutureResult {
@@ -32,7 +33,8 @@ export function perKg(qty: any): number | null {
 }
 
 const key = (v: any) => String(v ?? '').trim().toLowerCase()
-const labKey = (v: any) => String(v ?? '').replace(/\s+/g, ' ').trim().toUpperCase()
+// "L-1850" / "L1850" / "l-1850/" are the same Lab No. (lib/labNo.ts)
+const labKey = (v: any) => labNoKey(v)
 
 export async function computeFutureRequirement(masterNames: string[]): Promise<FutureResult> {
   const master = new Set(masterNames.map(key))
@@ -79,7 +81,7 @@ export async function computeFutureRequirement(masterNames: string[]): Promise<F
       const kg = Math.round(g * remaining * 1000) / 1000
       const line = out.byName[nk] || (out.byName[nk] = { kg: 0, orders: [] })
       line.kg = Math.round((line.kg + kg) * 1000) / 1000
-      line.orders.push({ order_number: o.order_number, kg: Math.round(remaining * 100) / 100, lab_no: ln })
+      line.orders.push({ order_number: o.order_number, kg: Math.round(remaining * 100) / 100, lab_no: String(o.lab_no).trim() })
     }
   }
   out.unmatchedNames = [...unmatched].sort()

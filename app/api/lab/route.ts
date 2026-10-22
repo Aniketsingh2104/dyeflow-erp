@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guard } from '@/lib/access'
 import { dbSelect, dbSelectAll, dbInsert, dbUpdate, dbDelete, sb, auditLog, currentUsername } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
+import { labNoKey } from '@/lib/labNo'
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'lab', 'GET'); if (g.deny) return g.deny }
@@ -29,12 +30,11 @@ export async function GET(req: NextRequest) {
 
   // Manual recipes by Lab No. (Lab → Receipe page "Add Recipe"); ?lab_no=… → that one
   if (type === 'recipes') {
-    const query: Record<string, string> = { order: 'updated_at.desc' }
-    const labNo = searchParams.get('lab_no')
-    if (labNo) query['lab_no'] = `eq.${labNo.trim().toUpperCase()}`
-    const { data, error } = await dbSelectAll<any>('lab_recipes', query)
+    const { data, error } = await dbSelectAll<any>('lab_recipes', { order: 'updated_at.desc' })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, data })
+    // ?lab_no=L1850 also finds "L-1850" (only letters and digits count — lib/labNo.ts)
+    const want = labNoKey(searchParams.get('lab_no'))
+    return NextResponse.json({ ok: true, data: want ? (data || []).filter((r: any) => labNoKey(r.lab_no) === want) : data })
   }
 
   if (type === 'issues') {
@@ -242,10 +242,14 @@ export async function POST(req: NextRequest) {
     if (!recipe.length) return NextResponse.json({ ok: false, error: 'Add at least one colour / chemical.' }, { status: 400 })
     const text = (v: any, n = 120) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
     const who = await currentUsername()
-    const { data: ex } = await dbSelect('lab_recipes', { lab_no: `eq.${labNo}`, limit: '1' }, 'id,recipe')
-    const existing = ex?.[0]
-    if (existing && existing.id !== id && !payload.replace) {
-      return NextResponse.json({ ok: false, exists: true, error: `${labNo} already has a recipe.` }, { status: 409 })
+    // the same number written differently ("L1850" vs "L-1850") counts as the same recipe
+    const { data: allRec } = await dbSelectAll<any>('lab_recipes', {}, 'id,lab_no,recipe')
+    const existing = (allRec || []).find((r: any) => labNoKey(r.lab_no) === labNoKey(labNo))
+    if (existing && id && existing.id !== id) {
+      return NextResponse.json({ ok: false, error: `${existing.lab_no} already has its own recipe — edit that one instead.` }, { status: 409 })
+    }
+    if (existing && !id && !payload.replace) {
+      return NextResponse.json({ ok: false, exists: true, error: `${existing.lab_no} already has a recipe${existing.lab_no !== labNo ? ` (same number as ${labNo})` : ''}.` }, { status: 409 })
     }
     const row = { lab_no: labNo, party: text(payload.party), shade: text(payload.shade), article: text(payload.article),
       remarks: text(payload.remarks, 500), recipe, updated_by: who, updated_at: new Date().toISOString() }
