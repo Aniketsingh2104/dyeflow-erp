@@ -4,6 +4,8 @@ import { dateColFor } from '@/lib/processCodes'
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { getCollabInfo } from '@/lib/collab'
 import { SubProdCell } from '@/components/SubProd'
+import { useIsMobile } from '@/lib/useIsMobile'
+import MobileFirstProcess from '@/components/MobileFirstProcess'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 const COLUMNS = [
@@ -75,6 +77,7 @@ export default function FirstProcessBatchPage() {
   )
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
   const [sending, setSending] = useState(false)
+  const isMobile = useIsMobile()
   const [resizing, setResizing] = useState<{key:string;startX:number;startW:number}|null>(null)
   const colMenuRef = useRef<HTMLDivElement>(null)
 
@@ -283,6 +286,12 @@ export default function FirstProcessBatchPage() {
       Loading…
     </div>
   )
+
+  // ── Phone: card layout (components/MobileFirstProcess.tsx)
+  if (isMobile) {
+    return <MobileFirstProcess rows={filtered} allBatches={allBatchesRaw} selected={selectedBatches} setSelected={setSelectedBatches}
+      sending={sending} urgency={getUrgency} onSend={handleSendToProcess} onRefresh={load} />
+  }
 
   return (
     <div className="content" style={{ display:'flex', flexDirection:'column',
