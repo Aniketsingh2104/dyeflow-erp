@@ -36,8 +36,8 @@ export default function SheetPageContent() {
   const [rows,            setRows]            = useState<any[]>([])
   const [columnWidths,    setColumnWidths]    = useState<number[]>(SHEET_COL_WIDTH_DEFAULTS)
   const [resizingColumn,  setResizingColumn]  = useState<number|null>(null)
-  const [resizeStartX,    setResizeStartX]    = useState(0)
-  const [resizeStartWidth,setResizeStartWidth]= useState(0)
+  const resizeRef = useRef<{ col: number; startX: number; startW: number } | null>(null)
+  const widthsKey = `dyeflow_sheet_colw_${sheetId || 'x'}`
   const [selectedCell,    setSelectedCell]    = useState<{row:number;col:number}|null>(null)
   const [selectedRange,   setSelectedRange]   = useState<CellRange|null>(null)
   const [anchorCell,      setAnchorCell]      = useState<{row:number;col:number}|null>(null)
@@ -229,15 +229,31 @@ export default function SheetPageContent() {
     else if (r > c.scrollLeft+c.clientWidth) c.scrollLeft = r-c.clientWidth+50
   }, [])
 
+  // Column widths: dragged on the header border, remembered per sheet in this
+  // browser, and never changed by pasting — long text wraps inside the cell.
   useEffect(() => {
-    const up = () => { setIsSelecting(false); setSelectionStart(null); setResizingColumn(null) }
-    window.addEventListener('mouseup', up); return () => window.removeEventListener('mouseup', up)
-  }, [])
-
+    try {
+      const saved = JSON.parse(localStorage.getItem(widthsKey) || 'null')
+      if (Array.isArray(saved) && saved.length) setColumnWidths(SHEET_COL_WIDTH_DEFAULTS.map((d, i) => (typeof saved[i] === 'number' && saved[i] >= 40 ? saved[i] : d)))
+    } catch {}
+  }, [widthsKey])
   useEffect(() => {
-    const mm = (e: MouseEvent) => { if (resizingColumn!==null){ const w=Math.max(50,resizeStartWidth+(e.clientX-resizeStartX)); setColumnWidths(p=>{const n=[...p];n[resizingColumn]=w;return n}) } }
-    if (resizingColumn!==null){window.addEventListener('mousemove',mm);return ()=>window.removeEventListener('mousemove',mm)}
-  }, [resizingColumn,resizeStartX,resizeStartWidth])
+    const mm = (e: MouseEvent) => {
+      const r = resizeRef.current; if (!r) return
+      const w = Math.max(40, r.startW + (e.clientX - r.startX))
+      setColumnWidths(p => { if (p[r.col] === w) return p; const n = [...p]; n[r.col] = w; return n })
+    }
+    const up = () => {
+      setIsSelecting(false); setSelectionStart(null)
+      if (resizeRef.current) {
+        resizeRef.current = null; setResizingColumn(null)
+        document.body.style.cursor = ''; document.body.style.userSelect = ''
+        setColumnWidths(p => { try { localStorage.setItem(widthsKey, JSON.stringify(p)) } catch {} return p })
+      }
+    }
+    window.addEventListener('mousemove', mm); window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', up) }
+  }, [widthsKey])
 
   const extendSel = (nr: number, nc: number) => { const a=anchorCell||selectedCell;if(!a)return;if(!anchorCell)setAnchorCell(a);setSelectedRange({startRow:Math.min(a.row,nr),startCol:Math.min(a.col,nc),endRow:Math.max(a.row,nr),endCol:Math.max(a.col,nc)});setSelectedCell({row:nr,col:nc}) }
   const addUndo  = useCallback(()=>{setUndoStack(p=>[...p.slice(-19),rows]);setRedoStack([])}, [rows])
@@ -350,7 +366,8 @@ export default function SheetPageContent() {
 
   useEffect(()=>{if(editingCell&&inputRef.current){inputRef.current.focus();inputRef.current.select()}},[editingCell])
 
-  const handleColResize=(ci:number,e:React.MouseEvent)=>{e.preventDefault();e.stopPropagation();setResizingColumn(ci);setResizeStartX(e.clientX);setResizeStartWidth(columnWidths[ci])}
+  const handleColResize=(ci:number,e:React.MouseEvent)=>{e.preventDefault();e.stopPropagation();resizeRef.current={col:ci,startX:e.clientX,startW:columnWidths[ci]};setResizingColumn(ci);document.body.style.cursor='col-resize';document.body.style.userSelect='none'}
+  const resetColWidths=()=>{setColumnWidths(SHEET_COL_WIDTH_DEFAULTS);try{localStorage.removeItem(widthsKey)}catch{}}
   const onMouseDown=(r:number,c:number)=>{if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setIsSelecting(true);setSelectionStart({row:r,col:c});setSelectedCell({row:r,col:c});setSelectedRange(null)}
   const onMouseEnter=(r:number,c:number)=>{if(!isSelecting||!selectionStart||isCheckboxColumn(c)||isReadonlyColumn(c))return;setSelectedRange({startRow:Math.min(selectionStart.row,r),startCol:Math.min(selectionStart.col,c),endRow:Math.max(selectionStart.row,r),endCol:Math.max(selectionStart.col,c)})}
   const onClick=(r:number,c:number)=>{if(editingCell?.row===r&&editingCell?.col===c)return;if(isCheckboxColumn(c)||isReadonlyColumn(c))return;setSelectedCell({row:r,col:c});setSelectedRange(null);setAnchorCell(null)}
@@ -442,6 +459,7 @@ export default function SheetPageContent() {
           <button className="small" onClick={deleteRow} disabled={!selectedCell}>Delete Row</button>
           <span style={{width:1,height:22,background:'#ddd',margin:'0 2px'}}/>
           <button className="small" onClick={()=>setShowFind(!showFind)}>Find</button>
+          <button className="small" onClick={resetColWidths} title="Put all column widths back to default">Reset widths</button>
         </div>
 
         {showFind&&(
@@ -453,7 +471,11 @@ export default function SheetPageContent() {
 
         {/* Grid */}
         <div ref={gridRef} style={{width:'100%',maxHeight:'calc(100vh - 270px)',overflow:'auto',border:'1px solid #ddd',borderRadius:6,background:'#fff',userSelect:'none'}}>
-          <table style={{borderCollapse:'separate',borderSpacing:0,tableLayout:'fixed',width:'max-content',fontSize:12}}>
+          <table style={{borderCollapse:'separate',borderSpacing:0,tableLayout:'fixed',width:46+columnWidths.reduce((a,b)=>a+b,0),fontSize:12}}>
+            <colgroup>
+              <col style={{width:46}}/>
+              {columnWidths.map((w,i)=><col key={i} style={{width:w}}/>)}
+            </colgroup>
             <thead>
               <tr>
                 <th style={{...STH,width:46,position:'sticky',left:0,top:0,zIndex:5}}/>
@@ -462,10 +484,10 @@ export default function SheetPageContent() {
               <tr>
                 <th style={{...STH2,width:46,position:'sticky',left:0,top:22,zIndex:5}}/>
                 {SHEET_COL_HEADERS.map((h,i)=>(
-                  <th key={i} style={{...STH2,width:columnWidths[i],position:'sticky',top:22,zIndex:3}} title={h}>
+                  <th key={i} style={{...STH2,width:columnWidths[i],position:'sticky',top:22,zIndex:3,overflow:'visible'}} title={h}>
                     <div style={{position:'relative',display:'flex',alignItems:'center'}}>
                       <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{h}</span>
-                      <div onMouseDown={e=>handleColResize(i,e)} style={{position:'absolute',right:-3,top:-4,bottom:-4,width:6,cursor:'col-resize',zIndex:10}}/>
+                      <div onMouseDown={e=>handleColResize(i,e)} onDoubleClick={e=>{e.stopPropagation();setColumnWidths(p=>{const n=[...p];n[i]=SHEET_COL_WIDTH_DEFAULTS[i];try{localStorage.setItem(widthsKey,JSON.stringify(n))}catch{}return n})}} title="Drag to resize · double-click to reset" style={{position:'absolute',right:-6,top:-6,bottom:-6,width:10,cursor:'col-resize',zIndex:10,background:resizingColumn===i?'#137E43':'transparent'}}/>
                     </div>
                   </th>
                 ))}
@@ -474,7 +496,7 @@ export default function SheetPageContent() {
             <tbody ref={tbodyRef}>
               {rows.map((row,ri)=>(
                 <tr key={keyOf(row)||ri} className={getRowClass(row)}>
-                  <th style={{position:'sticky',left:0,zIndex:2,width:46,textAlign:'center',background:'#f7f8fa',fontWeight:500,color:'#999',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',height:30}}>{ri+1}</th>
+                  <th style={{position:'sticky',left:0,zIndex:2,width:46,textAlign:'center',background:'#f7f8fa',fontWeight:500,color:'#999',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',minHeight:30,verticalAlign:'top'}}>{ri+1}</th>
                   {SHEET_COL_HEADERS.map((_,ci)=>{
                     const val      = getCellValue(row,ci)
                     const editing  = editingCell?.row===ri&&editingCell?.col===ci
@@ -489,7 +511,7 @@ export default function SheetPageContent() {
                         onMouseEnter={()=>onMouseEnter(ri,ci)}
                         onClick={()=>onClick(ri,ci)}
                         onDoubleClick={()=>onDblClick(ri,ci)}
-                        style={{width:columnWidths[ci],borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',height:30,
+                        style={{borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:isRO?'nowrap':'pre-wrap',wordBreak:'break-word',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'top',minHeight:30,lineHeight:1.4,
                           cursor:isRO?'not-allowed':isChk?'default':'cell',
                           outline:(selected||inRng)?'2px solid #137E43':'none',outlineOffset:(selected||inRng)?-2:0,
                           background:match?'#fff7c2':(selected||inRng)?'rgba(232,245,233,0.55)':isRO?'#f1f3f5':'inherit',

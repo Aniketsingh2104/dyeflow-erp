@@ -103,11 +103,6 @@ export default function OrderSheetsPage() {
         </div>
       </div>
 
-      <div style={{ background: 'var(--accent-light)', border: '1px solid var(--accent)',
-        borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12,
-        color: 'var(--accent-dark)' }}>
-        💡 Sheet access is controlled per-user in <strong>Setup → User Management → Edit User → Permissions</strong>
-      </div>
 
       {sheets.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)', fontSize: 14 }}>
