@@ -7,7 +7,7 @@ export async function GET(req: NextRequest) {
   { const g = await guard(req, 'colour-chemicals', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('colour_chemicals',
     { order: 'name.asc', limit: '5000' },
-    'id,name,type,unit,notes,lead_time,safety_factor,avg_daily_consumption,created_at'
+    'id,name,type,unit,notes,rate,lead_time,safety_factor,avg_daily_consumption,created_at'
   )
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   return NextResponse.json({ ok: true, data, total: data.length })
@@ -41,9 +41,11 @@ export async function POST(req: NextRequest) {
   // Reorder-planning inputs (Lead Time, Safety Factor, Avg Daily Consumption)
   // — MAX Level is computed from these on the client, not stored.
   if (action === 'update_planning') {
-    const { id, leadTime, safetyFactor, avgDailyConsumption } = body
+    const { id, leadTime, safetyFactor, avgDailyConsumption, rate, type } = body
     if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
     const patch: Record<string, any> = {}
+    if (rate !== undefined) patch.rate = rate === '' || rate === null ? null : parseFloat(rate)
+    if (type !== undefined) patch.type = type ? String(type).trim() : null
     if (leadTime !== undefined) patch.lead_time = leadTime === '' ? null : parseFloat(leadTime)
     if (safetyFactor !== undefined) patch.safety_factor = safetyFactor === '' ? null : parseFloat(safetyFactor)
     if (avgDailyConsumption !== undefined) patch.avg_daily_consumption = avgDailyConsumption === '' ? null : parseFloat(avgDailyConsumption)
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
-  // Excel import on Colour Chemical Master: rows [{ name, leadTime, safetyFactor, avgDailyConsumption }]
+  // Excel import on Colour Chemical Master: rows [{ name, type, rate, leadTime, safetyFactor, avgDailyConsumption }]
   // — existing names are updated with the values given, new names are created.
   if (action === 'bulk_upsert_planning') {
     const { rows } = body
@@ -63,7 +65,9 @@ export async function POST(req: NextRequest) {
       const name = String(r.name || '').trim(); if (!name || seen.has(name.toLowerCase())) return null
       seen.add(name.toLowerCase())
       const o: Record<string, any> = { name }
-      const lt = num(r.leadTime), sf = num(r.safetyFactor), ad = num(r.avgDailyConsumption)
+      const lt = num(r.leadTime), sf = num(r.safetyFactor), ad = num(r.avgDailyConsumption), rt = num(r.rate)
+      if (r.type !== undefined) o.type = r.type === null || String(r.type).trim() === '' ? null : String(r.type).trim()
+      if (rt !== undefined) o.rate = rt
       if (lt !== undefined) o.lead_time = lt
       if (sf !== undefined) o.safety_factor = sf
       if (ad !== undefined) o.avg_daily_consumption = ad
@@ -72,7 +76,7 @@ export async function POST(req: NextRequest) {
     if (!clean.length) return NextResponse.json({ ok: false, error: 'No names in the file' }, { status: 400 })
     // upsert by name; columns missing in a row keep their current value (merge-duplicates
     // only overwrites the columns sent, and every row carries the same columns, so send all)
-    const cols = ['lead_time', 'safety_factor', 'avg_daily_consumption'].filter(c => clean.some(r => c in r))
+    const cols = ['type', 'rate', 'lead_time', 'safety_factor', 'avg_daily_consumption'].filter(c => clean.some(r => c in r))
     const uniform = clean.map(r => { const o: Record<string, any> = { name: r.name }; for (const c of cols) o[c] = r[c] ?? null; return o })
     const { error } = await sb('/colour_chemicals?on_conflict=name', {
       method: 'POST', body: JSON.stringify(uniform),

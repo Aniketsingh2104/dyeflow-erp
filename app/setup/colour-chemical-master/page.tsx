@@ -10,10 +10,12 @@ import { usePagination, PaginationBar } from '@/components/Pagination'
 
 interface ChemItem {
   id: string; name: string; created_at: string
+  type?: string | null; rate?: number | string | null
   lead_time?: number | string | null; safety_factor?: number | string | null; avg_daily_consumption?: number | string | null
 }
-type PlanField = 'leadTime' | 'safetyFactor' | 'avgDailyConsumption'
-const COL: Record<PlanField, keyof ChemItem> = { leadTime: 'lead_time', safetyFactor: 'safety_factor', avgDailyConsumption: 'avg_daily_consumption' }
+const TYPES = ['Colour', 'Auxiliary']
+type PlanField = 'leadTime' | 'safetyFactor' | 'avgDailyConsumption' | 'rate'
+const COL: Record<PlanField, keyof ChemItem> = { leadTime: 'lead_time', safetyFactor: 'safety_factor', avgDailyConsumption: 'avg_daily_consumption', rate: 'rate' }
 const num = (v: any): number | null => { if (v == null || v === '') return null; const n = parseFloat(v); return isFinite(n) ? n : null }
 const maxLevelOf = (x: ChemItem) => {
   const l = num(x.lead_time), s = num(x.safety_factor), a = num(x.avg_daily_consumption)
@@ -77,6 +79,12 @@ export default function ColourChemicalMasterPage() {
     return true
   }
 
+  const saveType = async (id: string, type: string) => {
+    const data = await post({ action: 'update_planning', id, type })
+    if (!data.ok) { alert('Not saved: ' + (data.error || 'Unknown error')); return }
+    setItems(prev => prev.map(x => x.id === id ? { ...x, type: type || null } : x))
+  }
+
   // ── Excel import: Name + planning columns (header names, any order) ──────
   const processRows = async (rows: any[][]) => {
     let start = 0, header: string[] = []
@@ -87,6 +95,7 @@ export default function ColourChemicalMasterPage() {
     const find = (...keys: string[]) => header.findIndex(h => keys.some(k => h.includes(k)))
     const nameIdx = header.length ? find('name', 'colour', 'color', 'chemical', 'item') : 0
     const ltIdx = find('lead'), sfIdx = find('safety'), adIdx = find('avg', 'daily', 'consumption')
+    const tyIdx = find('type', 'group', 'item code'), rtIdx = find('rate')
     const byName = new Map(items.map(x => [x.name.toLowerCase(), x]))
     const out: any[] = []
     for (let i = start; i < rows.length; i++) {
@@ -94,15 +103,17 @@ export default function ColourChemicalMasterPage() {
       const name = String(row[nameIdx] ?? '').trim(); if (!name) continue
       const ex = byName.get(name.toLowerCase())
       const cell = (idx: number, cur: any) => idx < 0 ? undefined : (String(row[idx] ?? '').trim() === '' ? (cur ?? null) : row[idx])   // blank cell keeps the current value
-      out.push({ name, leadTime: cell(ltIdx, ex?.lead_time), safetyFactor: cell(sfIdx, ex?.safety_factor), avgDailyConsumption: cell(adIdx, ex?.avg_daily_consumption) })
+      const ty = cell(tyIdx, ex?.type)
+      out.push({ name, type: ty === undefined ? undefined : (ty == null ? null : String(ty).trim()), rate: cell(rtIdx, ex?.rate),
+        leadTime: cell(ltIdx, ex?.lead_time), safetyFactor: cell(sfIdx, ex?.safety_factor), avgDailyConsumption: cell(adIdx, ex?.avg_daily_consumption) })
     }
     if (!out.length) { setImportStatus('❌ No names found in the file.'); setTimeout(() => setImportStatus(''), 5000); return }
     const newNames = out.filter(r => !byName.has(r.name.toLowerCase())).length
     setImportStatus(`⏳ Saving ${out.length} rows…`)
     const data = await post({ action: 'bulk_upsert_planning', rows: out })
     if (!data.ok) { setImportStatus(`❌ Import failed: ${data.error}`); setTimeout(() => setImportStatus(''), 6000); return }
-    const withValues = ltIdx >= 0 || sfIdx >= 0 || adIdx >= 0
-    setImportStatus(`✅ ${out.length} rows: ${newNames} new, ${out.length - newNames} updated${withValues ? '' : ' (names only — no Lead / Safety / Avg columns in the file)'}`)
+    const withValues = ltIdx >= 0 || sfIdx >= 0 || adIdx >= 0 || tyIdx >= 0 || rtIdx >= 0
+    setImportStatus(`✅ ${out.length} rows: ${newNames} new, ${out.length - newNames} updated${withValues ? '' : ' (names only — no Type / Rate / Lead / Safety / Avg columns in the file)'}`)
     setTimeout(() => setImportStatus(''), 8000)
     if (fileRef.current) fileRef.current.value = ''
     load(false)
@@ -123,10 +134,10 @@ export default function ColourChemicalMasterPage() {
   }
   const exportExcel = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Name', 'Lead Time (days)', 'Safety Factor', 'Avg Daily Consumption (kg/day)', 'MAX Level (kg)'],
-      ...items.map(x => [x.name, num(x.lead_time), num(x.safety_factor), num(x.avg_daily_consumption), maxLevelOf(x)]),
+      ['Name', 'Type', 'Rate (per kg)', 'Lead Time (days)', 'Safety Factor', 'Avg Daily Consumption (kg/day)', 'MAX Level (kg)'],
+      ...items.map(x => [x.name, x.type || '', num(x.rate), num(x.lead_time), num(x.safety_factor), num(x.avg_daily_consumption), maxLevelOf(x)]),
     ])
-    ws['!cols'] = [{ wch: 45 }, { wch: 16 }, { wch: 14 }, { wch: 28 }, { wch: 14 }]
+    ws['!cols'] = [{ wch: 45 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 28 }, { wch: 14 }]
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Colour Chemical Master')
     XLSX.writeFile(wb, `Colour_Chemical_Master_${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
@@ -135,7 +146,7 @@ export default function ColourChemicalMasterPage() {
   const doneCount = items.filter(complete).length
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return items.filter(x => (!q || x.name.toLowerCase().includes(q)) && (filter === 'all' || (filter === 'done') === complete(x)))
+    return items.filter(x => (!q || x.name.toLowerCase().includes(q) || (x.type || '').toLowerCase() === q) && (filter === 'all' || (filter === 'done') === complete(x)))
   }, [items, search, filter])
   const pg = usePagination(filtered, 'dyeflow_pg_colour_chem')
   useEffect(() => { pg.resetPage() }, [search, filter]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -165,7 +176,7 @@ export default function ColourChemicalMasterPage() {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
             style={{ width: 260, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8, background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ display: 'none' }} />
-          <button onClick={() => fileRef.current?.click()} title="Columns: Name, Lead Time, Safety Factor, Avg Daily Consumption — existing names are updated, new names created"
+          <button onClick={() => fileRef.current?.click()} title="Columns: Name, Type (Colour/Auxiliary), Rate, Lead Time, Safety Factor, Avg Daily Consumption — existing names are updated, new names created"
             style={{ padding: '9px 14px', fontSize: 14, fontWeight: 700, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer' }}>
             📥 Import Excel
           </button>
@@ -189,6 +200,12 @@ export default function ColourChemicalMasterPage() {
             <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
           </div>
         ))}
+        {TYPES.map(t => (
+          <div key={t} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '10px 16px', minWidth: 110 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-secondary)' }}>{items.filter(x => (x.type || '').toLowerCase() === t.toLowerCase()).length}</div>
+          </div>
+        ))}
         <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 6 }}>
           Click a value to type it · Enter / ↓ next row · ↑ previous · Esc cancel · amber = not set
         </div>
@@ -196,19 +213,19 @@ export default function ColourChemicalMasterPage() {
 
       {/* Table */}
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1100 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1300 }}>
           <colgroup>
-            <col style={{ width: 56 }} /><col /><col style={{ width: 150 }} /><col style={{ width: 150 }} /><col style={{ width: 190 }} />
-            <col style={{ width: 140 }} /><col style={{ width: 110 }} /><col style={{ width: 170 }} />
+            <col style={{ width: 56 }} /><col /><col style={{ width: 130 }} /><col style={{ width: 120 }} /><col style={{ width: 130 }} /><col style={{ width: 140 }} /><col style={{ width: 170 }} />
+            <col style={{ width: 130 }} /><col style={{ width: 110 }} /><col style={{ width: 170 }} />
           </colgroup>
           <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
-            <tr>{th('#')}{th('Name')}{th('Lead (days)', true)}{th('Safety factor', true)}{th('Avg use (kg/day)', true)}{th('MAX level (kg)', true)}{th('Added')}{th('Actions')}</tr>
+            <tr>{th('#')}{th('Name')}{th('Type')}{th('Rate / kg', true)}{th('Lead (days)', true)}{th('Safety factor', true)}{th('Avg use (kg/day)', true)}{th('MAX level (kg)', true)}{th('Added')}{th('Actions')}</tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
             ) : pg.rows.length === 0 ? (
-              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
                 {items.length === 0 ? 'No items yet. Import an Excel file or click "+ Add Name".' : 'No results.'}
               </td></tr>
             ) : pg.rows.map((x, i) => {
@@ -217,6 +234,16 @@ export default function ColourChemicalMasterPage() {
                 <tr key={x.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
                   <td style={{ padding: '10px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{pg.start + i + 1}</td>
                   <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.name}>{x.name}</td>
+                  <td style={{ padding: '6px 16px' }}>
+                    <select value={x.type || ''} onChange={e => saveType(x.id, e.target.value)}
+                      style={{ width: '100%', padding: '5px 8px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid ' + (x.type ? 'var(--border-light)' : '#F59E0B'),
+                        background: x.type ? 'var(--bg-primary)' : '#FFFBEB', color: x.type ? 'var(--text-primary)' : '#B45309' }}>
+                      <option value="">—</option>
+                      {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                      {x.type && !TYPES.includes(x.type) && <option value={x.type}>{x.type}</option>}
+                    </select>
+                  </td>
+                  <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="rate" value={num(x.rate)} step="0.01" width={100} onSave={v => savePlan(x.id, 'rate', v)} /></td>
                   <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="lead" value={num(x.lead_time)} step="1" onSave={v => savePlan(x.id, 'leadTime', v)} /></td>
                   <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="safety" value={num(x.safety_factor)} step="0.1" onSave={v => savePlan(x.id, 'safetyFactor', v)} /></td>
                   <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="avg" value={num(x.avg_daily_consumption)} step="0.1" width={110} onSave={v => savePlan(x.id, 'avgDailyConsumption', v)} /></td>

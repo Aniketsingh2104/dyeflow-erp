@@ -157,8 +157,9 @@ export default function ColourStoreIMSPage() {
       ...c, leadTime, safety, avgCons, maxLevel, latestKg, band, reorder: reorder && reorder > 0 ? reorder : (maxLevel != null ? 0 : null),
       futureKg, futureOrders: fut?.orders || [],
       short: futureKg != null && latestKg != null && futureKg > latestKg ? futureKg - latestKg : null,
-      group: latest?.group_name ?? null,
-      rate:  latest?.rate != null ? parseFloat(latest.rate) * 1000 : null,
+      // Type and Rate come from Colour Chemical Master; the stock upload's group / rate fill in where the master is blank
+      group: (c.type && String(c.type).trim()) || latest?.group_name || null,
+      rate:  c.rate != null && c.rate !== '' ? parseFloat(c.rate) : latest?.rate != null ? parseFloat(latest.rate) * 1000 : null,
       dateValues,
     }
   }), [chemicals, latestByName, stockByNameDate, latestDate, future])

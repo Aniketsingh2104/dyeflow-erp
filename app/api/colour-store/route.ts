@@ -24,7 +24,7 @@ import { computeFutureRequirement } from '@/lib/futureRequirement'
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'colour-store', 'GET'); if (g.deny) return g.deny }
   const [chemRes, stockRes] = await Promise.all([
-    dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,lead_time,safety_factor,avg_daily_consumption,created_at'),
+    dbSelect('colour_chemicals', { order: 'name.asc', limit: '5000' }, 'id,name,type,rate,lead_time,safety_factor,avg_daily_consumption,created_at'),
     dbSelectAll('colour_store_stock', { order: 'stock_date.desc' }, 'id,chemical_id,name,group_name,stock_qty,stock_date,rate,created_at'),
   ])
   if (chemRes.error) return NextResponse.json({ ok: false, error: chemRes.error }, { status: 500 })
