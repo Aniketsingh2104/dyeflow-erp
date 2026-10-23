@@ -1,9 +1,25 @@
 'use client'
-
-import { useEffect, useState, useRef, useCallback } from 'react'
+// Setup → Colour Chemical Master. The one place where the reorder-planning
+// values are entered: Lead Time (days), Safety Factor, Avg Daily Consumption
+// (kg/day). MAX Level = lead × safety × avg is computed here and on the Colour
+// Store IMS page, which only shows these values.
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
+import { PlanCell } from '@/components/PlanCell'
+import { usePagination, PaginationBar } from '@/components/Pagination'
 
-interface ChemItem { id: string; name: string; created_at: string }
+interface ChemItem {
+  id: string; name: string; created_at: string
+  lead_time?: number | string | null; safety_factor?: number | string | null; avg_daily_consumption?: number | string | null
+}
+type PlanField = 'leadTime' | 'safetyFactor' | 'avgDailyConsumption'
+const COL: Record<PlanField, keyof ChemItem> = { leadTime: 'lead_time', safetyFactor: 'safety_factor', avgDailyConsumption: 'avg_daily_consumption' }
+const num = (v: any): number | null => { if (v == null || v === '') return null; const n = parseFloat(v); return isFinite(n) ? n : null }
+const maxLevelOf = (x: ChemItem) => {
+  const l = num(x.lead_time), s = num(x.safety_factor), a = num(x.avg_daily_consumption)
+  return l != null && s != null && a != null ? l * s * a : null
+}
+const complete = (x: ChemItem) => maxLevelOf(x) != null
 
 export default function ColourChemicalMasterPage() {
   const [items,        setItems]        = useState<ChemItem[]>([])
@@ -15,6 +31,7 @@ export default function ColourChemicalMasterPage() {
   const [importStatus, setImportStatus] = useState('')
   const [toast,        setToast]        = useState('')
   const [search,       setSearch]       = useState('')
+  const [filter,       setFilter]       = useState<'all' | 'done' | 'missing'>('all')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async (showSpinner = false) => {
@@ -25,252 +42,218 @@ export default function ColourChemicalMasterPage() {
       if (data.ok) setItems(data.data || [])
     } finally { setLoading(false) }
   }, [])
-
   useEffect(() => { load(true) }, [load])
+  // opened from Colour Store IMS with ?q=<item name>
+  useEffect(() => { try { const q = new URLSearchParams(window.location.search).get('q'); if (q) setSearch(q) } catch {} }, [])
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500) }
+  const post = (body: any) => fetch('/api/colour-chemicals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
 
-  // ── Save with optimistic update ──────────────────────────────────────────
+  // ── Name add / edit / delete ──────────────────────────────────────────────
   const save = async () => {
     if (!form.name.trim()) { alert('Name required.'); return }
-    const dup = items.find(x => x.name.toLowerCase() === form.name.trim().toLowerCase() && x.id !== editingId)
-    if (dup) { alert('Name already exists.'); return }
-    setSaving(true)
-
     const name = form.name.trim()
-
-    if (editingId) {
-      setItems(prev => prev.map(x => x.id === editingId ? { ...x, name } : x))
-    } else {
-      setItems(prev => [...prev, { id: `tmp-${Date.now()}`, name, created_at: new Date().toISOString() }]
-        .sort((a, b) => a.name.localeCompare(b.name)))
-    }
-    setShowModal(false)
-    showToast('✓ Saved')
-
+    if (items.find(x => x.name.toLowerCase() === name.toLowerCase() && x.id !== editingId)) { alert('Name already exists.'); return }
+    setSaving(true)
     try {
-      const res  = await fetch('/api/colour-chemicals', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ action: editingId ? 'update' : 'create', id: editingId || undefined, name }),
-      })
-      const data = await res.json()
-      if (!data.ok) { showToast('⚠ Save failed — refreshing'); load(false) }
-      else if (!editingId) load(false) // get real uuid
+      const data = await post({ action: editingId ? 'update' : 'create', id: editingId || undefined, name })
+      if (!data.ok) { alert('Not saved: ' + (data.error || 'Unknown error')); return }
+      setShowModal(false); showToast('✓ Saved'); load(false)
     } finally { setSaving(false) }
   }
-
-  // ── Delete with optimistic update ────────────────────────────────────────
   const del = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"?`)) return
-    setItems(prev => prev.filter(x => x.id !== id))
-    showToast('✓ Deleted')
-    const res  = await fetch('/api/colour-chemicals', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ action: 'delete', id }),
-    })
-    const data = await res.json()
-    if (!data.ok) { showToast('⚠ Delete failed — refreshing'); load(false) }
+    const data = await post({ action: 'delete', id })
+    if (!data.ok) { alert('Not deleted: ' + (data.error || 'Unknown error')); return }
+    showToast('✓ Deleted'); load(false)
   }
 
-  // ── Excel / CSV import ───────────────────────────────────────────────────
+  // ── Planning value cell save ──────────────────────────────────────────────
+  const savePlan = async (id: string, field: PlanField, v: number | null): Promise<boolean> => {
+    const data = await post({ action: 'update_planning', id, [field]: v === null ? '' : v })
+    if (!data.ok) { alert('Not saved: ' + (data.error || 'Unknown error')); return false }
+    setItems(prev => prev.map(x => x.id === id ? { ...x, [COL[field]]: v } : x))
+    return true
+  }
+
+  // ── Excel import: Name + planning columns (header names, any order) ──────
   const processRows = async (rows: any[][]) => {
-    // Auto-detect header row
-    let start = 0
+    let start = 0, header: string[] = []
     for (let i = 0; i < Math.min(3, rows.length); i++) {
-      if (/name|colour|color|chemical|id/i.test(String(rows[i]?.[0] || ''))) { start = i + 1; break }
+      const h = (rows[i] || []).map((c: any) => String(c ?? '').trim().toLowerCase())
+      if (h.some(c => /name|colour|color|chemical|item/.test(c))) { start = i + 1; header = h; break }
     }
-
-    const existing = new Set(items.map(x => x.name.toLowerCase()))
-    const toAdd: string[] = []
-
+    const find = (...keys: string[]) => header.findIndex(h => keys.some(k => h.includes(k)))
+    const nameIdx = header.length ? find('name', 'colour', 'color', 'chemical', 'item') : 0
+    const ltIdx = find('lead'), sfIdx = find('safety'), adIdx = find('avg', 'daily', 'consumption')
+    const byName = new Map(items.map(x => [x.name.toLowerCase(), x]))
+    const out: any[] = []
     for (let i = start; i < rows.length; i++) {
-      // Take first non-empty cell in the row
-      const raw = rows[i]?.find((c: any) => c != null && String(c).trim() !== '')
-      if (!raw) continue
-      const name = String(raw).trim()
-      if (!name || existing.has(name.toLowerCase())) continue
-      toAdd.push(name)
-      existing.add(name.toLowerCase())
+      const row = rows[i] || []
+      const name = String(row[nameIdx] ?? '').trim(); if (!name) continue
+      const ex = byName.get(name.toLowerCase())
+      const cell = (idx: number, cur: any) => idx < 0 ? undefined : (String(row[idx] ?? '').trim() === '' ? (cur ?? null) : row[idx])   // blank cell keeps the current value
+      out.push({ name, leadTime: cell(ltIdx, ex?.lead_time), safetyFactor: cell(sfIdx, ex?.safety_factor), avgDailyConsumption: cell(adIdx, ex?.avg_daily_consumption) })
     }
-
-    if (!toAdd.length) {
-      setImportStatus('⚠ No new names found (all already exist or file empty)')
-      setTimeout(() => setImportStatus(''), 4000)
-      return
-    }
-
-    setImportStatus(`⏳ Saving ${toAdd.length} names to Supabase…`)
-
-    const res  = await fetch('/api/colour-chemicals', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ action: 'bulk_insert', names: toAdd }),
-    })
-    const data = await res.json()
-
-    if (!data.ok) {
-      setImportStatus(`❌ Import failed: ${data.error}`)
-      setTimeout(() => setImportStatus(''), 5000)
-      return
-    }
-
-    setImportStatus(`✅ ${data.inserted} names saved to Supabase`)
-    setTimeout(() => setImportStatus(''), 5000)
+    if (!out.length) { setImportStatus('❌ No names found in the file.'); setTimeout(() => setImportStatus(''), 5000); return }
+    const newNames = out.filter(r => !byName.has(r.name.toLowerCase())).length
+    setImportStatus(`⏳ Saving ${out.length} rows…`)
+    const data = await post({ action: 'bulk_upsert_planning', rows: out })
+    if (!data.ok) { setImportStatus(`❌ Import failed: ${data.error}`); setTimeout(() => setImportStatus(''), 6000); return }
+    const withValues = ltIdx >= 0 || sfIdx >= 0 || adIdx >= 0
+    setImportStatus(`✅ ${out.length} rows: ${newNames} new, ${out.length - newNames} updated${withValues ? '' : ' (names only — no Lead / Safety / Avg columns in the file)'}`)
+    setTimeout(() => setImportStatus(''), 8000)
     if (fileRef.current) fileRef.current.value = ''
-    load(false) // silent sync
+    load(false)
   }
-
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
     setImportStatus('📂 Reading file…')
     try {
       let rows: any[][]
       if (file.name.toLowerCase().endsWith('.csv')) {
-        const text = await file.text()
-        rows = text.split(/\r?\n/).filter(l => l.trim())
-          .map(line => line.split(',').map(c => c.replace(/^"|"$/g, '').trim()))
+        rows = (await file.text()).split(/\r?\n/).filter(l => l.trim()).map(line => line.split(',').map(c => c.replace(/^"|"$/g, '').trim()))
       } else {
-        const buf = await file.arrayBuffer()
-        const wb  = XLSX.read(new Uint8Array(buf), { type: 'array', raw: false })
+        const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array', raw: false })
         rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }) as any[][]
       }
       await processRows(rows)
-    } catch (err: any) {
-      setImportStatus(`❌ Error reading file: ${err.message}`)
-      setTimeout(() => setImportStatus(''), 5000)
-    }
+    } catch (err: any) { setImportStatus(`❌ Error reading file: ${err.message}`); setTimeout(() => setImportStatus(''), 5000) }
+  }
+  const exportExcel = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Name', 'Lead Time (days)', 'Safety Factor', 'Avg Daily Consumption (kg/day)', 'MAX Level (kg)'],
+      ...items.map(x => [x.name, num(x.lead_time), num(x.safety_factor), num(x.avg_daily_consumption), maxLevelOf(x)]),
+    ])
+    ws['!cols'] = [{ wch: 45 }, { wch: 16 }, { wch: 14 }, { wch: 28 }, { wch: 14 }]
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Colour Chemical Master')
+    XLSX.writeFile(wb, `Colour_Chemical_Master_${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
 
-  const filtered = items.filter(x =>
-    !search.trim() || x.name.toLowerCase().includes(search.toLowerCase())
-  )
+  // ── List ──────────────────────────────────────────────────────────────────
+  const doneCount = items.filter(complete).length
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return items.filter(x => (!q || x.name.toLowerCase().includes(q)) && (filter === 'all' || (filter === 'done') === complete(x)))
+  }, [items, search, filter])
+  const pg = usePagination(filtered, 'dyeflow_pg_colour_chem')
+  useEffect(() => { pg.resetPage() }, [search, filter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const todayCount = items.filter(x =>
-    new Date(x.created_at).toDateString() === new Date().toDateString()
-  ).length
+  const th = (h: string, right = false) => (
+    <th key={h} style={{ padding: '12px 16px', textAlign: right ? 'right' : 'left', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)',
+      textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
+  )
 
   return (
     <div className="content" style={{ padding: '16px 20px' }}>
-
-      {/* Toast */}
       {toast && (
         <div style={{ position: 'fixed', top: 16, right: 20, zIndex: 9999, background: toast.startsWith('⚠') ? '#FEF3C7' : '#D1FAE5', border: `1px solid ${toast.startsWith('⚠') ? '#FCD34D' : '#6EE7B7'}`, borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: toast.startsWith('⚠') ? '#92400E' : '#065F46', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
           {toast}
         </div>
       )}
 
-      {/* Import */}
-      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '14px 18px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>🎨 Import Colour / Chemical Names</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            One name per row, first column. Header row is auto-detected and skipped.<br />
-            Saves directly to <strong>colour_chemicals</strong> table in Supabase.
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Colour Chemical Master</div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>
+            Dyes and chemicals with their reorder planning values · MAX level = Lead time × Safety factor × Avg daily use · shown on Colour Store IMS
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          {importStatus && (
-            <div style={{ fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 6, maxWidth: 280, textAlign: 'right',
-              background: importStatus.startsWith('✅') ? '#D1FAE5' : importStatus.startsWith('❌') ? '#FEE2E2' : '#EFF6FF',
-              color:      importStatus.startsWith('✅') ? '#065F46' : importStatus.startsWith('❌') ? '#991B1B' : '#1E40AF' }}>
-              {importStatus}
-            </div>
-          )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
+            style={{ width: 260, padding: '9px 12px', fontSize: 14, border: '1px solid var(--border-medium)', borderRadius: 8, background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ display: 'none' }} />
-          <button onClick={() => fileRef.current?.click()}
-            style={{ background: '#137E43', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            📄 Upload Excel / CSV
+          <button onClick={() => fileRef.current?.click()} title="Columns: Name, Lead Time, Safety Factor, Avg Daily Consumption — existing names are updated, new names created"
+            style={{ padding: '9px 14px', fontSize: 14, fontWeight: 700, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--accent-light)', color: 'var(--accent-dark)', cursor: 'pointer' }}>
+            📥 Import Excel
           </button>
+          <button className="small" onClick={exportExcel} disabled={!items.length} style={{ padding: '9px 14px', fontSize: 14 }}>📤 Export</button>
+          <button className="small" onClick={() => load(false)} title="Refresh" style={{ padding: '9px 12px', fontSize: 14 }}>↻</button>
+          <button className="primary" onClick={() => { setEditingId(''); setForm({ name: '' }); setShowModal(true) }} style={{ padding: '9px 16px', fontSize: 14, fontWeight: 700 }}>+ Add Name</button>
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        {[
-          { label: 'Total Names', value: items.length, sub: 'In Supabase colour_chemicals table' },
-          { label: 'Added Today', value: todayCount,   sub: 'New names', color: '#137E43' },
-        ].map(s => (
-          <div key={s.label} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '14px 16px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{s.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: s.color || 'var(--text-primary)', lineHeight: 1 }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{s.sub}</div>
+      {importStatus && (
+        <div style={{ background: importStatus.startsWith('❌') ? '#FEE2E2' : importStatus.startsWith('✅') ? '#D1FAE5' : '#EFF6FF', border: `1px solid ${importStatus.startsWith('❌') ? '#FCA5A5' : importStatus.startsWith('✅') ? '#6EE7B7' : '#BFDBFE'}`, borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, fontWeight: 600, color: importStatus.startsWith('❌') ? '#991B1B' : importStatus.startsWith('✅') ? '#065F46' : '#1E40AF' }}>
+          {importStatus}
+        </div>
+      )}
+
+      {/* Count cards — click to filter */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        {([['all', 'Items', items.length, 'var(--accent)'], ['done', 'Planning complete', doneCount, '#059669'], ['missing', 'Missing values', items.length - doneCount, '#B45309']] as const).map(([k, label, value, color]) => (
+          <div key={k} onClick={() => setFilter(k)} style={{ background: 'var(--bg-primary)', border: `2px solid ${filter === k ? color : 'var(--border-light)'}`, borderRadius: 10, padding: '10px 16px', minWidth: 140, cursor: 'pointer' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
           </div>
         ))}
+        <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 6 }}>
+          Click a value to type it · Enter / ↓ next row · ↑ previous · Esc cancel · amber = not set
+        </div>
       </div>
 
       {/* Table */}
-      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-light)', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Master Register</span>
-            <span style={{ fontSize: 11, background: 'var(--bg-secondary)', color: 'var(--text-tertiary)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{items.length} names</span>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search…" style={{ fontSize: 12, padding: '5px 10px', width: 160, border: '1px solid var(--border-medium)', borderRadius: 5 }} />
-            <button className="small" onClick={() => load(false)}>↻</button>
-            <button onClick={() => { setEditingId(''); setForm({ name: '' }); setShowModal(true) }}
-              style={{ background: '#137E43', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-              + Add Name
-            </button>
-          </div>
-        </div>
-
-        <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ background: 'var(--bg-secondary)', position: 'sticky', top: 0, zIndex: 5 }}>
-              <tr>
-                {['#', 'Name', 'Added On', 'Actions'].map(h => (
-                  <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-light)' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading from Supabase…</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                  {search ? `No results for "${search}"` : 'No names yet. Upload Excel or add manually.'}
-                </td></tr>
-              ) : filtered.map((x, i) => (
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1100 }}>
+          <colgroup>
+            <col style={{ width: 56 }} /><col /><col style={{ width: 150 }} /><col style={{ width: 150 }} /><col style={{ width: 190 }} />
+            <col style={{ width: 140 }} /><col style={{ width: 110 }} /><col style={{ width: 170 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
+            <tr>{th('#')}{th('Name')}{th('Lead (days)', true)}{th('Safety factor', true)}{th('Avg use (kg/day)', true)}{th('MAX level (kg)', true)}{th('Added')}{th('Actions')}</tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+            ) : pg.rows.length === 0 ? (
+              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+                {items.length === 0 ? 'No items yet. Import an Excel file or click "+ Add Name".' : 'No results.'}
+              </td></tr>
+            ) : pg.rows.map((x, i) => {
+              const max = maxLevelOf(x)
+              return (
                 <tr key={x.id} style={{ background: i % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)' }}>
-                  <td style={{ padding: '10px 14px', color: 'var(--text-tertiary)', fontSize: 11, width: 48 }}>{i + 1}</td>
-                  <td style={{ padding: '10px 14px', fontWeight: 600, fontSize: 13 }}>{x.name}</td>
-                  <td style={{ padding: '10px 14px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                  <td style={{ padding: '10px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>{pg.start + i + 1}</td>
+                  <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.name}>{x.name}</td>
+                  <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="lead" value={num(x.lead_time)} step="1" onSave={v => savePlan(x.id, 'leadTime', v)} /></td>
+                  <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="safety" value={num(x.safety_factor)} step="0.1" onSave={v => savePlan(x.id, 'safetyFactor', v)} /></td>
+                  <td style={{ padding: '6px 16px', textAlign: 'right' }}><PlanCell col="avg" value={num(x.avg_daily_consumption)} step="0.1" width={110} onSave={v => savePlan(x.id, 'avgDailyConsumption', v)} /></td>
+                  <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, color: max != null ? 'var(--text-primary)' : 'var(--text-tertiary)', background: 'var(--bg-secondary)' }}>
+                    {max != null ? Math.round(max).toLocaleString() : '·'}
+                  </td>
+                  <td style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-tertiary)' }}>
                     {x.created_at ? new Date(x.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                   </td>
-                  <td style={{ padding: '10px 14px' }}>
-                    <button className="xs" onClick={() => { setEditingId(x.id); setForm({ name: x.name }); setShowModal(true) }} style={{ marginRight: 6 }}>Edit</button>
-                    <button className="xs danger" onClick={() => del(x.id, x.name)}>Delete</button>
+                  <td style={{ padding: '10px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="small" onClick={() => { setEditingId(x.id); setForm({ name: x.name }); setShowModal(true) }}>Rename</button>
+                      <button className="small danger" onClick={() => del(x.id, x.name)}>Delete</button>
+                    </div>
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-light)', fontSize: 11, color: 'var(--text-tertiary)' }}>
-          {filtered.length} of {items.length} names · <strong>colour_chemicals</strong> table · Supabase
-        </div>
+              )
+            })}
+          </tbody>
+        </table>
+        <PaginationBar {...pg} rowsShown={pg.rows.length} />
       </div>
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">{editingId ? 'Edit Name' : 'Add Colour / Chemical Name'}</span>
+              <span className="modal-title">{editingId ? 'Rename' : 'Add Colour / Chemical Name'}</span>
               <button className="small" onClick={() => setShowModal(false)}>✕</button>
             </div>
             <div className="form-group" style={{ marginBottom: 14 }}>
               <label>Name *</label>
-              <input value={form.name} onChange={e => setForm({ name: e.target.value })}
-                placeholder="e.g. Reactive Red 120" autoFocus
+              <input value={form.name} onChange={e => setForm({ name: e.target.value })} placeholder="e.g. Reactive Red 120" autoFocus
                 onKeyDown={e => { if (e.key === 'Enter') save() }} />
             </div>
-            <button className="primary" onClick={save} disabled={saving} style={{ width: '100%' }}>
-              {saving ? '⏳ Saving…' : '✓ Save to Supabase'}
-            </button>
+            {!editingId && <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 12 }}>Lead time, safety factor and avg daily use are typed in the table after saving.</div>}
+            <button className="primary" onClick={save} disabled={saving} style={{ width: '100%' }}>{saving ? '⏳ Saving…' : '✓ Save'}</button>
           </div>
         </div>
       )}

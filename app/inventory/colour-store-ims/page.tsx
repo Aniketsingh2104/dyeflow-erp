@@ -78,7 +78,6 @@ export default function ColourStoreIMSPage() {
   const [stock,     setStock]     = useState<any[]>([])
   const [future,    setFuture]    = useState<any>(null)   // Future Requirement per chemical (lib/futureRequirement.ts)
   const [loading,   setLoading]   = useState(true)
-  const [saving,    setSaving]    = useState(false)
 
   const [search,      setSearch]      = useState('')
   const [groupFilter, setGroupFilter] = useState('')
@@ -95,9 +94,6 @@ export default function ColourStoreIMSPage() {
   const [uploadError,  setUploadError]  = useState<{ message: string; unmatched: string[] } | null>(null)
   const [dragOver,     setDragOver]     = useState(false)
 
-  const [editingPlan,   setEditingPlan]   = useState<string | null>(null)
-  const [editPlanValue, setEditPlanValue] = useState('')
-  const [rowError,      setRowError]      = useState<string | null>(null)
 
   // silent = auto-refresh: no spinner, the table just updates in place
   const load = useCallback(async (silent: boolean | unknown = false) => {
@@ -219,26 +215,6 @@ export default function ColourStoreIMSPage() {
   const resetFilters = () => {
     setSearch(''); setGroupFilter(''); setBandFilter('')
     setSortKey('avg'); setSortDir(-1)
-  }
-
-  const startEditPlan = (id: string, field: string, current: any) => {
-    setRowError(null)
-    setEditingPlan(`${id}::${field}`)
-    setEditPlanValue(current != null ? String(current) : '')
-  }
-  const savePlanField = async (id: string, field: 'leadTime' | 'safetyFactor' | 'avgDailyConsumption') => {
-    setSaving(true); setRowError(null)
-    try {
-      const res = await fetch('/api/colour-chemicals', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update_planning', id, [field]: editPlanValue }),
-      }).then(r => r.json())
-      if (!res.ok) { setRowError(`Couldn't save: ${res.error}`); return }
-      setEditingPlan(null)
-      load()
-    } catch (e: any) {
-      setRowError(`Couldn't save: ${e.message || 'network error'}`)
-    } finally { setSaving(false) }
   }
 
   const parseExcel = (f: File): Promise<string[][]> => new Promise((resolve, reject) => {
@@ -448,10 +424,6 @@ export default function ColourStoreIMSPage() {
             ✓ {uploadResult.saved} rows saved for {fmtDate(uploadDate)} — all matched the master.
           </div>
         )}
-        {rowError && (
-          <div style={{ padding: '10px 20px', background: 'var(--danger-light)', color: 'var(--danger)',
-            borderBottom: '1px solid var(--border-light)', fontSize: 12 }}>{rowError}</div>
-        )}
 
         <div style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 10,
           flexWrap: 'wrap', borderBottom: '1px solid var(--border-medium)', background: 'var(--bg-secondary)' }}>
@@ -531,31 +503,11 @@ export default function ColourStoreIMSPage() {
               </thead>
               <tbody>
                 {sorted.map(r => {
-                  const cell = (field: 'leadTime' | 'safetyFactor' | 'avgDailyConsumption', current: number | null) => {
-                    const key = `${r.id}::${field}`
-                    if (editingPlan === key) {
-                      return (
-                        <span style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}
-                          onClick={e => e.stopPropagation()}>
-                          <input autoFocus type="number" value={editPlanValue}
-                            onChange={e => setEditPlanValue(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') savePlanField(r.id, field)
-                              if (e.key === 'Escape') setEditingPlan(null)
-                            }}
-                            style={{ width: 52, fontSize: 12, padding: '2px 5px', textAlign: 'right',
-                              border: '1px solid var(--border-medium)', borderRadius: 4 }} />
-                          <button disabled={saving} onClick={() => savePlanField(r.id, field)}
-                            style={{ fontSize: 11, padding: '0 5px', cursor: 'pointer' }}>✓</button>
-                        </span>
-                      )
-                    }
-                    return (
-                      <span style={{ borderBottom: '1px dotted var(--border-medium)', cursor: 'pointer' }}>
-                        {current != null ? current : <span style={{ color: 'var(--text-tertiary)' }}>Set</span>}
-                      </span>
-                    )
-                  }
+                  // planning values are entered on Setup → Colour Chemical Master; shown read-only here
+                  const plan = (current: number | null) => current != null
+                    ? <span style={{ color: 'var(--text-secondary)' }}>{current}</span>
+                    : <a href={`/setup/colour-chemical-master?q=${encodeURIComponent(r.name)}`} title="Not set — click to enter it in Colour Chemical Master"
+                        style={{ color: '#B45309', fontWeight: 700, textDecoration: 'none' }}>—</a>
                   return (
                     <tr key={r.id}>
                       <td style={{ ...TD, textAlign: 'left', padding: '9px 14px', position: 'sticky', left: 0,
@@ -571,16 +523,9 @@ export default function ColourStoreIMSPage() {
                       <td style={{ ...TD, color: 'var(--text-secondary)' }}>
                         {r.rate != null ? n(r.rate, 2) : '·'}
                       </td>
-                      <td style={TD} onClick={() => editingPlan !== `${r.id}::leadTime` && startEditPlan(r.id, 'leadTime', r.leadTime)}>
-                        {cell('leadTime', r.leadTime)}
-                      </td>
-                      <td style={TD} onClick={() => editingPlan !== `${r.id}::safetyFactor` && startEditPlan(r.id, 'safetyFactor', r.safety)}>
-                        {cell('safetyFactor', r.safety)}
-                      </td>
-                      <td style={{ ...TD, borderRight: '1px solid var(--border-medium)' }}
-                        onClick={() => editingPlan !== `${r.id}::avgDailyConsumption` && startEditPlan(r.id, 'avgDailyConsumption', r.avgCons)}>
-                        {cell('avgDailyConsumption', r.avgCons)}
-                      </td>
+                      <td style={{ ...TD, background: 'var(--bg-secondary)' }}>{plan(r.leadTime)}</td>
+                      <td style={{ ...TD, background: 'var(--bg-secondary)' }}>{plan(r.safety)}</td>
+                      <td style={{ ...TD, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border-medium)' }}>{plan(r.avgCons)}</td>
                       <td style={{ ...TD, background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
                         {r.maxLevel != null ? n(r.maxLevel, 0) : '·'}
                       </td>
@@ -646,7 +591,7 @@ export default function ColourStoreIMSPage() {
             </span>
           )}
           <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-tertiary)' }}>
-            Dotted underline = editable · grey block = computed · item column pins on scroll
+            Lead / Safety / Avg are set in <a href="/setup/colour-chemical-master" style={{ color: 'var(--accent)' }}>Colour Chemical Master</a> · grey block = computed · item column pins on scroll
           </span>
         </div>
       </div>
