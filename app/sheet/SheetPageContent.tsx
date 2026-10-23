@@ -49,6 +49,10 @@ export default function SheetPageContent() {
   const [copiedData,      setCopiedData]      = useState<any[][]>([])
   const [showFind,        setShowFind]        = useState(false)
   const [findText,        setFindText]        = useState('')
+  // Excel-style tools: wrap text in cells (remembered per sheet) and a filter row under the headings
+  const [wrapText,        setWrapText]        = useState(true)
+  const [showFilter,      setShowFilter]      = useState(false)
+  const [colFilters,      setColFilters]      = useState<Record<number, string>>({})
   const [isSelecting,     setIsSelecting]     = useState(false)
   const [selectionStart,  setSelectionStart]  = useState<{row:number;col:number}|null>(null)
   const [notFound,        setNotFound]        = useState(false)
@@ -235,8 +239,14 @@ export default function SheetPageContent() {
     try {
       const saved = JSON.parse(localStorage.getItem(widthsKey) || 'null')
       if (Array.isArray(saved) && saved.length) setColumnWidths(SHEET_COL_WIDTH_DEFAULTS.map((d, i) => (typeof saved[i] === 'number' && saved[i] >= 40 ? saved[i] : d)))
+      if (localStorage.getItem(widthsKey + '_wrap') === '0') setWrapText(false)
     } catch {}
   }, [widthsKey])
+  const toggleWrap = () => setWrapText(w => { try { localStorage.setItem(widthsKey + '_wrap', w ? '0' : '1') } catch {} return !w })
+  // rows that pass every column filter (original index kept so edits / saves hit the right row)
+  const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim()).map(([k, v]) => [Number(k), v.trim().toLowerCase()] as [number, string])
+  const visibleRows = rows.map((row, ri) => [row, ri] as [any, number])
+    .filter(([row]) => !showFilter || activeFilters.every(([ci, q]) => String(getCellValue(row, ci) ?? '').toLowerCase().includes(q)))
   useEffect(() => {
     const mm = (e: MouseEvent) => {
       const r = resizeRef.current; if (!r) return
@@ -459,6 +469,11 @@ export default function SheetPageContent() {
           <button className="small" onClick={deleteRow} disabled={!selectedCell}>Delete Row</button>
           <span style={{width:1,height:22,background:'#ddd',margin:'0 2px'}}/>
           <button className="small" onClick={()=>setShowFind(!showFind)}>Find</button>
+          <button className="small" onClick={()=>{setShowFilter(f=>!f)}} title="Show a filter box under every heading — type to show only matching rows"
+            style={{background:showFilter?'#E8F5E9':undefined,borderColor:showFilter?'#137E43':undefined,fontWeight:showFilter?700:undefined}}>⏷ Filter{activeFilters.length?` (${activeFilters.length})`:''}</button>
+          {showFilter&&activeFilters.length>0&&<button className="small" onClick={()=>setColFilters({})}>Clear filter</button>}
+          <button className="small" onClick={toggleWrap} title="Wrap long text inside the cell (off = one line, cut with …)"
+            style={{background:wrapText?'#E8F5E9':undefined,borderColor:wrapText?'#137E43':undefined,fontWeight:wrapText?700:undefined}}>↵ Wrap text</button>
           <button className="small" onClick={resetColWidths} title="Put all column widths back to default">Reset widths</button>
         </div>
 
@@ -492,9 +507,21 @@ export default function SheetPageContent() {
                   </th>
                 ))}
               </tr>
+              {showFilter&&(
+                <tr>
+                  <th style={{position:'sticky',left:0,zIndex:5,background:'#fffbe6',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:2}}/>
+                  {SHEET_COL_HEADERS.map((_,i)=>(
+                    <th key={i} style={{background:'#fffbe6',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:2}}>
+                      <input value={colFilters[i]||''} onChange={e=>setColFilters(f=>({...f,[i]:e.target.value}))} placeholder="filter…"
+                        onMouseDown={e=>e.stopPropagation()} onKeyDown={e=>{ if(e.key==='Escape') setColFilters(f=>({...f,[i]:''})); e.stopPropagation() }}
+                        style={{width:'100%',boxSizing:'border-box',padding:'3px 5px',fontSize:11,border:'1px solid '+(colFilters[i]?'#137E43':'#ddd'),borderRadius:3,background:colFilters[i]?'#E8F5E9':'#fff'}}/>
+                    </th>
+                  ))}
+                </tr>
+              )}
             </thead>
             <tbody ref={tbodyRef}>
-              {rows.map((row,ri)=>(
+              {visibleRows.map(([row,ri])=>(
                 <tr key={keyOf(row)||ri} className={getRowClass(row)}>
                   <th style={{position:'sticky',left:0,zIndex:2,width:46,textAlign:'center',background:'#f7f8fa',fontWeight:500,color:'#999',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',minHeight:30,verticalAlign:'top'}}>{ri+1}</th>
                   {SHEET_COL_HEADERS.map((_,ci)=>{
@@ -511,7 +538,7 @@ export default function SheetPageContent() {
                         onMouseEnter={()=>onMouseEnter(ri,ci)}
                         onClick={()=>onClick(ri,ci)}
                         onDoubleClick={()=>onDblClick(ri,ci)}
-                        style={{borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:isRO?'nowrap':'pre-wrap',wordBreak:'break-word',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'top',minHeight:30,lineHeight:1.4,
+                        style={{borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:'4px 6px',whiteSpace:(isRO||!wrapText)?'nowrap':'pre-wrap',wordBreak:'break-word',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'top',minHeight:30,lineHeight:1.4,
                           cursor:isRO?'not-allowed':isChk?'default':'cell',
                           outline:(selected||inRng)?'2px solid #137E43':'none',outlineOffset:(selected||inRng)?-2:0,
                           background:match?'#fff7c2':(selected||inRng)?'rgba(232,245,233,0.55)':isRO?'#f1f3f5':'inherit',
@@ -538,7 +565,7 @@ export default function SheetPageContent() {
 
         {/* Status bar */}
         <div style={{display:'flex',justifyContent:'space-between',padding:'5px 10px',border:'1px solid #ddd',borderTop:'none',borderRadius:'0 0 6px 6px',background:'#f8faf9',fontSize:11,color:'var(--text-tertiary)'}}>
-          <span>Row {selectedCell?selectedCell.row+1:'-'} of {rows.length} · Sum: {st.sum.toFixed(2)} · Avg: {st.avg.toFixed(2)} · Count: {st.count}</span>
+          <span>Row {selectedCell?selectedCell.row+1:'-'} of {rows.length}{showFilter&&activeFilters.length?` · showing ${visibleRows.length}`:''} · Sum: {st.sum.toFixed(2)} · Avg: {st.avg.toFixed(2)} · Count: {st.count}</span>
           <span>Each row saves independently · Supabase order_sheet_rows</span>
         </div>
       </div>
