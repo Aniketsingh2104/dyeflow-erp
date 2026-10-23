@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { ColumnFilterMenu, ColFilter, passes, isActive, cellText } from '@/components/ColumnFilterMenu'
 import {
   SHEET_COL_HEADERS, SHEET_COL_WIDTH_DEFAULTS,
   toExcelColLabel, createBlankRow, getCellValue, setCellValueInRow,
@@ -52,7 +53,9 @@ export default function SheetPageContent() {
   // Excel-style tools: wrap text in cells (remembered per sheet) and a filter row under the headings
   const [wrapText,        setWrapText]        = useState(true)
   const [showFilter,      setShowFilter]      = useState(false)
-  const [colFilters,      setColFilters]      = useState<Record<number, string>>({})
+  const [colFilters,      setColFilters]      = useState<Record<number, ColFilter | undefined>>({})
+  const [sortBy,          setSortBy]          = useState<{ col: number; dir: 'asc' | 'desc' } | null>(null)
+  const [menuCol,         setMenuCol]         = useState<{ col: number; left: number; top: number } | null>(null)
   const [isSelecting,     setIsSelecting]     = useState(false)
   const [selectionStart,  setSelectionStart]  = useState<{row:number;col:number}|null>(null)
   const [notFound,        setNotFound]        = useState(false)
@@ -244,9 +247,23 @@ export default function SheetPageContent() {
   }, [widthsKey])
   const toggleWrap = () => setWrapText(w => { try { localStorage.setItem(widthsKey + '_wrap', w ? '0' : '1') } catch {} return !w })
   // rows that pass every column filter (original index kept so edits / saves hit the right row)
-  const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim()).map(([k, v]) => [Number(k), v.trim().toLowerCase()] as [number, string])
-  const visibleRows = rows.map((row, ri) => [row, ri] as [any, number])
-    .filter(([row]) => !showFilter || activeFilters.every(([ci, q]) => String(getCellValue(row, ci) ?? '').toLowerCase().includes(q)))
+  const activeFilters = Object.entries(colFilters).filter(([, f]) => isActive(f)).map(([k]) => Number(k))
+  // rows that pass every column filter, in sort order (original index kept so edits / saves hit the right row)
+  const visibleRows = (() => {
+    let list = rows.map((row, ri) => [row, ri] as [any, number])
+    if (showFilter && activeFilters.length) list = list.filter(([row]) => activeFilters.every(ci => passes(colFilters[ci], getCellValue(row, ci))))
+    if (showFilter && sortBy) {
+      const { col, dir } = sortBy
+      list = [...list].sort((x, y) => {
+        const a = cellText(getCellValue(x[0], col)), b = cellText(getCellValue(y[0], col))
+        if (a === '' && b !== '') return 1; if (b === '' && a !== '') return -1
+        const na = Number(a), nb = Number(b)
+        const c = a !== '' && b !== '' && !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        return dir === 'asc' ? c : -c
+      })
+    }
+    return list
+  })()
   useEffect(() => {
     const mm = (e: MouseEvent) => {
       const r = resizeRef.current; if (!r) return
@@ -469,9 +486,9 @@ export default function SheetPageContent() {
           <button className="small" onClick={deleteRow} disabled={!selectedCell}>Delete Row</button>
           <span style={{width:1,height:22,background:'#ddd',margin:'0 2px'}}/>
           <button className="small" onClick={()=>setShowFind(!showFind)}>Find</button>
-          <button className="small" onClick={()=>{setShowFilter(f=>!f)}} title="Show a filter box under every heading — type to show only matching rows"
+          <button className="small" onClick={()=>{setShowFilter(f=>!f)}} title="Excel-style filter: a ▼ on every heading with sort, value list and text conditions"
             style={{background:showFilter?'#E8F5E9':undefined,borderColor:showFilter?'#137E43':undefined,fontWeight:showFilter?700:undefined}}>⏷ Filter{activeFilters.length?` (${activeFilters.length})`:''}</button>
-          {showFilter&&activeFilters.length>0&&<button className="small" onClick={()=>setColFilters({})}>Clear filter</button>}
+          {showFilter&&(activeFilters.length>0||sortBy)&&<button className="small" onClick={()=>{setColFilters({});setSortBy(null)}}>Clear filter</button>}
           <button className="small" onClick={toggleWrap} title="Wrap long text inside the cell (off = one line, cut with …)"
             style={{background:wrapText?'#E8F5E9':undefined,borderColor:wrapText?'#137E43':undefined,fontWeight:wrapText?700:undefined}}>↵ Wrap text</button>
           <button className="small" onClick={resetColWidths} title="Put all column widths back to default">Reset widths</button>
@@ -501,24 +518,21 @@ export default function SheetPageContent() {
                 {SHEET_COL_HEADERS.map((h,i)=>(
                   <th key={i} style={{...STH2,width:columnWidths[i],position:'sticky',top:22,zIndex:3,overflow:'visible',whiteSpace:'normal',height:'auto',verticalAlign:'top'}} title={h}>
                     <div style={{position:'relative',display:'flex',alignItems:'flex-start',minHeight:18}}>
-                      <span style={{flex:1,overflow:'hidden',wordBreak:'break-word',lineHeight:1.3,fontSize:11}}>{h}</span>
+                      <span style={{flex:1,overflow:'hidden',wordBreak:'break-word',lineHeight:1.3,fontSize:11,paddingRight:showFilter?18:0}}>{h}</span>
+                      {showFilter&&(
+                        <button onMouseDown={e=>{e.stopPropagation();e.preventDefault()}}
+                          onClick={e=>{e.stopPropagation();const r=(e.currentTarget as HTMLElement).getBoundingClientRect();setMenuCol(m=>m&&m.col===i?null:{col:i,left:r.left,top:r.bottom+4})}}
+                          title="Sort & filter"
+                          style={{position:'absolute',right:2,top:0,width:16,height:16,fontSize:10,lineHeight:'14px',padding:0,border:'1px solid '+(isActive(colFilters[i])||sortBy?.col===i?'#137E43':'#cfd4dc'),borderRadius:3,cursor:'pointer',
+                            background:isActive(colFilters[i])||sortBy?.col===i?'#137E43':'#fff',color:isActive(colFilters[i])||sortBy?.col===i?'#fff':'#555'}}>
+                          {sortBy?.col===i?(sortBy.dir==='asc'?'↑':'↓'):isActive(colFilters[i])?'⏷':'▾'}
+                        </button>
+                      )}
                       <div onMouseDown={e=>handleColResize(i,e)} onDoubleClick={e=>{e.stopPropagation();setColumnWidths(p=>{const n=[...p];n[i]=SHEET_COL_WIDTH_DEFAULTS[i];try{localStorage.setItem(widthsKey,JSON.stringify(n))}catch{}return n})}} title="Drag to resize · double-click to reset" style={{position:'absolute',right:-6,top:-6,bottom:-6,width:10,cursor:'col-resize',zIndex:10,background:resizingColumn===i?'#137E43':'transparent'}}/>
                     </div>
                   </th>
                 ))}
               </tr>
-              {showFilter&&(
-                <tr>
-                  <th style={{position:'sticky',left:0,zIndex:5,background:'#fffbe6',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:2}}/>
-                  {SHEET_COL_HEADERS.map((_,i)=>(
-                    <th key={i} style={{background:'#fffbe6',borderRight:'1px solid #e6e9ef',borderBottom:'1px solid #e6e9ef',padding:2}}>
-                      <input value={colFilters[i]||''} onChange={e=>setColFilters(f=>({...f,[i]:e.target.value}))} placeholder="filter…"
-                        onMouseDown={e=>e.stopPropagation()} onKeyDown={e=>{ if(e.key==='Escape') setColFilters(f=>({...f,[i]:''})); e.stopPropagation() }}
-                        style={{width:'100%',boxSizing:'border-box',padding:'3px 5px',fontSize:11,border:'1px solid '+(colFilters[i]?'#137E43':'#ddd'),borderRadius:3,background:colFilters[i]?'#E8F5E9':'#fff'}}/>
-                    </th>
-                  ))}
-                </tr>
-              )}
             </thead>
             <tbody ref={tbodyRef}>
               {visibleRows.map(([row,ri])=>(
@@ -562,6 +576,15 @@ export default function SheetPageContent() {
             </tbody>
           </table>
         </div>
+
+        {menuCol&&(
+          <ColumnFilterMenu title={SHEET_COL_HEADERS[menuCol.col]} anchor={{left:menuCol.left,top:menuCol.top}}
+            allValues={rows.map(r=>getCellValue(r,menuCol.col))} filter={colFilters[menuCol.col]}
+            sortDir={sortBy?.col===menuCol.col?sortBy.dir:null}
+            onApply={f=>setColFilters(prev=>({...prev,[menuCol.col]:f}))}
+            onSort={dir=>setSortBy(dir?{col:menuCol.col,dir}:null)}
+            onClose={()=>setMenuCol(null)}/>
+        )}
 
         {/* Status bar */}
         <div style={{display:'flex',justifyContent:'space-between',padding:'5px 10px',border:'1px solid #ddd',borderTop:'none',borderRadius:'0 0 6px 6px',background:'#f8faf9',fontSize:11,color:'var(--text-tertiary)'}}>
