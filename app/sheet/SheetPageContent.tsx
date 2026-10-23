@@ -484,9 +484,9 @@ export default function SheetPageContent() {
               <tr>
                 <th style={{...STH2,width:46,position:'sticky',left:0,top:22,zIndex:5}}/>
                 {SHEET_COL_HEADERS.map((h,i)=>(
-                  <th key={i} style={{...STH2,width:columnWidths[i],position:'sticky',top:22,zIndex:3,overflow:'visible'}} title={h}>
-                    <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-                      <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis'}}>{h}</span>
+                  <th key={i} style={{...STH2,width:columnWidths[i],position:'sticky',top:22,zIndex:3,overflow:'visible',whiteSpace:'normal',height:'auto',verticalAlign:'top'}} title={h}>
+                    <div style={{position:'relative',display:'flex',alignItems:'flex-start',minHeight:18}}>
+                      <span style={{flex:1,overflow:'hidden',wordBreak:'break-word',lineHeight:1.3,fontSize:11}}>{h}</span>
                       <div onMouseDown={e=>handleColResize(i,e)} onDoubleClick={e=>{e.stopPropagation();setColumnWidths(p=>{const n=[...p];n[i]=SHEET_COL_WIDTH_DEFAULTS[i];try{localStorage.setItem(widthsKey,JSON.stringify(n))}catch{}return n})}} title="Drag to resize · double-click to reset" style={{position:'absolute',right:-6,top:-6,bottom:-6,width:10,cursor:'col-resize',zIndex:10,background:resizingColumn===i?'#137E43':'transparent'}}/>
                     </div>
                   </th>
