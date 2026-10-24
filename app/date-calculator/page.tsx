@@ -1,6 +1,7 @@
 'use client'
 
 import { SubProdCell } from '@/components/SubProd'
+import { machineLines, machineText } from '@/lib/machineMap'
 import { canonicalCode } from '@/lib/processCodes'
 import { buildHolidaySet, sundayOffFrom } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
@@ -20,6 +21,7 @@ interface BatchRow {
   orderNumber: string
   route:       string[]
   machine:     string
+  machineLines: { code: string; names: string[] }[]
   // Anchor dates from machine numbering (READ ONLY — engine uses these as input)
   anchors:     Record<string, string>  // { S: '2026-08-04', D: '2026-08-07' }
   // Generated dates (written by engine)
@@ -298,7 +300,7 @@ export default function DateCalculatorPage() {
   const loadData = useCallback(async () => {
     setLoadStatus('loading')
     try {
-      const [oRes, bRes, dpRes, hRes, pdRes, procList, factoryRes] = await Promise.all([
+      const [oRes, bRes, dpRes, hRes, pdRes, procList, factoryRes, machRes] = await Promise.all([
         fetch('/api/orders',  { cache:'no-store' }).then(r=>r.json()),
         fetch('/api/batches',{ cache:'no-store' }).then(r=>r.json()),
         fetch('/api/date-plans',          { cache:'no-store' }).then(r=>r.json()),
@@ -306,6 +308,7 @@ export default function DateCalculatorPage() {
         fetch('/api/setup/settings?key=processDurations',{ cache:'no-store' }).then(r=>r.json()).catch(()=>({value:[]})),
         fetchProcessList(),
         fetch('/api/setup/settings?key=factory', { cache:'no-store' }).then(r=>r.json()).catch(()=>({value:null})),
+        fetch('/api/machines', { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
       ])
       setSundayOff(sundayOffFrom(factoryRes?.value))
 
@@ -325,6 +328,8 @@ export default function DateCalculatorPage() {
       const dpMap: Record<string,any> = {}
       for (const dp of datePlans) dpMap[dp.batch_id] = dp
 
+      const machName: Record<string, string> = {}
+      for (const m of (machRes?.data || []) as any[]) machName[m.id] = m.name
       const batchRows: BatchRow[] = []
       for (const b of batches) {
         const o = orderMap[b.order_id] || {}
@@ -362,8 +367,9 @@ export default function DateCalculatorPage() {
           color:       o.color || '',
           orderNumber: o.order_number || '',
           route:       b.process_route || o.process_route || [],
-          // Prefer batch machine (set by supervisor for repair) over order machine
-          machine:     b.machines?.name || o.machines?.name || '',
+          // per-process machines (batch map set at split / Edit machine, else the order's), else the single batch machine
+          machine:     machineText(machineLines(b, o, machName)),
+          machineLines: machineLines(b, o, machName),
           anchors,
           dates,
           dcGeneratedOnce: dp.dc_generated_once || false,
@@ -725,7 +731,12 @@ export default function DateCalculatorPage() {
                       <td style={TD}><SubProdCell value={row.subProd} /></td>
                       <td style={{ ...TD, fontWeight:700 }}>{row.kg||'-'}</td>
                       <td style={{ ...TD, color:'#2563EB', fontWeight:600, fontSize:11 }}>{routeDisplay||'-'}</td>
-                      <td style={TD}>{row.machine||'-'}</td>
+                      <td style={TD}>{row.machineLines?.length ? row.machineLines.map(l => (
+                        <div key={l.code} style={{ display:'flex', gap:4, alignItems:'center', whiteSpace:'nowrap' }}>
+                          {l.code && <span style={{ fontSize:10, fontWeight:700, color:'var(--text-tertiary)', minWidth:18 }}>{l.code}</span>}
+                          <span>{l.names.join(' / ')}</span>
+                        </div>
+                      )) : '-'}</td>
                       <td style={{ ...TD, fontSize:10, color:'#6B7280' }}>{anchorSummary||'-'}</td>
                       {ALL_PROCS.map(pc => {
                         const ymd = row.dates[pc] || ''

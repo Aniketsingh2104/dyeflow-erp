@@ -66,3 +66,25 @@ export function primaryMachine(route: string[] | null | undefined, map: Record<s
   }
   return Object.values(map)[0] || fallback || null
 }
+
+/**
+ * Machine names to SHOW for a batch, one line per process: the batch's own
+ * process_machine_map first (set at split / edit machine), else the order's
+ * process_machines, else the single batches.machine_id. Used by Splitted
+ * Orders and the Date Calculator so both pages agree.
+ */
+export function machineLines(b: any, o: any, nameById: Record<string, string>): { code: string; names: string[] }[] {
+  const route: string[] = (b?.process_route?.length ? b.process_route : o?.process_route) || []
+  const src: Record<string, any> = Object.keys(b?.process_machine_map || {}).length ? b.process_machine_map : (o?.process_machines || {})
+  const codes = [...route.filter(c => src[c]), ...Object.keys(src).filter(c => !route.includes(c))]
+  const lines = codes.map(code => ({ code, names: ((Array.isArray(src[code]) ? src[code] : [src[code]]) as string[]).map(id => nameById[id]).filter(Boolean) }))
+    .filter(l => l.names.length)
+  if (lines.length) return lines
+  const single = b?.machines?.name || o?.machines?.name
+  return single ? [{ code: '', names: [single] }] : []
+}
+
+/** "D Athena 1 · F Long Tube Jet No. 30" — one-line text form of machineLines */
+export function machineText(lines: { code: string; names: string[] }[]): string {
+  return lines.map(l => (l.code ? l.code + ' ' : '') + l.names.join(' / ')).join(' · ')
+}

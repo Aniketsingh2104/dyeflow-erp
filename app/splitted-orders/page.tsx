@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { machineLines } from '@/lib/machineMap'
 import { useAutoRefresh, RefreshStamp } from '@/components/useAutoRefresh'
 import { isBatchFinished } from '@/lib/batchStatus'
 import { collabBlockMessage } from '@/lib/collab'
@@ -21,16 +22,6 @@ const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> =
 }
 
 // [{ code: 'S', names: ['LJET-31'] }, { code: 'D', names: ['LJET-22'] }] in route order
-function machineLines(b: any, o: any, name: Record<string, string>): { code: string; names: string[] }[] {
-  const route: string[] = (b.process_route?.length ? b.process_route : o.process_route) || []
-  const src: Record<string, any> = Object.keys(b.process_machine_map || {}).length ? b.process_machine_map : (o.process_machines || {})
-  const codes = [...route.filter(c => src[c]), ...Object.keys(src).filter(c => !route.includes(c))]
-  const lines = codes.map(code => ({ code, names: ((Array.isArray(src[code]) ? src[code] : [src[code]]) as string[]).map(id => name[id]).filter(Boolean) }))
-    .filter(l => l.names.length)
-  if (lines.length) return lines
-  const single = b.machines?.name || o.machines?.name
-  return single ? [{ code: '', names: [single] }] : []
-}
 
 function Badge({ status }: { status: string }) {
   const b = STATUS_MAP[status] || { bg: 'var(--bg-secondary)', color: 'var(--text-tertiary)', label: status }
