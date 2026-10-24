@@ -805,12 +805,16 @@ a.danger {
 .print-only { display: none; }
 /* table styles live outside @media print so the page can measure the table
    before printing and shrink it to the page width (zoom) */
-.print-table { border-collapse: collapse; font-size: 11px; color: #000; table-layout: auto; background: #fff; }
+/* separate borders (not collapse): Chrome drops the collapsed bottom / right line when the table is zoomed for print */
+.print-table { border-collapse: separate; border-spacing: 0; border: 1px solid #000; font-size: 11px; color: #000; table-layout: auto; background: #fff; }
+.print-only { padding-bottom: 8px; }
 /* words never break in the middle: a column is as wide as its longest word, long text wraps at spaces */
-.print-table th, .print-table td { border: 0.6pt solid #000; padding: 3px 5px; text-align: left; vertical-align: top; white-space: normal; word-break: normal; overflow-wrap: normal; max-width: 110px; }
+.print-table th, .print-table td { border-right: 1px solid #000; border-bottom: 1px solid #000; padding: 3px 5px; text-align: left; vertical-align: top; white-space: normal; word-break: normal; overflow-wrap: normal; max-width: 110px; }
 .print-table td.wrap { max-width: 150px; }
 .print-table th { background: #e8e8e8 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: 700; text-transform: uppercase; font-size: 9px; }
 .print-table tr { page-break-inside: avoid; }
+.print-table th:last-child, .print-table td:last-child { border-right: 0; }
+.print-table tbody tr:last-child td { border-bottom: 0; }
 .print-table thead { display: table-header-group; }
 @media print {
   @page { size: A4 landscape; margin: 10mm; }
