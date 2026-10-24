@@ -803,15 +803,20 @@ a.danger {
 
 /* ── Printing a machine sheet (app/machines/[machineId]) ─────────────────── */
 .print-only { display: none; }
+/* table styles live outside @media print so the page can measure the table
+   before printing and shrink it to the page width (zoom) */
+.print-table { border-collapse: collapse; font-size: 11px; color: #000; table-layout: auto; background: #fff; }
+/* words never break in the middle: a column is as wide as its longest word, long text wraps at spaces */
+.print-table th, .print-table td { border: 0.6pt solid #000; padding: 3px 5px; text-align: left; vertical-align: top; white-space: normal; word-break: normal; overflow-wrap: normal; max-width: 110px; }
+.print-table td.wrap { max-width: 150px; }
+.print-table th { background: #e8e8e8 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: 700; text-transform: uppercase; font-size: 9px; }
+.print-table tr { page-break-inside: avoid; }
+.print-table thead { display: table-header-group; }
 @media print {
-  @page { size: A4 landscape; margin: 8mm; }
-  body { background: #fff !important; }
+  @page { size: A4 landscape; margin: 10mm; }
+  html, body { background: #fff !important; }
+  .machine-sheet-page { padding: 0 !important; margin: 0 !important; max-width: none !important; width: auto !important; }
   .machine-sheet-page > *:not(.print-only) { display: none !important; }
   .machine-sheet-page .print-only { display: block !important; }
-  nav, header, .navbar, .mobile-nav, .app-topbar, [data-topbar] { display: none !important; }
-  .print-table { width: 100%; border-collapse: collapse; font-size: 9px; }
-  .print-table th, .print-table td { border: 1px solid #999; padding: 3px 4px; text-align: left; vertical-align: top; word-break: break-word; }
-  .print-table th { background: #eee; font-weight: 700; text-transform: uppercase; font-size: 8px; }
-  .print-table tr { page-break-inside: avoid; }
-  .print-table thead { display: table-header-group; }
+  nav, header, .navbar, .mobile-nav { display: none !important; }
 }

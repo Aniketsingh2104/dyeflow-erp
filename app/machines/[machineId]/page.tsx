@@ -136,6 +136,25 @@ export default function MachinePage() {
   const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
   const [hoursInfo, setHoursInfo] = useState<HoursSettings>(DEFAULT_HOURS)
   const [processNames, setProcessNames] = useState<Record<string, string>>({})
+  // Print: shrink the print table so all columns fit the page width (app/globals.css @media print)
+  useEffect(() => {
+    const fit = () => {
+      const box = document.querySelector<HTMLElement>('.machine-sheet-page .print-only')
+      const tbl = box?.querySelector<HTMLElement>('.print-table')
+      if (!box || !tbl) return
+      // measure the table at its natural width (it is display:none on screen)
+      const prev = { display: box.style.display, position: box.style.position, visibility: box.style.visibility, zoom: box.style.zoom }
+      box.style.zoom = '1'; box.style.display = 'block'; box.style.position = 'absolute'; box.style.visibility = 'hidden'
+      const pageW = 277 * 96 / 25.4   // A4 landscape minus 2 × 10 mm margins, in CSS px
+      const w = tbl.scrollWidth
+      box.style.display = prev.display; box.style.position = prev.position; box.style.visibility = prev.visibility
+      box.style.zoom = w > pageW ? String(Math.max(0.3, (pageW / w) * 0.98)) : '1'
+    }
+    const reset = () => { const box = document.querySelector<HTMLElement>('.machine-sheet-page .print-only'); if (box) box.style.zoom = '1' }
+    ;(window as any).__dfFitPrint = fit
+    window.addEventListener('beforeprint', fit); window.addEventListener('afterprint', reset)
+    return () => { delete (window as any).__dfFitPrint; window.removeEventListener('beforeprint', fit); window.removeEventListener('afterprint', reset) }
+  }, [])
 
   useEffect(() => {
     if (!permLoading && !canView) return
@@ -681,12 +700,7 @@ export default function MachinePage() {
             Capacity {machine.capacity} Kg · {filteredBatches.length} rows · printed {new Date().toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
           </div>
         </div>
-        <table className="print-table" style={{ tableLayout: 'fixed' }}>
-          <colgroup>
-            {(() => { const w = (c: typeof COLUMNS[number]) => columnWidths[COLUMNS.indexOf(c)] || c.defaultWidth
-              const total = visibleColumns.reduce((t, c) => t + w(c), 0)
-              return visibleColumns.map(col => <col key={col.key} style={{ width: `${(w(col) / total * 100).toFixed(2)}%` }} />) })()}
-          </colgroup>
+        <table className="print-table">
           <thead><tr>{visibleColumns.map(col => <th key={col.key}>{col.label}</th>)}</tr></thead>
           <tbody>
             {filteredBatches.map(batch => (
@@ -696,7 +710,8 @@ export default function MachinePage() {
                   if (col.key === 'status') v = batch.procDone ? 'Done' : batch.faulty ? 'Faulty' : batch.current_process ? `${processNames[batch.current_process] || batch.current_process} sheet` : 'Not sent'
                   else if (col.key === 'batchId') v = withSubProd(batch.batchId, '')
                   else if (col.key === 'timeStamp' || col.key === 'plannedDate') v = batch[col.key] ? formatDate(batch[col.key]) : ''
-                  return <td key={col.key}>{v == null || v === '' ? '' : String(v)}</td>
+                  const wrap = ['typeOfFinish', 'typeOfPacking', 'remarks', 'article', 'party', 'subParty', 'color'].includes(col.key)
+                  return <td key={col.key} className={wrap ? 'wrap' : ''}>{v == null || v === '' ? '' : String(v)}</td>
                 })}
               </tr>
             ))}
@@ -884,7 +899,7 @@ export default function MachinePage() {
                 Clear All
               </button>
             )}
-            <button onClick={() => window.print()} title="Print this sheet (the rows and columns shown now)"
+            <button onClick={() => { (window as any).__dfFitPrint?.(); setTimeout(() => window.print(), 50) }} title="Print this sheet (the rows and columns shown now)"
               style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 600, borderRadius: '4px', border: '1px solid #CBD5E0', background: 'white', color: '#2D3748', cursor: 'pointer' }}>
               🖨 Print
             </button>
