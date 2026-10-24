@@ -132,11 +132,6 @@ export default function MobileSupervisorSheet({ name, color, tab, setTab, stats,
                       process_route: r.process_route || [], processRoute: r.process_route || [], machine_id: r.machine_id || null, machineId: r.machine_id || null }}
                       onUpdate={onUpdate} />
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    <button onClick={() => onRepairSplit(r)} disabled={repairSaving} style={{ ...btn, background: 'var(--bg-primary)', color: 'var(--accent)', border: '1px solid var(--accent)' }}>✂ Split</button>
-                    <button onClick={() => onRepairFullSplit(r)} disabled={repairSaving} style={{ ...btn, background: 'var(--accent)', color: '#fff' }}>▶ Full Split</button>
-                    <button onClick={() => onRepairReassign(r)} disabled={repairSaving} style={{ ...btn, gridColumn: '1 / -1', background: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border-medium)' }}>👤 Reassign</button>
-                  </div>
                 </div>
               )}
             </div>

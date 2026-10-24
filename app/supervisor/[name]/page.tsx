@@ -734,7 +734,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
                     {['BATCH #','SUB PROD NO.','ORDER #','PARTY','SUB PARTY','SALES PERSON','ARTICLE',
                       'BLEND','WIDTH','GSM','COLOR','LAB NO.','LOT NO.','CHALLAN NO.',
                       'QTY(KG)','QTY(MTR)','TAKA','FINISH','PACKING','REMARKS',
-                      'REPAIR KG','REPAIR MTR','REPAIR TAKA','SOURCE','TYPE','NOTES','ASSIGN','ACTIONS'].map(h => (
+                      'REPAIR KG','REPAIR MTR','REPAIR TAKA','SOURCE','TYPE','NOTES','ASSIGN'].map(h => (
                       <th key={h} style={headerStyle}>{h}</th>
                     ))}
                   </tr>
@@ -799,29 +799,6 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
                           }}
                           onUpdate={loadData}
                         />
-                      </td>
-                      {/* Actions: Split, Full Split, Reassign */}
-                      <td style={{ ...cellStyle, whiteSpace:'nowrap' }}>
-                        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                          <button onClick={() => openRepairSplitModal(r)} disabled={repairSaving}
-                            style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
-                              border:'1px solid var(--accent)', borderRadius:4,
-                              cursor:'pointer', background:'transparent', color:'var(--accent)' }}>
-                            ✂ Split
-                          </button>
-                          <button onClick={() => doRepairFullSplit(r)} disabled={repairSaving}
-                            style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
-                              border:'none', borderRadius:4, cursor:'pointer',
-                              background:'#7C3AED', color:'white' }}>
-                            ⚡ Full Split
-                          </button>
-                          <button onClick={() => setRepairAssignModal(r)} disabled={repairSaving}
-                            style={{ padding:'3px 8px', fontSize:11, fontWeight:600,
-                              border:'1px solid #D97706', borderRadius:4,
-                              cursor:'pointer', background:'#FFFBEB', color:'#92400E' }}>
-                            👤 Reassign
-                          </button>
-                        </div>
                       </td>
                     </tr>
                   ))}
