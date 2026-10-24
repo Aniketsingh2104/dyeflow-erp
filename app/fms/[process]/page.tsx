@@ -744,7 +744,7 @@ export default function FmsProcessPage() {
                           const isDone   = row.bpStatus === 'done'
                           const isFaulty = row.bpStatus === 'faulty'
                           const hasFob   = row.hasFob
-                          // One action taken = lock other two; Delete always works
+                          // One action taken (Done / Faulty / FOB) = the other buttons, Delete included, are locked
                           const anyDone  = isDone || isFaulty || hasFob
 
                           const btnBase: React.CSSProperties = {
@@ -811,14 +811,14 @@ export default function FmsProcessPage() {
                                   {hasFob ? '✓ FOB' : '+ FOB'}
                                 </button>
 
-                                {/* DELETE (roll back) — only while the batch is running here */}
+                                {/* DELETE (roll back) — only while the batch is running here and nothing has been marked on it */}
                                 {sameCode(row.current_process, processCode) && row.status === 'in-process' && !row.is_faulty && (
                                 <button
-                                  onClick={() => handleRollback(row)}
-                                  disabled={saving}
+                                  onClick={() => !anyDone && handleRollback(row)}
+                                  disabled={saving || anyDone}
                                   style={{ ...btnBase, background:'transparent',
-                                    color:'#DC2626', border:'1px solid #DC2626' }}
-                                  title="Roll back to previous process">
+                                    color:'#DC2626', border:'1px solid #DC2626', ...(anyDone ? disabledStyle : {}) }}
+                                  title={anyDone ? (hasFob ? 'FOB marked — delete is locked' : 'Already marked — delete is locked') : 'Roll back to previous process'}>
                                   ↩ Delete
                                 </button>
                                 )}

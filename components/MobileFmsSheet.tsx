@@ -118,7 +118,7 @@ export default function MobileFmsSheet({ processCode, rows, allBatches, saving, 
                       style={{ ...btn, background: hasFob ? '#F3E8FF' : 'var(--bg-primary)', color: anyDone && !hasFob ? '#9CA3AF' : '#7C3AED', border: `1px solid ${anyDone && !hasFob ? '#E5E7EB' : '#7C3AED'}` }}>
                       {hasFob ? '✓ FOB' : '+ FOB'}
                     </button>
-                    {running && (
+                    {running && !anyDone && (
                       <button onClick={() => onRollback(row)} disabled={saving} style={{ ...btn, gridColumn: '1 / -1', background: 'var(--bg-primary)', color: '#DC2626', border: '1px solid #DC2626' }}>
                         ↩ Roll back to previous process
                       </button>
