@@ -82,6 +82,13 @@ export default function MobileSplittedOrders({ rows, total, canEdit, onSubProd, 
                   <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Route </span>{(r.process_route || []).join(' → ')}</div>
                   <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Finish </span>{r.type_of_finish} · <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Packing </span>{r.type_of_packing}</div>
                 </div>
+                {canEdit && (
+                  <div className="edit-only" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    {r.current_process && <Link href={`/fms/${r.current_process}`} style={{ ...btn, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-medium)' }}>FMS →</Link>}
+                    {r.status !== 'done' && r.current_process && <button onClick={() => onDone(r)} style={{ ...btn, background: 'var(--success)', color: '#fff' }}>✓ Done</button>}
+                    {!isBatchFinished(r) && r.status !== 'in-process' && <button onClick={() => onDelete(r)} style={{ ...btn, gridColumn: '1 / -1', background: 'var(--danger-light)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>🗑 Delete batch</button>}
+                  </div>
+                )}
                 <Link href={`/batches/${encodeURIComponent(r.batch_id)}`} style={{ display: 'block', marginTop: 8, fontSize: 12 }}>Batch trace →</Link>
               </div>
             )}
