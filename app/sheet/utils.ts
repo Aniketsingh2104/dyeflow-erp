@@ -4,27 +4,27 @@ export const SHEET_COL_HEADERS = [
   'Submit for Approval', 'Request Edit', 'Party', 'Sub Party', 'Sales Person',
   'Article', 'Blend', 'Width', 'GSM', 'Color', 'Lab No.', 'Lot No.', 'Challan No.',
   'Qty (Kg)', 'Qty (Mtr.)', 'No. of Ta', 'Type of Finish', 'Type of Packing',
-  'Remarks', 'Hold Reason', 'Order Number', 'Process', 'Delivery Date',
+  'Remarks', 'Hold Reason', 'Order Number', 'Batches', 'Process', 'Delivery Date',
   'Current Stage', 'Approval Status', 'Rejection Reason', 'Sent At', 'Received At'
 ]
 
 export const SHEET_COL_WIDTH_DEFAULTS = [
   56, 56, 150, 140, 130, 170, 115, 86, 86, 120,
   104, 104, 112, 96, 96, 88, 132, 132, 260, 220,
-  120, 130, 130, 130, 120, 220, 150, 150
+  120, 80, 130, 130, 130, 120, 220, 150, 150
 ]
 
 export const SHEET_ALL_KEYS = [
   'submitForApproval', 'requestEdit', 'party', 'subParty', 'salesPerson',
   'article', 'blend', 'width', 'gsm', 'color', 'labNo', 'lotNo', 'challanNo',
   'qtyKg', 'qtyMtr', 'noOfTa', 'typeOfFinish', 'typeOfPacking', 'remarks',
-  'holdReason', 'orderNumber', 'process', 'deliveryDate', 'currentStage',
+  'holdReason', 'orderNumber', 'batches', 'process', 'deliveryDate', 'currentStage',
   'approvalStatus', 'rejectionReason', 'submittedOn', 'receivedAt'
 ]
 
 // Columns the party can never edit — set by system or admin only
 export const SHEET_READONLY_KEYS = [
-  'holdReason', 'orderNumber', 'process', 'deliveryDate',
+  'holdReason', 'orderNumber', 'batches', 'process', 'deliveryDate',
   'currentStage', 'approvalStatus', 'rejectionReason', 'submittedOn', 'receivedAt'
 ]
 
@@ -44,7 +44,7 @@ export const createBlankRow = (): any => ({
   party: '', subParty: '', salesPerson: '', article: '', blend: '', width: '', gsm: '',
   color: '', labNo: '', lotNo: '', challanNo: '', qtyKg: '', qtyMtr: '', noOfTa: '',
   typeOfFinish: '', typeOfPacking: '', remarks: '', holdReason: '', orderNumber: '',
-  process: '', deliveryDate: '', currentStage: '', approvalStatus: 'draft',
+  batches: '', process: '', deliveryDate: '', currentStage: '', approvalStatus: 'draft',
   rejectionReason: '', submittedOn: '', receivedAt: '',
   submitForApproval: false, requestEdit: false, editHistory: {},
 })

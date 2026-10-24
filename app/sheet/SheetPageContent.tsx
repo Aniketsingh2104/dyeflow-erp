@@ -3,10 +3,11 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { ColumnFilterMenu, ColFilter, passes, isActive, cellText } from '@/components/ColumnFilterMenu'
+import OrderBatchesPanel from '@/components/OrderBatchesPanel'
 import {
   SHEET_COL_HEADERS, SHEET_COL_WIDTH_DEFAULTS,
   toExcelColLabel, createBlankRow, getCellValue, setCellValueInRow,
-  getRowClass, isReadonlyColumn, isCheckboxColumn, isRowLocked
+  getRowClass, isReadonlyColumn, isCheckboxColumn, isRowLocked, SHEET_ALL_KEYS
 } from './utils'
 
 interface CellRange { startRow: number; startCol: number; endRow: number; endCol: number }
@@ -56,6 +57,10 @@ export default function SheetPageContent() {
   const [colFilters,      setColFilters]      = useState<Record<number, ColFilter | undefined>>({})
   const [sortBy,          setSortBy]          = useState<{ col: number; dir: 'asc' | 'desc' } | null>(null)
   const [menuCol,         setMenuCol]         = useState<{ col: number; left: number; top: number } | null>(null)
+  const [batchOrder,      setBatchOrder]      = useState<string | null>(null)   // order whose batches panel is open
+  // batch count per order number (Batches column) — comes with the rows from /api/sheet-rows
+  const withCounts = (list: any[], counts: Record<string, number> | undefined) =>
+    list.map(r => ({ ...r, batches: r.orderNumber && counts ? (counts[String(r.orderNumber).trim()] || '') : '' }))
   const [isSelecting,     setIsSelecting]     = useState(false)
   const [selectionStart,  setSelectionStart]  = useState<{row:number;col:number}|null>(null)
   const [notFound,        setNotFound]        = useState(false)
@@ -86,7 +91,7 @@ export default function SheetPageContent() {
         if (!sheetRes.ok || !sheetRes.data) { setNotFound(true); return }
 
         setSheet(sheetRes.data)
-        let clientRows: any[] = rowsRes.ok ? (rowsRes.data || []) : []
+        let clientRows: any[] = rowsRes.ok ? withCounts(rowsRes.data || [], rowsRes.batchCounts) : []
 
         // Auto-migrate legacy blob if new table empty
         if (clientRows.length === 0 && sheetRes.data.rows?.length) {
@@ -96,7 +101,7 @@ export default function SheetPageContent() {
             body: JSON.stringify({ action: 'bulk_upsert', sheet_id: sheetId, rows: clientRows }),
           })
           const fresh = await fetch(`/api/sheet-rows?sheet_id=${sheetId}`, { cache: 'no-store' }).then(r => r.json())
-          clientRows = fresh.ok ? (fresh.data || []) : clientRows
+          clientRows = fresh.ok ? withCounts(fresh.data || [], fresh.batchCounts) : clientRows
         }
 
         setRows(clientRows.length ? clientRows.map((r: any) => ({ ...r, _k: r.id || newKey() })) : [blankRow()])
@@ -241,7 +246,7 @@ export default function SheetPageContent() {
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(widthsKey) || 'null')
-      if (Array.isArray(saved) && saved.length) setColumnWidths(SHEET_COL_WIDTH_DEFAULTS.map((d, i) => (typeof saved[i] === 'number' && saved[i] >= 40 ? saved[i] : d)))
+      if (Array.isArray(saved) && saved.length === SHEET_COL_WIDTH_DEFAULTS.length) setColumnWidths(SHEET_COL_WIDTH_DEFAULTS.map((d, i) => (typeof saved[i] === 'number' && saved[i] >= 40 ? saved[i] : d)))
       if (localStorage.getItem(widthsKey + '_wrap') === '0') setWrapText(false)
     } catch {}
   }, [widthsKey])
@@ -565,6 +570,13 @@ export default function SheetPageContent() {
                           <input ref={inputRef} value={editValue} onChange={e=>setEditValue(e.target.value)}
                             onBlur={handleCellBlur} onKeyDown={handleKeyDown}
                             style={{width:'100%',height:'100%',border:0,outline:0,padding:0,background:'transparent',font:'inherit',color:'inherit'}} autoFocus/>
+                        ) : (SHEET_ALL_KEYS[ci]==='orderNumber'||SHEET_ALL_KEYS[ci]==='batches') && row.orderNumber ? (
+                          <span onClick={e=>{e.stopPropagation();setBatchOrder(String(row.orderNumber))}} title="Click to see this order's batches"
+                            style={SHEET_ALL_KEYS[ci]==='batches'
+                              ? {display:'inline-block',minWidth:26,textAlign:'center',padding:'2px 8px',borderRadius:12,fontWeight:700,cursor:'pointer',background:val?'#DBEAFE':'#F3F4F6',color:val?'#1E40AF':'#9CA3AF'}
+                              : {color:'#185FA5',fontWeight:700,cursor:'pointer',textDecoration:'underline',textDecorationStyle:'dotted'}}>
+                            {SHEET_ALL_KEYS[ci]==='batches' ? (val||'—') : String(val||'')}
+                          </span>
                         ) : (
                           <span>{String(val||'')}</span>
                         )}
@@ -577,6 +589,7 @@ export default function SheetPageContent() {
           </table>
         </div>
 
+        {batchOrder&&sheetId&&<OrderBatchesPanel sheetId={sheetId} orderNumber={batchOrder} onClose={()=>setBatchOrder(null)}/>}
         {menuCol&&(
           <ColumnFilterMenu title={SHEET_COL_HEADERS[menuCol.col]} anchor={{left:menuCol.left,top:menuCol.top}}
             allValues={rows.map(r=>getCellValue(r,menuCol.col))} filter={colFilters[menuCol.col]}

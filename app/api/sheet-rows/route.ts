@@ -108,7 +108,41 @@ export async function GET(req: NextRequest) {
     'edit_history,edit_requested_on,is_batch_row,updated_at'
   )
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-  return NextResponse.json({ ok: true, data: data.map(toClient) })
+
+  // ?order_batches=DYE26-0001 → that order's batches, only if the order belongs to a row of this sheet
+  const orderNo = searchParams.get('order_batches')
+  if (orderNo) {
+    if (!data.some((r: any) => String(r.order_number || '').trim() === orderNo.trim()))
+      return NextResponse.json({ ok: false, error: 'This order is not on this sheet.' }, { status: 403 })
+    return NextResponse.json({ ok: true, ...(await orderBatches(orderNo.trim())) })
+  }
+
+  // batch count per order number, for the Batches column
+  const counts: Record<string, number> = {}
+  const nos = [...new Set(data.map((r: any) => String(r.order_number || '').trim()).filter(Boolean))]
+  if (nos.length) {
+    const { data: ords } = await dbSelect('orders', { order_number: `in.(${nos.map(n => `"${n}"`).join(',')})`, limit: '5000' }, 'id,order_number')
+    const byId: Record<string, string> = {}
+    for (const o of (ords || []) as any[]) byId[o.id] = o.order_number
+    const ids = Object.keys(byId)
+    if (ids.length) {
+      const { data: bs } = await dbSelect('batches', { order_id: `in.(${ids.join(',')})`, limit: '20000' }, 'order_id')
+      for (const b of (bs || []) as any[]) { const n = byId[b.order_id]; if (n) counts[n] = (counts[n] || 0) + 1 }
+    }
+  }
+  return NextResponse.json({ ok: true, data: data.map(toClient), batchCounts: counts })
+}
+
+// Order + its batches for the sheet's batch panel (read-only view for the party)
+async function orderBatches(orderNo: string) {
+  const { data: ords } = await dbSelect('orders', { order_number: `eq.${orderNo}`, limit: '1' },
+    'id,order_number,article,color,qty_kg,qty_mtr,no_of_taka,status,process_route,delivery_date,supervisors(name)')
+  const order = ords?.[0]
+  if (!order) return { order: null, batches: [] }
+  const { data: bs } = await dbSelect('batches', { order_id: `eq.${order.id}`, order: 'created_at.asc', limit: '500' },
+    'id,batch_id,sub_prod_no,kg,mtr,taka,status,current_process,last_process,is_done,is_faulty,process_route,planned_date,actual_date,created_at,updated_at,' +
+    'machines(name),batch_processes(process_code,status,sent_at,received_at,done_at)')
+  return { order, batches: bs || [] }
 }
 
 // Fields only the office (Pending Approvals) may set — a party's sheet never writes them
