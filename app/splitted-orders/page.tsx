@@ -60,7 +60,6 @@ const COLS = [
   { id: 'taka',            label: 'TAKA',              w:  80, on: true  },
   { id: 'batch_status',    label: 'BATCH STATUS',      w: 110, on: true  },
   { id: 'current_process', label: 'CURRENT PROCESS',   w: 140, on: true  },
-  { id: 'actions',         label: 'ACTIONS',           w: 180, on: true  },
 ]
 
 export default function SplittedOrdersPage() {
