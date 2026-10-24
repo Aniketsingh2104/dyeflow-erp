@@ -4,6 +4,7 @@
  */
 import { dbSelect, dbInsert, sb, auditLog } from '@/lib/supabase'
 import { ensureTail } from '@/lib/routeTail'
+import { lookupSupervisorId } from '@/lib/supervisorAssign'
 
 /** Columns a page may set on an order. Anything else the browser sends
  *  (id, order_number, created_at, created_by …) is dropped. */
@@ -25,18 +26,10 @@ export function cleanOrderFields(payload: Record<string, any>): Record<string, a
   return out
 }
 
-// article_supervisor_map.supervisor stores the NAME; resolve it to the UUID
+// article_supervisor_map.supervisor stores the NAME; resolve it to the UUID.
+// Matching ignores case / spaces / symbols — lib/supervisorAssign.ts
 export async function lookupSupervisor(article: string): Promise<string | null> {
-  if (!article) return null
-  try {
-    const { data: mapRows } = await dbSelect('article_supervisor_map', { article: `eq.${article}`, limit: '1' }, 'supervisor')
-    const supervisorName = mapRows?.[0]?.supervisor
-    if (!supervisorName) return null
-    const { data: supRows } = await dbSelect('supervisors', { name: `eq.${supervisorName}`, limit: '1' }, 'id')
-    return supRows?.[0]?.id || null
-  } catch {
-    return null
-  }
+  return lookupSupervisorId(article)
 }
 
 /** Next order number from the database counter (DYE26-0001 …). */

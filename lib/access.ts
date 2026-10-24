@@ -56,6 +56,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
     update: { edit: ORDER_EDIT },
     update_planned_dates: { edit: ['/date-calculator', '/orders'] },
     assign_supervisor: { edit: ['/orders', '/supervisor', '/ai-assistant'] },
+    assign_from_map: 'admin',
     update_status: { edit: ['/orders', '/ai-assistant'] },
     bulk_update: { edit: ['/orders', '/ai-assistant'] },
     reorder: { edit: ['/orders'] },

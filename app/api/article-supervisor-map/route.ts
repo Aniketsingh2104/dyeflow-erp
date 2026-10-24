@@ -3,6 +3,7 @@ import { guard } from '@/lib/access'
 import { dbSelect, dbInsert, dbUpdate, dbDelete, sb } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { lastByKey } from '@/lib/dedupe'
+import { assignUnassignedOrders } from '@/lib/supervisorAssign'
 
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'article-supervisor-map', 'GET'); if (g.deny) return g.deny }
@@ -47,7 +48,9 @@ export async function POST(req: NextRequest) {
         { article: article.trim(), supervisor: supervisor.trim() })
       if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
     }
-    return NextResponse.json({ ok: true })
+    // open orders of this article that have no supervisor yet get this one now
+    const assigned = await assignUnassignedOrders({ onlyArticles: [article] }).catch(() => null)
+    return NextResponse.json({ ok: true, assigned: assigned?.assigned || 0, assignedOrders: assigned?.orders || [], unknownSupervisor: assigned?.unknownSupervisor || [] })
   }
 
   if (action === 'bulk_upsert') {
@@ -68,7 +71,8 @@ export async function POST(req: NextRequest) {
       headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     })
     if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
-    return NextResponse.json({ ok: true, upserted: rows.length })
+    const assigned = await assignUnassignedOrders({ onlyArticles: rows.map(r => r.article) }).catch(() => null)
+    return NextResponse.json({ ok: true, upserted: rows.length, assigned: assigned?.assigned || 0, unknownSupervisor: assigned?.unknownSupervisor || [] })
   }
 
   if (action === 'delete') {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { assignUnassignedOrders } from '@/lib/supervisorAssign'
 import { dbSelect, dbSelectAll, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { refreshOrderStatus } from '@/lib/orderStatus'
@@ -223,6 +224,13 @@ export async function POST(req: NextRequest) {
     await auditLog({ username: _user, action: 'assign', entity_type: 'order',
       entity_id: id, field: 'supervisor_id', new_value: supervisor_id })
     return NextResponse.json({ ok: true })
+  }
+
+  // Admin button on the Orders page: give every open order without a supervisor
+  // the one from the Article → Supervisor Map (lib/supervisorAssign.ts)
+  if (action === 'assign_from_map') {
+    const r = await assignUnassignedOrders({ note: 'supervisor set from Article → Supervisor Map (Orders page)' })
+    return NextResponse.json({ ok: true, ...r })
   }
 
   if (action === 'update_status') {

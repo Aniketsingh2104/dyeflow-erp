@@ -91,6 +91,8 @@ export default function ArticleMasterPage() {
         showToast('⚠ Save failed — refreshing')
         load(false) // silent background sync to restore correct state
       } else {
+        if (data.assigned) showToast(`✓ Saved · ${data.assigned} open order${data.assigned === 1 ? '' : 's'} of this article assigned to ${supervisor}`)
+        else if (data.unknownSupervisor?.length) showToast(`⚠ Saved, but "${supervisor}" is not in Supervisor Master — orders not assigned`)
         // Background sync to get real id for new items
         if (!editing) load(false)
       }
@@ -161,7 +163,7 @@ export default function ArticleMasterPage() {
       const data = await res.json()
       if (!data.ok) { setImportStatus('❌ Import failed: ' + data.error); return }
 
-      setImportStatus(`✅ ${data.upserted} mappings imported`)
+      setImportStatus(`✅ ${data.upserted} mappings imported${data.assigned ? ` · ${data.assigned} open order${data.assigned === 1 ? '' : 's'} assigned` : ''}${data.unknownSupervisor?.length ? ` · not in Supervisor Master: ${data.unknownSupervisor.join(', ')}` : ''}`)
       setTimeout(() => setImportStatus(''), 4000)
       load(false) // silent background sync
     } catch (err: any) {

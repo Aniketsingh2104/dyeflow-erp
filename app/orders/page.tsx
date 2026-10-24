@@ -94,6 +94,20 @@ export default function OrdersPage() {
   const [loading,     setLoading]     = useState(true)
   const [saving,      setSaving]      = useState(false)
   const [toast,       setToast]       = useState('')
+  const [assigningMap, setAssigningMap] = useState(false)
+  const isAdmin = (getCurrentUser()?.role || '').toLowerCase() === 'admin'
+  // Admin: back-fill supervisors from the Article → Supervisor Map for orders that have none
+  const assignFromMap = async () => {
+    setAssigningMap(true)
+    try {
+      const r = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'assign_from_map' }) }).then(x => x.json())
+      if (!r.ok) { alert('Not done: ' + (r.error || 'Unknown error')); return }
+      const miss = r.unknownSupervisor?.length ? ` · supervisor not in Supervisor Master: ${r.unknownSupervisor.join(', ')}` : ''
+      alert(`${r.assigned} order${r.assigned === 1 ? '' : 's'} assigned from the map · ${r.noMatch} unassigned order${r.noMatch === 1 ? '' : 's'} with no mapping${miss}`
+        + (r.orders?.length ? '\n\n' + r.orders.slice(0, 20).map((o: any) => `${o.order_number} · ${o.article} → ${o.supervisor}`).join('\n') + (r.orders.length > 20 ? `\n… and ${r.orders.length - 20} more` : '') : ''))
+      loadAll(true)
+    } finally { setAssigningMap(false) }
+  }
 
   // Filters
   const [searchTerm,    setSearchTerm]    = useState('')
@@ -680,6 +694,14 @@ export default function OrdersPage() {
             color: priorityMode ? 'var(--purple)' : 'var(--text-primary)', cursor: 'pointer' }}>
           {priorityMode ? '✔ Priority Mode' : '↕ Set Priority'}
         </button>
+        {isAdmin && (
+          <button onClick={assignFromMap} disabled={assigningMap}
+            title="Give every open order that has no supervisor the one from Setup → Article → Supervisor Map"
+            style={{ padding: '6px 10px', fontSize: 13, border: '1px solid var(--border-medium)', borderRadius: 5,
+              background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer' }}>
+            {assigningMap ? '…' : '👤 Assign from map'}
+          </button>
+        )}
         <RefreshStamp style={{ marginRight: 6 }} />
         <button onClick={() => loadAll()} title="Refresh"
           style={{ padding: '6px 10px', fontSize: 13, border: '1px solid var(--border-medium)',
