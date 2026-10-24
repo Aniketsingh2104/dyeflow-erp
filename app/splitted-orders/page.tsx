@@ -60,7 +60,7 @@ const COLS = [
   { id: 'kg',              label: 'BATCH QTY (KG)',    w: 120, on: true  },
   { id: 'batch_status',    label: 'BATCH STATUS',      w: 110, on: true  },
   { id: 'current_process', label: 'CURRENT PROCESS',   w: 140, on: true  },
-  { id: 'actions',         label: 'ACTIONS',           w: 180, on: true  },
+  { id: 'actions',         label: 'ACTIONS',           w: 100, on: true  },
 ]
 
 export default function SplittedOrdersPage() {
@@ -299,18 +299,6 @@ export default function SplittedOrdersPage() {
       case 'actions':
         return (
           <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            {row.current_process && (
-              <button className="xs" onClick={() => window.location.href=`/fms/${row.current_process}`}>
-                FMS →
-              </button>
-            )}
-            {row.status !== 'done' && row.current_process && (
-              <button className="xs"
-                style={{background:'var(--success)',color:'#fff',border:'none',cursor:'pointer'}}
-                onClick={() => handleDone(row)}>
-                ✓ Done
-              </button>
-            )}
             {!isBatchFinished(row) && row.status !== 'in-process' && (
               <button className="xs"
                 style={{background:'var(--danger-light)',color:'var(--danger)',
