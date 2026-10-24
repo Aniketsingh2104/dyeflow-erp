@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   const [oRes, bRes, mRes, fRes, rRes] = await Promise.all([
     dbSelectAll<any>('orders', { status: 'neq.done', order: 'created_at.asc' },
       'id,order_number,status,planned_dates,delivery_date,supervisor_id,supervisors(name)'),
-    dbSelectAll<any>('batches', { status: 'not.in.(done,written-off)', order: 'created_at.asc' }, 'id,machine_id,kg'),
+    dbSelectAll<any>('batches', { status: 'not.in.(done,written-off,reprocessed)', order: 'created_at.asc' }, 'id,machine_id,kg'),
     dbSelect<any>('machines', { order: 'name.asc' }, 'id,name,capacity,is_active'),
     dbSelect<any>('faulty_records', { status: 'eq.open', order: 'created_at.desc', limit: '200' }, 'id,order_number'),
     dbSelect<any>('repairing_orders', { status: 'eq.pending', order: 'created_at.desc', limit: '200' }, 'id,batch_id'),

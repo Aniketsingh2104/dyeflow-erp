@@ -57,7 +57,7 @@ export default function MobileFmsSheet({ processCode, rows, allBatches, saving, 
       {list.map(row => {
         const isOpen = open === row.id
         const isDone = row.bpStatus === 'done', isFaulty = row.bpStatus === 'faulty', hasFob = row.hasFob
-        const anyDone = isDone || isFaulty || hasFob
+        const anyDone = isDone || isFaulty || hasFob || row.status === 'reprocessed'
         const running = sameCode(row.current_process, processCode) && row.status === 'in-process' && !row.is_faulty
         const urg = row.bpStatus === 'pending' ? getUrgency(row.plannedDate).status : ''
         const d = delay(row.plannedDate, row.actualDate, now)
@@ -70,6 +70,7 @@ export default function MobileFmsSheet({ processCode, rows, allBatches, saving, 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {row.batch_id}<SubProdTag value={row.sub_prod_no} />
+                    {row.status === 'reprocessed' && row.reprocessed_to && <span style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)' }}>⟳ Reprocessed → {row.reprocessed_to}</span>}
                     {collab.hasCollab && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8, background: '#DBEAFE', color: '#1E40AF' }}>COLLAB</span>}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.orderNo} · {row.party}</div>

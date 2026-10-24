@@ -40,9 +40,10 @@ async function refreshInApp(orderId: string): Promise<string | null> {
 
     const started = batches.some((b: any) =>
       b.status === 'in-process' || b.status === 'done' || b.status === 'faulty' ||
-      b.status === 'repairing' || b.status === 'written-off' || b.is_done || !!b.current_process || !!b.sent_at)
-    const allDone = batches.every((b: any) => b.status === 'done' || b.status === 'written-off' || b.is_done === true)
-    const splitKg = batches.reduce((s: number, b: any) => s + (parseFloat(b.kg) || 0), 0)
+      b.status === 'repairing' || b.status === 'written-off' || b.status === 'reprocessed' || b.is_done || !!b.current_process || !!b.sent_at)
+    const allDone = batches.every((b: any) => b.status === 'done' || b.status === 'written-off' || b.status === 'reprocessed' || b.is_done === true)
+    // a reprocessed original's kg is counted on its -R batch
+    const splitKg = batches.reduce((s: number, b: any) => s + (b.status === 'reprocessed' ? 0 : (parseFloat(b.kg) || 0)), 0)
     const fullySplit = splitKg >= (parseFloat(order.qty_kg) || 0) - QTY_TOLERANCE_KG
 
     const next = allDone && fullySplit ? 'done' : started ? 'in-process' : 'splitting'

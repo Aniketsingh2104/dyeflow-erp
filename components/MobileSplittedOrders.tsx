@@ -9,7 +9,7 @@ import { isBatchFinished } from '@/lib/batchStatus'
 
 const STATUS: Record<string, [string, string, string]> = {
   pending: ['#FEF3C7', '#92400E', 'Pending'], 'in-process': ['#DBEAFE', '#1E40AF', 'In process'], done: ['#DCFCE7', '#166534', 'Done'],
-  faulty: ['#FEE2E2', '#991B1B', 'Faulty'], repairing: ['#FEF3C7', '#D97706', 'Repairing'], 'written-off': ['var(--bg-secondary)', 'var(--text-tertiary)', 'Written off'], hold: ['#FEE2E2', '#991B1B', 'On hold'],
+  faulty: ['#FEE2E2', '#991B1B', 'Faulty'], repairing: ['#FEF3C7', '#D97706', 'Repairing'], 'written-off': ['var(--bg-secondary)', 'var(--text-tertiary)', 'Written off'], reprocessed: ['#E5E7EB', '#4B5563', '⟳ Reprocessed'], hold: ['#FEE2E2', '#991B1B', 'On hold'],
 }
 
 export default function MobileSplittedOrders({ rows, total, canEdit, onSubProd, onDone, onDelete, onRefresh, toast }: {
@@ -44,7 +44,7 @@ export default function MobileSplittedOrders({ rows, total, canEdit, onSubProd, 
       {list.length === 0 && <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-tertiary)' }}>No batches here.</div>}
       {list.map(r => {
         const isOpen = open === r.id
-        const st = STATUS[r.is_faulty ? 'faulty' : r.status] || ['var(--bg-secondary)', 'var(--text-secondary)', r.status]
+        const st = STATUS[r.status === 'reprocessed' ? 'reprocessed' : r.is_faulty ? 'faulty' : r.status] || ['var(--bg-secondary)', 'var(--text-secondary)', r.status]
         const edge = r.is_faulty ? '#DC2626' : r.status === 'done' ? '#16A34A' : r.status === 'in-process' ? '#3B82F6' : '#CBD5E1'
         return (
           <div key={r.id} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderLeft: `5px solid ${edge}`, borderRadius: 12, marginBottom: 10, overflow: 'hidden' }}>

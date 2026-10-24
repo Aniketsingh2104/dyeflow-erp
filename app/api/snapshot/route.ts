@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     const [oRes, bRes, mRes, sRes, fobRes, faultyRes, pRes, dpRes] = await Promise.all([
       dbSelect('orders', { order: 'created_at.desc', or: `(status.neq.done,updated_at.gte.${since90})` },
         'id,order_number,party,article,color,qty_kg,status,supervisor_id,machine_id,process_route,planned_dates,hold_reason,created_at,supervisors(name),machines(name,capacity)'),
-      dbSelect('batches', { order: 'created_at.asc', or: `(status.not.in.(done,written-off),updated_at.gte.${since90})` },
+      dbSelect('batches', { order: 'created_at.asc', or: `(status.not.in.(done,written-off,reprocessed),updated_at.gte.${since90})` },
         'id,batch_id,sub_prod_no,order_id,kg,status,current_process,process_route,fms_enter_at,fms_actual_dates,is_faulty,updated_at,machines(name)'),
       dbSelect('machines', { order: 'name.asc' }, 'id,name,capacity,status,machine_type'),
       dbSelect('supervisors', { order: 'name.asc' }, 'id,name'),

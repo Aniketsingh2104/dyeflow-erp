@@ -236,7 +236,7 @@ ${held.map((o: any) => `  ${o.order_number} | ${o.party} | ${o.article || '-'} |
   // 5) Delay / overdue / stuck detection — batches past their process's default_days
   if (/overdue|delay|late|stuck|behind/.test(q)) {
     const [{ data: batches }, { data: orders }, { data: procs }] = await Promise.all([
-      dbSelect('batches', { status: 'not.in.(done,written-off)', limit: '5000' }, 'id,batch_id,order_id,status,current_process,fms_enter_at'),
+      dbSelect('batches', { status: 'not.in.(done,written-off,reprocessed)', limit: '5000' }, 'id,batch_id,order_id,status,current_process,fms_enter_at'),
       dbSelect('orders', { limit: '1000' }, 'id,order_number,party,supervisors(name)'),
       dbSelect('process_list', {}, 'code,default_days'),
     ])

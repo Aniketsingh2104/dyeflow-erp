@@ -176,6 +176,7 @@ export default function OrdersPage() {
         const batchRes = await fetch('/api/batches', { cache: 'no-store' }).then(r => r.json())
         const batchMap: Record<string, number> = {}
         for (const b of (batchRes.data || [])) {
+          if (b.status === 'reprocessed') continue   // its kg is counted on the -R batch
           batchMap[b.order_id] = (batchMap[b.order_id] || 0) + (parseFloat(b.kg) || 0)
         }
         setAllocations(batchMap)
@@ -399,7 +400,7 @@ export default function OrdersPage() {
       const res = await fetch(`/api/batches?order_id=${o.id}`, { cache: 'no-store' })
       const data = await res.json()
       const existingBatches: any[] = data.data || []
-      const allocatedKg  = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
+      const allocatedKg  = existingBatches.reduce((sum: number, b: any) => sum + (b.status === 'reprocessed' ? 0 : (parseFloat(b.kg) || 0)), 0)
       const totalKg      = parseFloat(o.qty_kg)    || 0
       const totalMtr     = parseFloat(o.qty_mtr)   || 0
       const totalTaka    = parseInt(o.no_of_taka)  || 0
@@ -595,7 +596,7 @@ export default function OrdersPage() {
       const existRes = await fetch(`/api/batches?order_id=${selectedOrder.id}`, { cache: 'no-store' })
       const existData = await existRes.json()
       const existingBatches: any[] = existData.data || []
-      const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (parseFloat(b.kg) || 0), 0)
+      const allocatedKg = existingBatches.reduce((sum: number, b: any) => sum + (b.status === 'reprocessed' ? 0 : (parseFloat(b.kg) || 0)), 0)
       const remainingKg = Math.max(0, (parseFloat(selectedOrder.qty_kg) || 0) - allocatedKg)
       if (totalNewKg > remainingKg + 0.5) {
         if (!confirm(`New batches total ${totalNewKg} Kg but only ${remainingKg.toFixed(1)} Kg remaining. Save anyway?`)) {

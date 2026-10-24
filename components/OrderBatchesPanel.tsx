@@ -19,6 +19,7 @@ const STATUS: Record<string, { label: string; bg: string; fg: string }> = {
   'faulty':      { label: 'Faulty',      bg: '#FEE2E2', fg: '#991B1B' },
   'repair':      { label: 'Repair',      bg: '#FEF3C7', fg: '#92400E' },
   'written-off': { label: 'Written off', bg: '#E5E7EB', fg: '#6B7280' },
+  'reprocessed': { label: '⟳ Reprocessed', bg: '#E5E7EB', fg: '#6B7280' },
 }
 
 export default function OrderBatchesPanel({ sheetId, orderNumber, onClose }: { sheetId: string; orderNumber: string; onClose: () => void }) {
@@ -40,7 +41,7 @@ export default function OrderBatchesPanel({ sheetId, orderNumber, onClose }: { s
 
   const order = data?.order
   const batches = data?.batches || []
-  const splitKg = batches.filter(b => !b.is_faulty && b.status !== 'written-off').reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
+  const splitKg = batches.filter(b => b.status !== 'written-off' && b.status !== 'reprocessed').reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
   const orderKg = parseFloat(order?.qty_kg) || 0
 
   return (
@@ -83,7 +84,7 @@ export default function OrderBatchesPanel({ sheetId, orderNumber, onClose }: { s
                 ))}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 10 }}>
-                {kg(orderKg)} kg split: {batches.filter(b => !b.is_faulty).map(b => kg(b.kg)).join(' + ')}
+                {kg(orderKg)} kg split: {batches.filter(b => b.status !== 'written-off' && b.status !== 'reprocessed').map(b => kg(b.kg)).join(' + ')}
               </div>
 
               {batches.map(b => {
@@ -95,13 +96,14 @@ export default function OrderBatchesPanel({ sheetId, orderNumber, onClose }: { s
                 const curIdx = full.indexOf(cur)
                 const next = curIdx >= 0 ? full[curIdx + 1] : full[0]
                 const curBp = bp.find(p => p.process_code === cur)
-                const st = STATUS[b.is_faulty ? 'faulty' : b.status] || STATUS.pending
+                const st = STATUS[b.status === 'reprocessed' ? 'reprocessed' : b.is_faulty ? 'faulty' : b.status] || STATUS.pending
                 const pct = full.length ? Math.round((full.filter(c => doneCodes.has(c)).length / full.length) * 100) : 0
                 return (
                   <div key={b.id} style={{ border: '1px solid var(--border-light)', borderLeft: `5px solid ${st.fg}`, borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                       <a href={`/batches/${encodeURIComponent(b.batch_id)}`} style={{ fontSize: 15, fontWeight: 800, color: 'var(--accent)', textDecoration: 'none' }} title="Open batch trace">{b.batch_id}</a>
                       {b.sub_prod_no && <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>· {b.sub_prod_no}</span>}
+                      {b.reprocessed_to && <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>→ continues as <strong>{b.reprocessed_to}</strong></span>}
                       <span style={{ marginLeft: 'auto', fontSize: 16, fontWeight: 800 }}>{kg(b.kg)} <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)' }}>kg</span></span>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>

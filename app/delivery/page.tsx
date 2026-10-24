@@ -83,8 +83,9 @@ export default function DeliveryTrackerPage() {
         let from: Row['dispatchFrom'] = dispatch ? 'plan' : ''
         const own = String(o.delivery_date || '').slice(0, 10)
         if (/^\d{4}-\d{2}-\d{2}$/.test(own)) { dispatch = own; from = 'order' }
-        const doneKg  = bs.filter(b => isBatchFinished(b)).reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
-        const splitKg = bs.reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
+        const counted = bs.filter((b: any) => b.status !== 'reprocessed')   // a reprocessed original's kg is on its -R batch
+        const doneKg  = counted.filter(b => isBatchFinished(b)).reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
+        const splitKg = counted.reduce((s, b) => s + (parseFloat(b.kg) || 0), 0)
         out.push({
           id: o.id, orderNumber: o.order_number || '—', party: o.party || '—', article: o.article || '—',
           color: o.color || '—', supervisor: o.supervisors?.name || '—', status: o.status,

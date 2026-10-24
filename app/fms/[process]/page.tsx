@@ -674,6 +674,10 @@ export default function FmsProcessPage() {
                         case 'batch_id':      return (
                           <td key={col.id} style={{ ...s, fontWeight: 700, color: 'var(--accent)' }}>
                             {row.batch_id}
+                            {row.status === 'reprocessed' && row.reprocessed_to && (
+                              <span title={`This batch stopped here; its fabric continues as ${row.reprocessed_to}`}
+                                style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--text-tertiary)' }}>⟳ Reprocessed → {row.reprocessed_to}</span>
+                            )}
                             {(() => {
                               const info = getCollabInfo(row, processCode, allBatches)
                               if (!info.hasCollab) return null
@@ -745,7 +749,8 @@ export default function FmsProcessPage() {
                           const isFaulty = row.bpStatus === 'faulty'
                           const hasFob   = row.hasFob
                           // One action taken (Done / Faulty / FOB) = the other buttons, Delete included, are locked
-                          const anyDone  = isDone || isFaulty || hasFob
+                          // a reprocessed batch is a stopped record: everything locked
+                          const anyDone  = isDone || isFaulty || hasFob || row.status === 'reprocessed'
 
                           const btnBase: React.CSSProperties = {
                             padding: '4px 10px', fontSize: 11, fontWeight: 600,

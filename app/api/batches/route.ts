@@ -7,7 +7,7 @@ import { rpc, rpcFail } from '@/lib/rpc'
 import { loadHolidaySet } from '@/lib/holidays'
 import { scheduleDates, hoursSettingsFrom } from '@/lib/workdays'
 import { batchMachineMap } from '@/lib/machineMap'
-import { isBatchFinished } from '@/lib/batchStatus'
+import { isBatchFinished, countsTowardOrderQty } from '@/lib/batchStatus'
 import { todayIST } from '@/lib/istDate'
 import { cleanSubProd } from '@/lib/subProd'
 import { machineLoading, planAcrossMachines, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
     if (batch_id)   query['batch_id']   = `eq.${batch_id}`
     if (status)     query['status']     = `eq.${status}`
     // active=1 → only batches still to finish (AI context, dashboards)
-    else if (searchParams.get('active') === '1') query['status'] = 'not.in.(done,written-off)'
+    else if (searchParams.get('active') === '1') query['status'] = 'not.in.(done,written-off,reprocessed)'
 
     // fields=light → just what counts / badges need (no nested process rows)
     if (searchParams.get('fields') === 'light') {
@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
     }
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,sub_prod_no,book_no,planning_no,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
+      'id,batch_id,sub_prod_no,book_no,planning_no,reprocessed_to,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,process_machine_map,supervisor_id,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
@@ -134,13 +134,15 @@ async function getSplitContext(order_id: string) {
   }
 
   const { data: existing } = await dbSelect('batches',
-    { order_id: `eq.${order_id}` }, 'id,batch_id,batch_number,kg,mtr,taka')
+    { order_id: `eq.${order_id}` }, 'id,batch_id,batch_number,kg,mtr,taka,status')
   let maxNo = 0
   let allocatedKg = 0, allocatedMtr = 0, allocatedTaka = 0
   for (const b of existing || []) {
-    allocatedKg += parseFloat(b.kg) || 0
-    allocatedMtr += parseFloat(b.mtr) || 0
-    allocatedTaka += parseInt(b.taka) || 0
+    if (countsTowardOrderQty(b)) {   // a reprocessed original's fabric is counted on its -R batch
+      allocatedKg += parseFloat(b.kg) || 0
+      allocatedMtr += parseFloat(b.mtr) || 0
+      allocatedTaka += parseInt(b.taka) || 0
+    }
     if (b.batch_number) maxNo = Math.max(maxNo, Number(b.batch_number) || 0)
     // Only plain "-B<n>" ids count here (repair ids like -B2-R / -B2-R-S1 don't)
     const m = String(b.batch_id || '').match(/-B(\d+)$/)
@@ -631,9 +633,12 @@ async function redateMachine(machine: { id: string; numbering_base_date?: string
   changes: { batch: string; code: string; num: number | null; keep?: boolean }[]) {
   const [holidaySet, bRes, oRes, pRes, fRes] = await Promise.all([
     loadHolidaySet(machine.id),
-    dbSelectAll('batches', { status: 'not.in.(done,written-off)', order: 'created_at.asc' },
+    // every batch with a plan number — finished ones too: their numbers still
+    // take their slot in the day, so later numbers keep their dates (only the
+    // unfinished rows are written back)
+    dbSelectAll('batches', { date_calc_plan: 'not.is.null', order: 'created_at.asc' },
       'id,order_id,machine_id,process_route,process_machine_map,date_calc_plan,status,is_done'),
-    dbSelectAll('orders', { status: 'neq.done' }, 'id,process_route,process_machines'),
+    dbSelectAll('orders', {}, 'id,process_route,process_machines'),
     dbSelect('process_list', { limit: '500' }, 'code,hours_per_batch'),
     dbSelect('settings', { key: 'eq.factory', limit: '1' }, 'value'),
   ])
@@ -642,9 +647,9 @@ async function redateMachine(machine: { id: string; numbering_base_date?: string
   for (const o of (oRes.data || []) as any[]) oMap[o.id] = o
   const changed = new Map<string, { num: number | null; keep?: boolean }>()
   for (const c of changes) changed.set(`${c.batch}|${c.code}`, { num: c.num, keep: c.keep })
-  const rows: { batch: string; code: string; num: number; keep?: boolean }[] = []
+  const rows: { batch: string; code: string; num: number; keep?: boolean; finished?: boolean }[] = []
   for (const b of (bRes.data || []) as any[]) {
-    if (isBatchFinished(b)) continue
+    const finished = isBatchFinished(b)
     const o = oMap[b.order_id] || {}
     const pm = batchMachineMap(b, o)
     const codes = Object.keys(pm).filter(c => pm[c] === machine.id)
@@ -656,14 +661,14 @@ async function redateMachine(machine: { id: string; numbering_base_date?: string
       const num = ch ? ch.num : parseInt(b.date_calc_plan?.byProcess?.[code], 10)
       if (ch) changed.delete(key)
       if (!num || num < 1) continue
-      rows.push({ batch: b.id, code, num, keep: ch ? ch.keep : true })
+      rows.push({ batch: b.id, code, num, keep: ch ? ch.keep : true, finished: finished && !ch })
     }
   }
   // changes for rows this query did not reach (e.g. a batch just moved here) are still numbered
   for (const [key, ch] of changed) { const [batch, code] = key.split('|'); if (ch.num) rows.push({ batch, code, num: ch.num, keep: ch.keep }) }
   const baseYMD = machine.numbering_base_date ? String(machine.numbering_base_date).slice(0, 10) : todayIST()
   const dates = scheduleDates(rows, baseYMD, holidaySet, hs)
-  const out = rows.map(r => ({ ...r, date: dates.get(r.num) || null }))
+  const out = rows.filter(r => !r.finished).map(({ finished: _f, ...r }) => ({ ...r, date: dates.get(r.num) || null }))
   // cleared numbers (num null) must still reach df_plan_set_many so the number is removed
   for (const c of changes) if (!c.num) out.push({ batch: c.batch, code: c.code, num: null as any, date: null, keep: false })
   return out

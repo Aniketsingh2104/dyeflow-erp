@@ -68,7 +68,7 @@ export default function GlobalSearch({ compact = false }: { compact?: boolean } 
       if (mine !== seq.current || !j?.ok) return     // a newer search is on its way
       const statusColors: Record<string, string> = {
         new: '#EF9F27', assigned: '#185FA5', 'in-process': '#185FA5', pending: '#888',
-        done: '#1D9E75', hold: '#A32D2D', splitting: '#3C3489', faulty: '#DC2626', 'written-off': '#6B7280',
+        done: '#1D9E75', hold: '#A32D2D', splitting: '#3C3489', faulty: '#DC2626', 'written-off': '#6B7280', reprocessed: '#6B7280',
       }
       const d = j.data || {}
       const found: SearchResult[] = []

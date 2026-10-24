@@ -175,7 +175,11 @@ export default function BatchTracePage() {
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <StatusBadge status={batch.is_faulty ? 'faulty' : batch.status} />
+                <StatusBadge status={batch.status === 'reprocessed' ? 'reprocessed' : batch.is_faulty ? 'faulty' : batch.status} />
+                {batch.status === 'reprocessed' && batch.reprocessed_to && (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>Stopped here — fabric continues as{' '}
+                    <Link href={`/batches/${encodeURIComponent(batch.reprocessed_to)}`} style={{ fontWeight: 700 }}>{batch.reprocessed_to}</Link></div>
+                )}
                 <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 6 }}>
                   {batch.current_process ? <>Now at <strong>{procs[batch.current_process] || batch.current_process}</strong></> : batch.status === 'done' ? 'All processes finished' : 'Not at any process'}
                 </div>
@@ -297,6 +301,7 @@ const BADGE: Record<string, [string, string, string]> = {
   faulty:       ['#FEE2E2', '#991B1B', 'Faulty'],
   fob:          ['#EDE9FE', '#5B21B6', 'FOB'],
   repairing:    ['#FEF3C7', '#92400E', 'Repairing'],
+  reprocessed:  ['#E5E7EB', '#4B5563', '⟳ Reprocessed'],
   hold:         ['#FEE2E2', '#991B1B', 'Hold'],
 }
 function StatusBadge({ status }: { status: string }) {

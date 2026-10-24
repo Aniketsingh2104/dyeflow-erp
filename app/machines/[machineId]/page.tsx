@@ -319,6 +319,7 @@ export default function MachinePage() {
       for (const b of allBatches) {
         // Skip repairing batches not yet split/full-split, and written-off
         // ones (finished — they must not take a plan number or a day slot)
+        // (a reprocessed original stays, as a done row with its plan number)
         if (b.status === 'repairing' || b.status === 'written-off') continue
         if (repairPendingUUIDs.has(b.id)) continue
 
@@ -365,6 +366,7 @@ export default function MachinePage() {
             rowKey:         `${b.batch_id}-${displayProcess}`,   // unique per process
             batchId:        b.batch_id,
             subProdNo:      b.sub_prod_no || '',
+            reprocessedTo:  b.status === 'reprocessed' ? (b.reprocessed_to || '') : '',
             bookNo:         b.book_no || '',
             planningNo:     b.planning_no || '',
             id:             b.id,
@@ -707,7 +709,7 @@ export default function MachinePage() {
               <tr key={batch.rowKey}>
                 {visibleColumns.map(col => {
                   let v: any = batch[col.key]
-                  if (col.key === 'status') v = batch.procDone ? 'Done' : batch.faulty ? 'Faulty' : batch.current_process ? `${processNames[batch.current_process] || batch.current_process} sheet` : 'Not sent'
+                  if (col.key === 'status') v = batch.reprocessedTo ? `Reprocessed → ${batch.reprocessedTo}` : batch.procDone ? 'Done' : batch.faulty ? 'Faulty' : batch.current_process ? `${processNames[batch.current_process] || batch.current_process} sheet` : 'Not sent'
                   else if (col.key === 'batchId') v = withSubProd(batch.batchId, '')
                   else if (col.key === 'timeStamp' || col.key === 'plannedDate') v = batch[col.key] ? formatDate(batch[col.key]) : ''
                   const wrap = ['typeOfFinish', 'typeOfPacking', 'remarks', 'article', 'party', 'subParty', 'color'].includes(col.key)
@@ -1116,7 +1118,8 @@ export default function MachinePage() {
                           ? <a href={href} title={`Open the ${curName} sheet`} style={{ display: 'inline-block', padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: bg, color: fg, textDecoration: 'none', whiteSpace: 'nowrap' }}>{text}</a>
                           : <span style={{ display: 'inline-block', padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: bg, color: fg, whiteSpace: 'nowrap' }}>{text}</span>
                         return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}>
-                          {batch.procDone ? pill('#DCFCE7', '#166534', '✓ Done')
+                          {batch.reprocessedTo !== undefined && batch.reprocessedTo !== '' ? pill('#E5E7EB', '#4B5563', `⟳ Reprocessed → ${batch.reprocessedTo}`, `/batches/${encodeURIComponent(batch.reprocessedTo)}`)
+                            : batch.procDone ? pill('#DCFCE7', '#166534', '✓ Done')
                             : batch.faulty ? pill('#FEE2E2', '#991B1B', `⚠ Faulty${cur ? ` at ${curName}` : ''}`, cur ? `/fms/${encodeURIComponent(cur)}` : undefined)
                             : batch.status === 'hold' ? pill('#F3F4F6', '#6B7280', '⏸ On hold')
                             : cur ? pill(batch.atThisProcess ? '#DBEAFE' : '#EEF2FF', batch.atThisProcess ? '#1E40AF' : '#3730A3', `● ${curName} sheet`, `/fms/${encodeURIComponent(cur)}`)

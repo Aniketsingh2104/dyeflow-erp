@@ -140,7 +140,7 @@ async function orderBatches(orderNo: string) {
   const order = ords?.[0]
   if (!order) return { order: null, batches: [] }
   const { data: bs } = await dbSelect('batches', { order_id: `eq.${order.id}`, order: 'created_at.asc', limit: '500' },
-    'id,batch_id,sub_prod_no,kg,mtr,taka,status,current_process,last_process,is_done,is_faulty,process_route,planned_date,actual_date,created_at,updated_at,' +
+    'id,batch_id,sub_prod_no,reprocessed_to,kg,mtr,taka,status,current_process,last_process,is_done,is_faulty,process_route,planned_date,actual_date,created_at,updated_at,' +
     'machines(name),batch_processes(process_code,status,sent_at,received_at,done_at)')
   return { order, batches: bs || [] }
 }

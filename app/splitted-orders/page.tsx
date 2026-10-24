@@ -19,6 +19,7 @@ const STATUS_MAP: Record<string, { bg: string; color: string; label: string }> =
   hold:         { bg: 'var(--danger-light)',   color: 'var(--danger)',   label: 'On Hold'    },
   repairing:    { bg: '#FEF3C7',              color: '#D97706',          label: '🔄 Repairing'},
   'written-off':{ bg: 'var(--bg-secondary)',  color: 'var(--text-tertiary)', label: 'Written off' },
+  'reprocessed':{ bg: 'var(--bg-secondary)',  color: 'var(--text-tertiary)', label: '⟳ Reprocessed' },
 }
 
 // [{ code: 'S', names: ['LJET-31'] }, { code: 'D', names: ['LJET-22'] }] in route order
@@ -288,7 +289,12 @@ export default function SplittedOrdersPage() {
           ? <span>{row.taka}</span>
           : <span style={{color:'var(--text-tertiary)'}}>-</span>
       case 'batch_status':
-        return <Badge status={row.status || 'pending'} />
+        return <>
+          <Badge status={row.status || 'pending'} />
+          {row.status === 'reprocessed' && row.reprocessed_to && (
+            <a href={`/batches/${encodeURIComponent(row.reprocessed_to)}`} style={{ display: 'block', fontSize: 10, fontWeight: 600, marginTop: 2, color: 'var(--text-tertiary)' }}>→ {row.reprocessed_to}</a>
+          )}
+        </>
       case 'current_process':
         return row.current_process ? (
           <span style={{fontSize:11,fontWeight:600,padding:'2px 8px',
