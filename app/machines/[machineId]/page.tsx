@@ -84,9 +84,7 @@ const COLUMNS = [
   { key: 'params', label: 'NOZZLE · PUMP · PRESS.', defaultWidth: 150, canHide: true },
   { key: 'plannedDate', label: 'PLANNED DATE', defaultWidth: 120, canHide: true },
   { key: 'planNumber', label: 'NO.', defaultWidth: 80, canHide: false },
-  { key: 'faulty', label: 'FAULTY', defaultWidth: 80, canHide: true },
-  { key: 'status', label: 'STATUS', defaultWidth: 110, canHide: true },
-  { key: 'action', label: 'ACTION', defaultWidth: 150, canHide: false },
+  { key: 'status', label: 'STATUS', defaultWidth: 170, canHide: true },
   { key: 'bookNo', label: 'BOOK NO.', defaultWidth: 120, canHide: true },
   { key: 'planningNo', label: 'PLANNING NO.', defaultWidth: 130, canHide: true }
 ]
@@ -136,6 +134,7 @@ export default function MachinePage() {
   const [collabBatches, setCollabBatches] = useState<any[]>([])
   const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
   const [hoursInfo, setHoursInfo] = useState<HoursSettings>(DEFAULT_HOURS)
+  const [processNames, setProcessNames] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (!permLoading && !canView) return
@@ -289,6 +288,7 @@ export default function MachinePage() {
       // Build process name lookup
       const procMap: Record<string, string> = {}
       for (const p of processes) procMap[p.code] = p.name || p.code
+      setProcessNames(procMap)
 
       // Filter batches that belong to this machine.
       // KEY RULE: if machine handles MULTIPLE processes (e.g. SCQ + Dyeing),
@@ -1058,55 +1058,19 @@ export default function MachinePage() {
                       }
                       
                       if (col.key === 'status') {
-                        return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}>{getStatusBadge(batch.status)}</td>
-                      }
-                      
-                      if (col.key === 'faulty') {
-                        return (
-                          <td key={col.key} style={{ ...tdStyle, textAlign: 'center', width: `${width}px` }}>
-                            <input
-                              type="checkbox"
-                              checked={batch.faulty || false}
-                              disabled={!canEdit}
-                              onChange={() => toggleFaulty(batch.id, batch.orderId, batch.faulty || false)}
-                              style={{
-                                width: '16px',
-                                height: '16px',
-                                cursor: 'pointer',
-                                accentColor: '#EF4444'
-                              }}
-                              title="Mark as Faulty"
-                            />
-                          </td>
-                        )
-                      }
-                      
-                      if (col.key === 'action') {
-                        return (
-                          <td key={col.key} style={{ ...tdStyle, whiteSpace: 'nowrap', width: `${width}px` }}>
-                            {batch.procDone ? (
-                              <span style={{ fontSize: '10px', color: '#48BB78', fontWeight: 600 }}>✓ Done</span>
-                            ) : canEdit && batch.atThisProcess ? (
-                              <button onClick={() => handleDone(batch)} style={{
-                                padding: '4px 10px',
-                                fontSize: '10px',
-                                fontWeight: 600,
-                                border: 'none',
-                                borderRadius: '4px',
-                                background: '#48BB78',
-                                color: 'white',
-                                cursor: 'pointer'
-                              }}>
-                                Done
-                              </button>
-                            ) : (
-                              <span style={{ fontSize: '10px', color: '#A0AEC0' }}
-                                title={batch.current_process ? `Now at ${batch.current_process}` : 'Not sent yet'}>
-                                {batch.current_process ? `at ${batch.current_process}` : 'waiting'}
-                              </span>
-                            )}
-                          </td>
-                        )
+                        // where the batch is right now: the process sheet it sits on (link), done, faulty, or not sent yet
+                        const cur = batch.current_process
+                        const curName = cur ? (processNames[cur] || cur) : ''
+                        const pill = (bg: string, fg: string, text: string, href?: string) => href
+                          ? <a href={href} title={`Open the ${curName} sheet`} style={{ display: 'inline-block', padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: bg, color: fg, textDecoration: 'none', whiteSpace: 'nowrap' }}>{text}</a>
+                          : <span style={{ display: 'inline-block', padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: bg, color: fg, whiteSpace: 'nowrap' }}>{text}</span>
+                        return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}>
+                          {batch.procDone ? pill('#DCFCE7', '#166534', '✓ Done')
+                            : batch.faulty ? pill('#FEE2E2', '#991B1B', `⚠ Faulty${cur ? ` at ${curName}` : ''}`, cur ? `/fms/${encodeURIComponent(cur)}` : undefined)
+                            : batch.status === 'hold' ? pill('#F3F4F6', '#6B7280', '⏸ On hold')
+                            : cur ? pill(batch.atThisProcess ? '#DBEAFE' : '#EEF2FF', batch.atThisProcess ? '#1E40AF' : '#3730A3', `● ${curName} sheet`, `/fms/${encodeURIComponent(cur)}`)
+                            : pill('#FEF3C7', '#92400E', 'Not sent yet', '/first-process-batch')}
+                        </td>
                       }
                       
                       // long texts wrap inside the column, so the column can be dragged narrower
