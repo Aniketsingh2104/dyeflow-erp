@@ -45,6 +45,8 @@ const COLS = [
   { id: 'gsm',             label: 'GSM',               w:  75, on: true  },
   { id: 'color',           label: 'COLOR',             w: 110, on: true  },
   { id: 'lab_no',          label: 'LAB NO.',           w: 110, on: true  },
+  { id: 'mtr',             label: 'BATCH QTY (MTR)',   w: 130, on: true  },
+  { id: 'taka',            label: 'TAKA',              w:  80, on: true  },
   { id: 'lot_no',          label: 'LOT NO.',           w:  95, on: false },
   { id: 'challan_no',      label: 'CHALLAN NO.',       w: 120, on: true  },
   { id: 'type_of_finish',  label: 'FINISH',            w: 120, on: true  },
@@ -56,8 +58,6 @@ const COLS = [
   { id: 'batch_id',        label: 'BATCH ID',          w: 140, on: true  },
   { id: 'sub_prod_no',     label: 'SUB PROD NO.',      w: 120, on: true  },
   { id: 'kg',              label: 'BATCH QTY (KG)',    w: 120, on: true  },
-  { id: 'mtr',             label: 'BATCH QTY (MTR)',   w: 130, on: true  },
-  { id: 'taka',            label: 'TAKA',              w:  80, on: true  },
   { id: 'batch_status',    label: 'BATCH STATUS',      w: 110, on: true  },
   { id: 'current_process', label: 'CURRENT PROCESS',   w: 140, on: true  },
 ]
