@@ -6,6 +6,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { SubProdTag } from '@/components/SubProd'
 import { BatchTextCell } from '@/components/BatchTextCell'
+import MachineNav from '@/components/MachineNav'
 
 const SHADE_BG: Record<string, string> = { light: '#FEF9C3', medium: '#DBEAFE', dark: '#E0E7FF', 'extra dark': '#1F2937' }
 
@@ -43,6 +44,7 @@ export default function MobileMachineSheet({ machine, rows, canEdit, shadeFilter
           </div>
           <button className="small" onClick={onRefresh} style={{ minWidth: 40 }}>⟳</button>
         </div>
+        <div style={{ marginTop: 8 }}><MachineNav currentId={machine.id} /></div>
         {canEdit && counts.unnumbered > 0 && (
           <button className="primary" onClick={onRunNumbering} style={{ width: '100%', marginTop: 10, padding: 12, fontSize: 15, fontWeight: 700, background: '#48BB78', borderColor: '#48BB78' }}>
             # Run Numbering ({counts.unnumbered})

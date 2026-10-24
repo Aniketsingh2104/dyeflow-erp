@@ -2,6 +2,7 @@
 
 import { SubProdCell } from '@/components/SubProd'
 import { BatchTextCell } from '@/components/BatchTextCell'
+import MachineNav from '@/components/MachineNav'
 import { withSubProd } from '@/lib/subProd'
 import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useRef, useState } from 'react'
@@ -712,7 +713,8 @@ export default function MachinePage() {
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <MachineNav currentId={machine.id} />
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '24px', fontWeight: 700, color: '#FC8181' }}>{totalBatches}</div>
               <div style={{ fontSize: '11px', color: '#718096', textTransform: 'uppercase' }}>BATCHES</div>
