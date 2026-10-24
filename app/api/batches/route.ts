@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
     }
 
     const { data, error } = await dbSelect('batches', query,
-      'id,batch_id,sub_prod_no,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
+      'id,batch_id,sub_prod_no,book_no,planning_no,order_id,machine_id,batch_number,kg,mtr,taka,status,current_process,last_process,process_params,' +
       'is_done,is_faulty,planned_date,actual_date,notes,process_route,' +
       'date_calc_plan,dc_generated_once,dc_regenerate,process_machine_map,supervisor_id,' +
       'fms_enter_at,fms_actual_dates,sent_at,' +
@@ -469,6 +469,24 @@ export async function POST(req: NextRequest) {
     // ── Sub Prod No. of one batch (Splitted Orders / Batch page) ────────────
     // Empty clears it. Same number on another batch → 409 duplicate, the page
     // asks "save anyway?" and sends allow_duplicate. Written to the Audit Log.
+    // Book No. / Planning No. typed on the machine sheets (components/BatchTextCell.tsx)
+    if (action === 'set_batch_text') {
+      const { id, field } = payload
+      if (!id || !['book_no', 'planning_no'].includes(field)) return NextResponse.json({ ok: false, error: 'id and field required' }, { status: 400 })
+      const raw = payload.value == null ? '' : String(payload.value).replace(/\s+/g, ' ').trim()
+      if (raw.length > 30) return NextResponse.json({ ok: false, error: `${field === 'book_no' ? 'Book No.' : 'Planning No.'} can be at most 30 characters.` }, { status: 400 })
+      const value = raw || null
+      const { data: rows } = await dbSelect('batches', { id: `eq.${id}`, limit: '1' }, 'id,batch_id,book_no,planning_no')
+      const b = rows?.[0]
+      if (!b) return NextResponse.json({ ok: false, error: 'Batch not found' }, { status: 404 })
+      if ((b[field] || null) === value) return NextResponse.json({ ok: true, data: { id, field, value } })
+      const { error } = await dbUpdate('batches', { id }, { [field]: value, updated_at: new Date().toISOString() })
+      if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
+      await auditLog({ username: _user, action: field, entity_type: 'batch', entity_id: id,
+        old_value: `${b.batch_id}: ${b[field] || '—'}`, new_value: `${b.batch_id}: ${value || '—'}` })
+      return NextResponse.json({ ok: true, data: { id, field, value } })
+    }
+
     if (action === 'set_sub_prod') {
       const { id } = payload
       if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })

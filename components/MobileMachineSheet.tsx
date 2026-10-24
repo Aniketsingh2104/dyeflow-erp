@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { SubProdTag } from '@/components/SubProd'
+import { BatchTextCell } from '@/components/BatchTextCell'
 
 const SHADE_BG: Record<string, string> = { light: '#FEF9C3', medium: '#DBEAFE', dark: '#E0E7FF', 'extra dark': '#1F2937' }
 
@@ -25,7 +26,7 @@ export default function MobileMachineSheet({ machine, rows, canEdit, shadeFilter
   const [open, setOpen] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const s = q.trim().toLowerCase()
-  const shown = s ? rows.filter(r => [r.batchId, r.subProdNo, r.orderNo, r.party, r.color, r.article, r.labNo].some(v => String(v || '').toLowerCase().includes(s))) : rows
+  const shown = s ? rows.filter(r => [r.batchId, r.subProdNo, r.bookNo, r.planningNo, r.orderNo, r.party, r.color, r.article, r.labNo].some(v => String(v || '').toLowerCase().includes(s))) : rows
   const num = (r: any) => (r.planNumber ? `#${r.planNumber}` : '—')
 
   return (
@@ -109,6 +110,8 @@ export default function MobileMachineSheet({ machine, rows, canEdit, shadeFilter
                     ['Supervisor', r.supervisor], ['Sub party', r.subParty]].map(([k, v]) => (
                     <div key={String(k)}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>{k} </span><strong>{String(v ?? '-')}</strong></div>
                   ))}
+                  <div><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Book No. </span><BatchTextCell batchId={r.id} field="book_no" value={r.bookNo} canEdit={canEdit && !r.procDone} width={120} /></div>
+                  <div><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Planning No. </span><BatchTextCell batchId={r.id} field="planning_no" value={r.planningNo} canEdit={canEdit && !r.procDone} width={120} /></div>
                   <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Finish </span>{r.typeOfFinish}</div>
                   {r.remarks && <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Remarks </span>{r.remarks}</div>}
                   <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Route </span>{(r.processRoute || []).join(' → ')}</div>

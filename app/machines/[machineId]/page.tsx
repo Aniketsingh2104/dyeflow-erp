@@ -1,6 +1,7 @@
 'use client'
 
 import { SubProdCell } from '@/components/SubProd'
+import { BatchTextCell } from '@/components/BatchTextCell'
 import { withSubProd } from '@/lib/subProd'
 import { batchMachineMap } from '@/lib/machineMap'
 import { useEffect, useRef, useState } from 'react'
@@ -85,7 +86,9 @@ const COLUMNS = [
   { key: 'planNumber', label: 'NO.', defaultWidth: 80, canHide: false },
   { key: 'faulty', label: 'FAULTY', defaultWidth: 80, canHide: true },
   { key: 'status', label: 'STATUS', defaultWidth: 110, canHide: true },
-  { key: 'action', label: 'ACTION', defaultWidth: 150, canHide: false }
+  { key: 'action', label: 'ACTION', defaultWidth: 150, canHide: false },
+  { key: 'bookNo', label: 'BOOK NO.', defaultWidth: 120, canHide: true },
+  { key: 'planningNo', label: 'PLANNING NO.', defaultWidth: 130, canHide: true }
 ]
 
 
@@ -342,6 +345,8 @@ export default function MachinePage() {
             rowKey:         `${b.batch_id}-${displayProcess}`,   // unique per process
             batchId:        b.batch_id,
             subProdNo:      b.sub_prod_no || '',
+            bookNo:         b.book_no || '',
+            planningNo:     b.planning_no || '',
             id:             b.id,
             kg:             b.kg,
             mtr:            b.mtr,
@@ -1009,6 +1014,13 @@ export default function MachinePage() {
                       
                       if (col.key === 'subProdNo') {
                         return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}><SubProdCell value={batch.subProdNo} /></td>
+                      }
+                      if (col.key === 'bookNo' || col.key === 'planningNo') {
+                        const field = col.key === 'bookNo' ? 'book_no' : 'planning_no'
+                        return <td key={col.key} style={{ ...tdStyle, width: `${width}px` }}>
+                          <BatchTextCell batchId={batch.id} field={field} value={batch[col.key]} canEdit={canEdit && !batch.procDone} width={Math.max(70, width - 16)}
+                            onSaved={v => setBatches(prev => prev.map(r => r.id === batch.id ? { ...r, [col.key]: v || '' } : r))} />
+                        </td>
                       }
                       if (col.key === 'batchId') {
                         return <td key={col.key} style={{ ...tdStyle, fontWeight: 700, color: '#E53E3E', width: `${width}px` }}>{batch.batchId}</td>
