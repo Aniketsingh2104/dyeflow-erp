@@ -175,7 +175,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
       const filterValue = filters[key].toLowerCase().trim()
       if (filterValue) {
         filtered = filtered.filter(item =>
-          String(item[key] || '').toLowerCase().includes(filterValue)
+          String(key === 'timestamp' ? formatDateTime(item[key]) : (item[key] || '')).toLowerCase().includes(filterValue)
         )
       }
     })
@@ -340,7 +340,7 @@ export default function SupervisorDetailPage({ params }: { params: Promise<{ nam
     const baseStyle = { ...cellStyle, width: `${col.width}px`, minWidth: `${col.width}px`, maxWidth: `${col.width}px` }
     switch (col.id) {
       case 'timestamp':
-        return <td key={col.id} style={{ ...baseStyle, fontSize: '11px', color: '#9CA3AF', whiteSpace: 'nowrap' }}>{order.timestamp || '-'}</td>
+        return <td key={col.id} style={{ ...baseStyle, fontSize: '11px', color: '#9CA3AF', whiteSpace: 'nowrap' }} title={order.timestamp || ''}>{formatDateTime(order.timestamp)}</td>
       case 'party': return <td key={col.id} style={baseStyle}>{order.party || '-'}</td>
       case 'subParty': return <td key={col.id} style={baseStyle}>{order.subParty || '-'}</td>
       case 'salesPerson': return <td key={col.id} style={baseStyle}>{order.salesPerson || '-'}</td>
