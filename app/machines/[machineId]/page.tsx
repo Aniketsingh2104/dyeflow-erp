@@ -9,7 +9,7 @@ import { useParams, useRouter } from 'next/navigation'
 import BatchCollaborationModal from '@/components/BatchCollaborationModal'
 import { usePermission, useSupervisorFilter } from '@/lib/permissions'
 import { AccessDenied } from '@/lib/AccessDenied'
-import { buildHolidaySet, plannedDateForNumber, sundayOffFrom } from '@/lib/workdays'
+import { buildHolidaySet, plannedDateForNumber, sundayOffFrom, scheduleDates, hoursSettingsFrom, HoursSettings, DEFAULT_HOURS } from '@/lib/workdays'
 import { todayIST } from '@/lib/istDate'
 import { machinePaths } from '@/lib/pageAccess'
 import { isBatchFinished } from '@/lib/batchStatus'
@@ -132,6 +132,7 @@ export default function MachinePage() {
   const [showCollabModal, setShowCollabModal] = useState(false)
   const [collabBatches, setCollabBatches] = useState<any[]>([])
   const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set())
+  const [hoursInfo, setHoursInfo] = useState<HoursSettings>(DEFAULT_HOURS)
 
   useEffect(() => {
     if (!permLoading && !canView) return
@@ -375,18 +376,23 @@ export default function MachinePage() {
             processName,
             // RULE: no plan number = no date. Date recalculates on every load using latest holidays.
             // If a holiday is added/removed, just refresh the page - all dates update automatically.
-            plannedDate:    (() => {
-              const num = b.date_calc_plan?.byProcess?.[displayProcess]
-              if (!num) return ''
-              const baseDate = foundMachine?.numbering_base_date?.slice(0,10) || todayIST()
-              return getPlannedDateByNumber(num, baseDate, newHolidaySet)
-            })(),
+            plannedDate:    '',   // filled below from scheduleDates (hours per process)
+            displayProcess,
             shadeType,
             shadeMasterType: shadeType,
           })
         }
       }
 
+      // Planned dates: every numbered row on this machine, in number order,
+      // filling each working day by hours (lib/workdays.ts scheduleDates)
+      {
+        const hs = hoursSettingsFrom(factoryRes?.value, processes)
+        setHoursInfo(hs)
+        const baseDate = foundMachine?.numbering_base_date?.slice(0, 10) || todayIST()
+        const dates = scheduleDates(machineBatches.filter(r => r.planNumber > 0).map(r => ({ num: r.planNumber, code: r.displayProcess })), baseDate, newHolidaySet, hs)
+        for (const r of machineBatches) r.plannedDate = r.planNumber > 0 ? (dates.get(r.planNumber) || '') : ''
+      }
       setBatches(machineBatches)
       setRawBatches(allBatches)
     } catch (err) {
@@ -690,8 +696,14 @@ export default function MachinePage() {
                 {machine.name}
               </div>
               <div style={{ fontSize: '12px', color: '#718096' }}>
-                Type: {machine.type || 'N/A'} &nbsp;•&nbsp; Capacity: {machine.capacity} Kg &nbsp;•&nbsp; 
-                Max 3 batches per day
+                Type: {machine.type || 'N/A'} &nbsp;•&nbsp; Capacity: {machine.capacity} Kg &nbsp;•&nbsp;
+                <span title="Hours per batch per process (Process Master) · working hours per day (Factory Settings)">
+                  {hoursInfo.hoursPerDay} h/day · {(() => {
+                    const codes = [...new Set(batches.map(b => b.displayProcess).filter(Boolean))] as string[]
+                    const parts = codes.map(c => `${c} ${hoursInfo.hoursByCode[c] || hoursInfo.defaultBatchHours} h`)
+                    return parts.length ? parts.join(' · ') : `${hoursInfo.defaultBatchHours} h per batch`
+                  })()}
+                </span>
               </div>
             </div>
           </div>
@@ -806,6 +818,17 @@ export default function MachinePage() {
               disabled={unnumberedBatches === 0}
             >
               🔢 Run Numbering {unnumberedBatches > 0 ? `(${unnumberedBatches})` : ''}
+            </button>}
+            {canEdit && numberedBatches > 0 && <button
+              onClick={async () => {
+                const r = await fetch('/api/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action: 'redate_machine', machine_id: machine.id }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'Network error' }))
+                if (!r.ok) { alert('Dates not recalculated: ' + (r.error || 'Unknown error')); return }
+                await loadData()
+              }}
+              title="Work out the planned date of every numbered row again (after changing Hours per batch or Factory Settings)"
+              style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 600, borderRadius: '4px', border: '1px solid #CBD5E0', background: 'white', color: '#2D3748', cursor: 'pointer' }}>
+              📅 Recalculate dates
             </button>}
             {canEdit && numberedBatches > 0 && (
               <button

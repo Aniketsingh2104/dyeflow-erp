@@ -17,13 +17,16 @@ interface FactorySettings {
   cycleTimeMin: string
   minLoadPct: string
   maxLoadPct: string
+  /** machine sheet day planning (lib/workdays.ts scheduleDates): hours in a working day, hours one batch takes when the process has none set */
+  hoursPerDay: string
+  defaultBatchHours: string
   /** floor sheets re-fetch by themselves every N seconds (0 = off) — components/useAutoRefresh.tsx */
   autoRefreshSec: number
 }
 
 const DEFAULTS: FactorySettings = {
   orderPrefix: 'DYG', factoryName: '', city: '', gstNumber: '', phone: '', sundayHoliday: true,
-  elongationPct: '14', cycleTimeMin: '1.7', minLoadPct: '60', maxLoadPct: '80', autoRefreshSec: 30,
+  elongationPct: '14', cycleTimeMin: '1.7', minLoadPct: '60', maxLoadPct: '80', hoursPerDay: '24', defaultBatchHours: '8', autoRefreshSec: 30,
 }
 
 // Defined OUTSIDE the page component — a component defined inside render is a
@@ -61,7 +64,7 @@ export default function FactorySettingsPage() {
       const data = await res.json()
       if (data.ok && data.value) {
         const s = { ...DEFAULTS, ...data.value }
-        for (const k of ['elongationPct', 'cycleTimeMin', 'minLoadPct', 'maxLoadPct'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
+        for (const k of ['elongationPct', 'cycleTimeMin', 'minLoadPct', 'maxLoadPct', 'hoursPerDay', 'defaultBatchHours'] as const) s[k] = String(s[k] ?? DEFAULTS[k])
         s.autoRefreshSec = Number.isFinite(Number(s.autoRefreshSec)) ? Number(s.autoRefreshSec) : 30
         setForm(s)
       }
@@ -76,8 +79,8 @@ export default function FactorySettingsPage() {
 
   const handleSave = async () => {
     const clean = { ...form }
-    const LABEL = { elongationPct: 'Elongation %', cycleTimeMin: 'Cycle time', minLoadPct: 'Min batch load %', maxLoadPct: 'Max batch load %' }
-    for (const [k, lo, hi] of [['elongationPct', 0, 50], ['cycleTimeMin', 0.5, 10], ['minLoadPct', 10, 100], ['maxLoadPct', 10, 100]] as const) {
+    const LABEL = { elongationPct: 'Elongation %', cycleTimeMin: 'Cycle time', minLoadPct: 'Min batch load %', maxLoadPct: 'Max batch load %', hoursPerDay: 'Working hours per day', defaultBatchHours: 'Default hours per batch' }
+    for (const [k, lo, hi] of [['elongationPct', 0, 50], ['cycleTimeMin', 0.5, 10], ['minLoadPct', 10, 100], ['maxLoadPct', 10, 100], ['hoursPerDay', 1, 24], ['defaultBatchHours', 0.5, 240]] as const) {
       const n = parseFloat(String(clean[k]))
       if (!isFinite(n) || n < lo || n > hi) { alert(`${LABEL[k]} must be between ${lo} and ${hi}.`); return }
     }
@@ -176,6 +179,18 @@ export default function FactorySettingsPage() {
         <Field label="Cycle time (min)" value={form.cycleTimeMin} onChange={v => handleChange('cycleTimeMin', v)} placeholder="1.7" note="Default 1.7" />
         <Field label="Min batch load %" value={form.minLoadPct} onChange={v => handleChange('minLoadPct', v)} placeholder="60" note="Default 60 % of the machine size (Capacity)" />
         <Field label="Max batch load %" value={form.maxLoadPct} onChange={v => handleChange('maxLoadPct', v)} placeholder="80" note="Default 80 % of the machine size (Capacity)" />
+      </div>
+
+      {/* Machine sheet day planning */}
+      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+        borderRadius: 12, padding: '20px 24px', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Machine Sheet — Batches per Day</div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 14 }}>
+          Plan numbers on a machine sheet fill each working day by hours: every process takes its <strong>Hours per batch</strong> from Process Master
+          (blank = the default below). 24 h/day with 8 h per batch = 3 batches a day; a 4 h process fits 6.
+        </div>
+        <Field label="Working hours per day" value={form.hoursPerDay} onChange={v => handleChange('hoursPerDay', v)} placeholder="24" note="Default 24" />
+        <Field label="Default hours per batch" value={form.defaultBatchHours} onChange={v => handleChange('defaultBatchHours', v)} placeholder="8" note="Used for processes with no Hours per batch in Process Master · default 8 (= 3 per day)" />
       </div>
 
       {/* Auto refresh */}

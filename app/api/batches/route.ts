@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog } from '@/lib/supabase'
+import { dbSelect, dbInsert, dbUpdate, dbDelete, sb, auditLog, dbSelectAll } from '@/lib/supabase'
 import { requireAdmin } from '@/lib/auth'
 import { canonicalCode } from '@/lib/processCodes'
 import { guard, pick, canWorkProcess } from '@/lib/access'
 import { rpc, rpcFail } from '@/lib/rpc'
 import { loadHolidaySet } from '@/lib/holidays'
-import { plannedDateForNumber } from '@/lib/workdays'
+import { scheduleDates, hoursSettingsFrom } from '@/lib/workdays'
+import { batchMachineMap } from '@/lib/machineMap'
+import { isBatchFinished } from '@/lib/batchStatus'
 import { todayIST } from '@/lib/istDate'
 import { cleanSubProd } from '@/lib/subProd'
 import { machineLoading, planAcrossMachines, reelSpeedNeeded, cycleNeeded, maxCycleOf, loadingSettingsFrom, nozzleFor, NozzleRow } from '@/lib/loading'
@@ -377,12 +379,24 @@ export async function POST(req: NextRequest) {
       }
       if (!items.length) return NextResponse.json({ ok: true, items: [], plans: {} })
 
-      const holidaySet = await loadHolidaySet(machine.id)
-      const baseYMD = machine.numbering_base_date ? String(machine.numbering_base_date).slice(0, 10) : todayIST()
-      const withDates = items.map(i => ({ ...i, date: i.num ? plannedDateForNumber(i.num, baseYMD, holidaySet) : null }))
+      const withDates = await redateMachine(machine, items)
       const r2 = await rpc<Record<string, any>>('df_plan_set_many', { p_items: withDates })
       if (r2.error) return rpcFail(r2)
       return NextResponse.json({ ok: true, items: withDates, plans: r2.data || {} })
+    }
+
+    // ── Recalculate the planned dates of every numbered row on a machine
+    // (after Hours per batch / Factory Settings changed) ──────────────────
+    if (action === 'redate_machine') {
+      const { machine_id } = payload
+      if (!machine_id) return NextResponse.json({ ok: false, error: 'machine_id required' }, { status: 400 })
+      const { data: mRows } = await dbSelect('machines', { id: `eq.${machine_id}`, limit: '1' }, 'id,name,numbering_base_date')
+      const machine = mRows?.[0]
+      if (!machine) return NextResponse.json({ ok: false, error: 'Machine not found' }, { status: 404 })
+      const withDates = await redateMachine(machine, [])
+      const r2 = await rpc<Record<string, any>>('df_plan_set_many', { p_items: withDates })
+      if (r2.error) return rpcFail(r2)
+      return NextResponse.json({ ok: true, count: withDates.length, plans: r2.data || {} })
     }
 
     // ── Date Calculator "Clear selected": wipe its keys, keep the machine
@@ -586,4 +600,53 @@ export async function POST(req: NextRequest) {
     console.error('[/api/batches POST] Unexpected error:', err)
     return NextResponse.json({ ok: false, error: err.message || 'Server error' }, { status: 500 })
   }
+}
+
+// ── Planned dates for every numbered row on one machine (lib/workdays.ts
+// scheduleDates: hours per process from Process Master, hours per day from
+// Factory Settings). `changes` = numbers being set right now (num null =
+// cleared) — they replace what is stored before the dates are worked out.
+// Returns df_plan_set_many items: the changed rows with their new number +
+// date, and every other numbered row with its (unchanged) number + new date
+// (keep: true → only written if nobody renumbered it in the meantime).
+async function redateMachine(machine: { id: string; numbering_base_date?: string | null },
+  changes: { batch: string; code: string; num: number | null; keep?: boolean }[]) {
+  const [holidaySet, bRes, oRes, pRes, fRes] = await Promise.all([
+    loadHolidaySet(machine.id),
+    dbSelectAll('batches', { status: 'not.in.(done,written-off)', order: 'created_at.asc' },
+      'id,order_id,machine_id,process_route,process_machine_map,date_calc_plan,status,is_done'),
+    dbSelectAll('orders', { status: 'neq.done' }, 'id,process_route,process_machines'),
+    dbSelect('process_list', { limit: '500' }, 'code,hours_per_batch'),
+    dbSelect('settings', { key: 'eq.factory', limit: '1' }, 'value'),
+  ])
+  const hs = hoursSettingsFrom(fRes.data?.[0]?.value, pRes.data || [])
+  const oMap: Record<string, any> = {}
+  for (const o of (oRes.data || []) as any[]) oMap[o.id] = o
+  const changed = new Map<string, { num: number | null; keep?: boolean }>()
+  for (const c of changes) changed.set(`${c.batch}|${c.code}`, { num: c.num, keep: c.keep })
+  const rows: { batch: string; code: string; num: number; keep?: boolean }[] = []
+  for (const b of (bRes.data || []) as any[]) {
+    if (isBatchFinished(b)) continue
+    const o = oMap[b.order_id] || {}
+    const pm = batchMachineMap(b, o)
+    const codes = Object.keys(pm).filter(c => pm[c] === machine.id)
+    if (!codes.length && b.machine_id === machine.id && !Object.keys(pm).length && b.date_calc_plan?.byProcess)
+      codes.push(...Object.keys(b.date_calc_plan.byProcess))
+    for (const code of codes) {
+      const key = `${b.id}|${code}`
+      const ch = changed.get(key)
+      const num = ch ? ch.num : parseInt(b.date_calc_plan?.byProcess?.[code], 10)
+      if (ch) changed.delete(key)
+      if (!num || num < 1) continue
+      rows.push({ batch: b.id, code, num, keep: ch ? ch.keep : true })
+    }
+  }
+  // changes for rows this query did not reach (e.g. a batch just moved here) are still numbered
+  for (const [key, ch] of changed) { const [batch, code] = key.split('|'); if (ch.num) rows.push({ batch, code, num: ch.num, keep: ch.keep }) }
+  const baseYMD = machine.numbering_base_date ? String(machine.numbering_base_date).slice(0, 10) : todayIST()
+  const dates = scheduleDates(rows, baseYMD, holidaySet, hs)
+  const out = rows.map(r => ({ ...r, date: dates.get(r.num) || null }))
+  // cleared numbers (num null) must still reach df_plan_set_many so the number is removed
+  for (const c of changes) if (!c.num) out.push({ batch: c.batch, code: c.code, num: null as any, date: null, keep: false })
+  return out
 }

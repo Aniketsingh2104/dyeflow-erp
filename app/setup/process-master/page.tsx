@@ -8,6 +8,7 @@ interface ProcessDef {
   name: string
   display_order: number
   default_days: number
+  hours_per_batch?: number | null
   allow_faulty: boolean
   allow_fob: boolean
   is_enabled: boolean
@@ -22,7 +23,7 @@ export default function ProcessMasterPage() {
   const [search,      setSearch]      = useState('')
   const [error,       setError]       = useState('')
   const [form, setForm] = useState({
-    code: '', name: '', is_enabled: true, default_days: 1, allow_faulty: true, allow_fob: false,
+    code: '', name: '', is_enabled: true, default_days: 1, hours_per_batch: '' as string | number, allow_faulty: true, allow_fob: false,
   })
 
   const load = useCallback(async () => {
@@ -47,7 +48,7 @@ export default function ProcessMasterPage() {
 
   const openAdd = () => {
     setEditing(null)
-    setForm({ code: '', name: '', is_enabled: true, default_days: 1, allow_faulty: true, allow_fob: false })
+    setForm({ code: '', name: '', is_enabled: true, default_days: 1, hours_per_batch: '', allow_faulty: true, allow_fob: false })
     setError('')
     setShowModal(true)
   }
@@ -56,7 +57,7 @@ export default function ProcessMasterPage() {
     setEditing(p)
     setForm({
       code: p.code, name: p.name, is_enabled: p.is_enabled,
-      default_days: p.default_days, allow_faulty: p.allow_faulty, allow_fob: p.allow_fob,
+      default_days: p.default_days, hours_per_batch: p.hours_per_batch ?? '', allow_faulty: p.allow_faulty, allow_fob: p.allow_fob,
     })
     setError('')
     setShowModal(true)
@@ -74,11 +75,13 @@ export default function ProcessMasterPage() {
     setSaving(true)
     try {
       const maxOrder = processes.reduce((m, p) => Math.max(m, p.display_order), 0)
+      const hours = form.hours_per_batch === '' || form.hours_per_batch == null ? null : parseFloat(String(form.hours_per_batch))
+      if (hours !== null && !(hours > 0 && hours <= 240)) { setError('Hours per batch must be between 0 and 240 (or blank for the default).'); setSaving(false); return }
       const data = editing
         ? await api('update', { id: editing.id, name, is_enabled: form.is_enabled,
-            default_days: form.default_days, allow_faulty: form.allow_faulty, allow_fob: form.allow_fob })
+            default_days: form.default_days, hours_per_batch: hours, allow_faulty: form.allow_faulty, allow_fob: form.allow_fob })
         : await api('create', { code, name, is_enabled: form.is_enabled,
-            default_days: form.default_days, allow_faulty: form.allow_faulty,
+            default_days: form.default_days, hours_per_batch: hours, allow_faulty: form.allow_faulty,
             allow_fob: form.allow_fob, display_order: maxOrder + 1 })
       if (!data.ok) throw new Error(data.error)
       setShowModal(false)
@@ -173,22 +176,22 @@ export default function ProcessMasterPage() {
       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900 }}>
           <colgroup>
-            <col style={{ width: 60 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 80 }} /><col style={{ width: 130 }} />
+            <col style={{ width: 60 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 80 }} /><col style={{ width: 120 }} /><col style={{ width: 130 }} />
             <col style={{ width: 100 }} /><col style={{ width: 100 }} /><col style={{ width: 100 }} /><col style={{ width: 160 }} />
           </colgroup>
           <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' }}>
             <tr>
-              {['#', 'Code', 'Name', 'Days', 'Status', 'Faulty', 'FOB', 'Move', 'Actions'].map(h => (
-                <th key={h} style={{ padding: '12px 16px', textAlign: ['#', 'Days', 'Faulty', 'FOB'].includes(h) ? 'center' : 'left', fontSize: 12, fontWeight: 700,
+              {['#', 'Code', 'Name', 'Days', 'Hours / batch', 'Status', 'Faulty', 'FOB', 'Move', 'Actions'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: ['#', 'Days', 'Hours / batch', 'Faulty', 'FOB'].includes(h) ? 'center' : 'left', fontSize: 12, fontWeight: 700,
                   color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid var(--border-light)', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 14 }}>
                 {processes.length === 0 ? 'No processes yet. Click "+ Add Process".' : 'No results.'}
               </td></tr>
             ) : (
@@ -201,6 +204,7 @@ export default function ProcessMasterPage() {
                   </td>
                   <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 15 }}>{p.name}</td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center' }}>{p.default_days} d</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, textAlign: 'center', fontWeight: 700, color: p.hours_per_batch ? 'var(--text-primary)' : 'var(--text-tertiary)' }} title={p.hours_per_batch ? '' : 'Blank = default from Factory Settings'}>{p.hours_per_batch ? `${p.hours_per_batch} h` : 'default'}</td>
                   <td style={{ padding: '12px 16px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', margin: 0 }}>
                       <input type="checkbox" checked={p.is_enabled} onChange={() => toggleEnabled(p)} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#059669' }} />
@@ -265,6 +269,13 @@ export default function ProcessMasterPage() {
                 <input type="number" min={1} value={form.default_days}
                   onChange={e => setForm({ ...form, default_days: Math.max(1, parseInt(e.target.value) || 1) })}
                   placeholder="1" />
+              </div>
+              <div className="form-group">
+                <label>Hours per batch (machine sheet)</label>
+                <input type="number" min={0} step={0.5} value={form.hours_per_batch as any}
+                  onChange={e => setForm({ ...form, hours_per_batch: e.target.value })}
+                  placeholder="blank = default" />
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>How long one batch of this process holds a machine — sets how many fit in a day (Factory Settings → working hours per day).</div>
               </div>
             </div>
             <div style={{ marginBottom: 14 }}>

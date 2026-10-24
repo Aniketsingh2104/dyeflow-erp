@@ -74,6 +74,7 @@ export const POLICY: Record<string, Record<string, Rule>> = {
     rollback: { edit: FMS_PAGES },
     send_first: { edit: ['/first-process-batch'] },
     plan_numbers: { edit: ['/machines'] },
+    redate_machine: { edit: ['/machines'] },
     clear_dc_plan: { edit: PLAN_PAGES },
     reset_process: 'admin',
     delete_batch: 'admin',

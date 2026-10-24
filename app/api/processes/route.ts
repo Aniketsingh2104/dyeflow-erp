@@ -6,7 +6,7 @@ import { requireAdmin } from '@/lib/auth'
 export async function GET(req: NextRequest) {
   { const g = await guard(req, 'processes', 'GET'); if (g.deny) return g.deny }
   const { data, error } = await dbSelect('process_list', { order: 'display_order.asc,name.asc' },
-    'id,code,name,display_order,default_days,allow_faulty,allow_fob,is_enabled,created_at')
+    'id,code,name,display_order,default_days,hours_per_batch,allow_faulty,allow_fob,is_enabled,created_at')
   if (error) return NextResponse.json({ ok: false, error }, { status: 500 })
   return NextResponse.json({ ok: true, data })
 }
@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       name:          payload.name,
       display_order: payload.display_order ?? 99,
       default_days:  payload.default_days  ?? 1,
+      hours_per_batch: payload.hours_per_batch ?? null,
       allow_faulty:  payload.allow_faulty  ?? true,
       allow_fob:     payload.allow_fob     ?? false,
       is_enabled:    payload.is_enabled    ?? true,

@@ -41,9 +41,10 @@ export function addWorkingDays(ymd: string, n: number, holidaySet: Set<string>):
 }
 
 /**
- * Machine-sheet planned date of a plan number: 3 numbers per working day,
+ * Simple planned date of a plan number: `perDay` numbers per working day,
  * starting the working day after the machine's numbering base date
- * (#1–3 → day 1, #4–6 → day 2 …).
+ * (#1–3 → day 1, #4–6 → day 2 …). Kept as a fallback; machine sheets now
+ * use scheduleDates() below (hours per process).
  */
 export function plannedDateForNumber(planNumber: number, baseYMD: string, holidaySet: Set<string>, perDay = 3): string {
   if (!planNumber || planNumber < 1 || !baseYMD) return ''
@@ -54,3 +55,42 @@ export function plannedDateForNumber(planNumber: number, baseYMD: string, holida
 export const sundayOffFrom = (factorySettings: any) => factorySettings?.sundayHoliday !== false
 
 export { isSundayYMD }
+
+// ── Hours-based day planning ───────────────────────────────────────────────
+// Machine sheet plan numbers fill each working day by HOURS: every process
+// takes Process Master → Hours per batch (blank = Factory Settings default),
+// rows run one after another in number order, and a row's planned date is the
+// working day on which it starts (base date + day + 1). With 24 h/day and
+// 8 h per batch this is the old "3 per day"; D 8 h + S 4 h → #1 D, #2 D,
+// #3 S, #4 S on day 1, #5 D on day 2.
+export interface HoursSettings { hoursPerDay: number; defaultBatchHours: number; hoursByCode: Record<string, number> }
+export const DEFAULT_HOURS: HoursSettings = { hoursPerDay: 24, defaultBatchHours: 8, hoursByCode: {} }
+
+export function hoursSettingsFrom(factory: any, processes: { code: string; hours_per_batch?: any }[] | null | undefined): HoursSettings {
+  const num = (v: any, d: number) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : d }
+  const hoursByCode: Record<string, number> = {}
+  for (const p of processes || []) { const h = parseFloat(p.hours_per_batch); if (isFinite(h) && h > 0) hoursByCode[String(p.code)] = h }
+  return { hoursPerDay: num(factory?.hoursPerDay, 24), defaultBatchHours: num(factory?.defaultBatchHours, 8), hoursByCode }
+}
+
+export const hoursForCode = (code: string | null | undefined, hs: HoursSettings) => (code && hs.hoursByCode[code]) || hs.defaultBatchHours
+
+/**
+ * Planned date for every numbered row on one machine.
+ * items: [{ num, code }] (any order, duplicates of a number share its slot) → Map num → YYYY-MM-DD
+ */
+export function scheduleDates(items: { num: number; code: string }[], baseYMD: string, holidaySet: Set<string>, hs: HoursSettings = DEFAULT_HOURS): Map<number, string> {
+  const out = new Map<number, string>()
+  if (!baseYMD) return out
+  const byNum = new Map<number, string>()
+  for (const i of items) if (i.num > 0 && !byNum.has(i.num)) byNum.set(i.num, i.code)
+  const nums = Array.from(byNum.keys()).sort((a, b) => a - b)
+  let cum = 0, day = 0, dayDate = addWorkingDays(baseYMD, 1, holidaySet)
+  for (const n of nums) {
+    const startDay = Math.floor(cum / hs.hoursPerDay + 1e-9)
+    while (day < startDay) { dayDate = addWorkingDays(dayDate, 1, holidaySet); day++ }
+    out.set(n, dayDate)
+    cum += hoursForCode(byNum.get(n), hs)
+  }
+  return out
+}
