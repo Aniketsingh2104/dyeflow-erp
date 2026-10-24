@@ -800,3 +800,18 @@ a.danger {
   /* keyboard-shortcut hints make no sense on a phone */
   kbd, .kbd-hint { display: none !important; }
 }
+
+/* ── Printing a machine sheet (app/machines/[machineId]) ─────────────────── */
+.print-only { display: none; }
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  body { background: #fff !important; }
+  .machine-sheet-page > *:not(.print-only) { display: none !important; }
+  .machine-sheet-page .print-only { display: block !important; }
+  nav, header, .navbar, .mobile-nav, .app-topbar, [data-topbar] { display: none !important; }
+  .print-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+  .print-table th, .print-table td { border: 1px solid #999; padding: 3px 4px; text-align: left; vertical-align: top; word-break: break-word; }
+  .print-table th { background: #eee; font-weight: 700; text-transform: uppercase; font-size: 8px; }
+  .print-table tr { page-break-inside: avoid; }
+  .print-table thead { display: table-header-group; }
+}

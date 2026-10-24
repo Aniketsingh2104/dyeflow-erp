@@ -672,7 +672,37 @@ export default function MachinePage() {
   }
 
   return (
-    <div className="content">
+    <div className="content machine-sheet-page">
+      {/* Print view: only this is printed (app/globals.css @media print) — the rows and columns shown on screen */}
+      <div className="print-only">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>{machine.name} — Machine Sheet</div>
+          <div style={{ fontSize: 10, color: '#555' }}>
+            Capacity {machine.capacity} Kg · {filteredBatches.length} rows · printed {new Date().toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </div>
+        </div>
+        <table className="print-table" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            {(() => { const w = (c: typeof COLUMNS[number]) => columnWidths[COLUMNS.indexOf(c)] || c.defaultWidth
+              const total = visibleColumns.reduce((t, c) => t + w(c), 0)
+              return visibleColumns.map(col => <col key={col.key} style={{ width: `${(w(col) / total * 100).toFixed(2)}%` }} />) })()}
+          </colgroup>
+          <thead><tr>{visibleColumns.map(col => <th key={col.key}>{col.label}</th>)}</tr></thead>
+          <tbody>
+            {filteredBatches.map(batch => (
+              <tr key={batch.rowKey}>
+                {visibleColumns.map(col => {
+                  let v: any = batch[col.key]
+                  if (col.key === 'status') v = batch.procDone ? 'Done' : batch.faulty ? 'Faulty' : batch.current_process ? `${processNames[batch.current_process] || batch.current_process} sheet` : 'Not sent'
+                  else if (col.key === 'batchId') v = withSubProd(batch.batchId, '')
+                  else if (col.key === 'timeStamp' || col.key === 'plannedDate') v = batch[col.key] ? formatDate(batch[col.key]) : ''
+                  return <td key={col.key}>{v == null || v === '' ? '' : String(v)}</td>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {/* Machine Header */}
       <div className="card" style={{ marginBottom: '12px', background: 'linear-gradient(135deg, #FFF5F5 0%, #FED7D7 100%)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px' }}>
@@ -854,6 +884,10 @@ export default function MachinePage() {
                 Clear All
               </button>
             )}
+            <button onClick={() => window.print()} title="Print this sheet (the rows and columns shown now)"
+              style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 600, borderRadius: '4px', border: '1px solid #CBD5E0', background: 'white', color: '#2D3748', cursor: 'pointer' }}>
+              🖨 Print
+            </button>
           </div>
         </div>
         <div style={{ fontSize: '11px', color: '#718096', marginTop: '8px' }}>
