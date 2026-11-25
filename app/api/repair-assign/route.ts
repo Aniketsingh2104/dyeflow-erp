@@ -3,6 +3,14 @@ import { dbSelect, dbSelectIn, sb } from "@/lib/supabase"
 import { canonicalCode } from "@/lib/processCodes"
 import { guard } from "@/lib/access"
 import { ensureTail } from '@/lib/routeTail'
+import { MACHINE_REQUIRED, deriveMachineMap } from '@/lib/machineMap'
+
+// batches.process_machine_map { D: id } → RouteAssignment's { D: [id] }
+const mapToPm = (m: any): Record<string, string[]> => {
+  const out: Record<string, string[]> = {}
+  if (m && typeof m === 'object') for (const [k, v] of Object.entries(m)) if (v) out[k] = [String(v)]
+  return out
+}
 
 export async function GET(req: NextRequest) {
   const g = await guard(req, 'repair-assign', 'GET')
@@ -21,7 +29,7 @@ export async function GET(req: NextRequest) {
     if (!batchIds.length) return NextResponse.json({ ok: true, data: [] })
 
     // Fetch those batches (status = repairing OR pending = assigned but not yet in process)
-    const { data: batches, error: bErr } = await dbSelectIn("batches", 'id', batchIds, "id,batch_id,sub_prod_no,kg,mtr,taka,status,process_route,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
+    const { data: batches, error: bErr } = await dbSelectIn("batches", 'id', batchIds, "id,batch_id,sub_prod_no,kg,mtr,taka,status,process_route,process_machine_map,machine_id,supervisor_id,order_id,machines(id,name),supervisors(id,name)"
     )
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
 
@@ -47,8 +55,16 @@ export async function GET(req: NextRequest) {
     const enriched = waiting.map((b: any) => {
       const order  = orderMap[b.order_id] || {}
       const repair = repairMap[b.id]      || {}
+      // A repair batch starts fresh: the route / machines it carried over from
+      // the original batch don't matter. Only once the supervisor has assigned
+      // them here ('In Repair') are they shown again.
+      const assigned = repair.status === 'In Repair'
       return {
         ...b,
+        process_route:    assigned ? (b.process_route || []) : [],
+        machine_id:       assigned ? b.machine_id : null,
+        machines:         assigned ? b.machines : null,
+        process_machines: assigned ? mapToPm(b.process_machine_map) : {},
         order_number:    order.order_number     || "-",
         party:           order.party            || "-",
         sub_party:       order.sub_party        || "-",
@@ -66,7 +82,7 @@ export async function GET(req: NextRequest) {
         type_of_finish:  order.type_of_finish   || "-",
         type_of_packing: order.type_of_packing  || "-",
         remarks:         order.remarks          || "-",
-        machine_name:    b.machines?.name       || "-",
+        machine_name:    (assigned && b.machines?.name) || "-",
         supervisor_name: b.supervisors?.name || order.supervisors?.name || "-",
         repair_id:       repair.id              || null,
         repair_kg:       repair.repair_kg       || b.kg,
@@ -89,10 +105,16 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const g = await guard(req, 'repair-assign', body.action)
   if (g.deny) return g.deny
-  const { action, batch_id, repair_id, supervisor_id, machine_id, process_route } = body
+  const { action, batch_id, repair_id, supervisor_id, machine_id, process_route, process_machines } = body
   if (action === "assign") {
-    if (!batch_id || !machine_id || !process_route?.length) {
-      return NextResponse.json({ ok: false, error: "batch_id, machine_id, process_route required" }, { status: 400 })
+    if (!batch_id || !process_route?.length) {
+      return NextResponse.json({ ok: false, error: "Pick a process route first." }, { status: 400 })
+    }
+    // a machine is needed only when the new route has a machine process (D, S, Wash …);
+    // a route like F → Packing → Dispatch needs none
+    const machineSteps = (process_route as string[]).map(c => canonicalCode(c)).filter(c => MACHINE_REQUIRED.includes(c))
+    if (machineSteps.length && !machine_id) {
+      return NextResponse.json({ ok: false, error: `Pick a machine for ${[...new Set(machineSteps)].join(', ')}.` }, { status: 400 })
     }
     // Only a batch that is waiting in repair (an open repairing order, batch
     // still 'repairing') can get a new route / machine here
@@ -107,7 +129,13 @@ export async function POST(req: NextRequest) {
     const { data: rows, error: bErr } = await sb<any[]>("/batches", {
       method: "PATCH",
       params: { id: `eq.${batch_id}`, status: "eq.repairing" },
-      body: JSON.stringify({ supervisor_id: supervisor_id || null, machine_id, process_route: route, updated_at: new Date().toISOString() }),
+      // the old route / machine of the original batch are replaced completely
+      body: JSON.stringify({
+        supervisor_id: supervisor_id || null,
+        machine_id: machineSteps.length ? machine_id : null,
+        process_machine_map: deriveMachineMap(route, process_machines || null, machineSteps.length ? machine_id : null),
+        process_route: route, updated_at: new Date().toISOString(),
+      }),
     })
     if (bErr) return NextResponse.json({ ok: false, error: bErr }, { status: 500 })
     if (!Array.isArray(rows) || !rows.length) {

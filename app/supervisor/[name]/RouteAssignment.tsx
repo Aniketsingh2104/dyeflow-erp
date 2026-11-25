@@ -400,6 +400,7 @@ export default function RouteAssignment({ order, onUpdate }: RouteAssignmentProp
             repair_id:     order.repair_id,
             supervisor_id: order.supervisor_id || null,
             machine_id:    primaryMachineId,
+            process_machines: processMachinesById,
             process_route: codes,
           }),
         })

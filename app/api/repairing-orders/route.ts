@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
     const { data: roData } = await dbSelect('repairing_orders', { id: `eq.${id}`, limit: '1' }, 'id,batch_id,process_route')
     const ro = roData?.[0]
     if (!ro) return NextResponse.json({ ok: false, error: 'Repairing order not found' }, { status: 404 })
-    const { data: bData } = await dbSelect('batches', { id: `eq.${ro.batch_id}`, limit: '1' }, 'id,machine_id,process_route')
+    const { data: bData } = await dbSelect('batches', { id: `eq.${ro.batch_id}`, limit: '1' }, 'id,machine_id,process_route,process_machine_map')
     const batch = bData?.[0]
     if (!batch) return NextResponse.json({ ok: false, error: 'Repair batch not found' }, { status: 404 })
 
@@ -136,19 +136,25 @@ export async function POST(req: NextRequest) {
     const route = rawRoute.map((c: string) => canonicalCode(c)).filter(Boolean)
     if (!route.length) return NextResponse.json({ ok: false, error: 'Assign a process route first.' }, { status: 400 })
 
+    // machines picked per process when the route was assigned (Repair Queue)
+    const assignedPm: Record<string, string[]> = {}
+    if (batch.process_machine_map && typeof batch.process_machine_map === 'object')
+      for (const [k, v] of Object.entries(batch.process_machine_map)) if (v) assignedPm[k] = [String(v)]
+    const mapFor = (machine: string | null) =>
+      machine === (batch.machine_id || null) ? deriveMachineMap(route, assignedPm, machine) : deriveMachineMap(route, null, machine)
     const rawParts: any[] = action === 'split' && Array.isArray(payload.parts) && payload.parts.length > 1 ? payload.parts : []
     const num = (v: any) => (v === undefined || v === null || v === '' || isNaN(Number(v)) ? null : Number(v))
     const parts = rawParts.map((p: any) => {
       const machine = p.machine_id || batch.machine_id || null
       return {
         kg: num(p.kg) ?? 0, mtr: num(p.mtr), taka: num(p.taka) === null ? null : Math.round(Number(p.taka)),
-        machine_id: machine, map: deriveMachineMap(route, null, machine),
+        machine_id: machine, map: mapFor(machine),
       }
     })
     if (!parts.length) {
       // full split: keep the repair batch's machine, fresh map for the route
       parts.push({ kg: 0, mtr: null, taka: null, machine_id: batch.machine_id || null,
-                   map: deriveMachineMap(route, null, batch.machine_id || null) })
+                   map: mapFor(batch.machine_id || null) })
     }
 
     const r = await rpc<any>('df_repair_split', { p_repair: id, p_route: route, p_parts: parts })
