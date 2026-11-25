@@ -39,15 +39,22 @@ export async function GET(req: NextRequest) {
     const enriched = (records || []).map((r: any) => {
       const batch = batchMap[r.batch_id] || {}
       const order = orderMap[r.order_id] || {}
+      // While the repair batch is still waiting, its route / machine are the ones
+      // the supervisor assigned in the Repair Queue ('In Repair') — the route and
+      // machine carried over from the original batch don't count ('pending' = none yet).
+      const waiting = batch.status === 'repairing' && (r.status === 'pending' || r.status === 'In Repair')
+      const assigned = waiting && r.status === 'In Repair'
+      const route = waiting ? (assigned ? (batch.process_route || []) : []) : (r.process_route || batch.process_route || [])
       return {
         ...r,
+        process_route:   route,
         batch_id_str:    batch.batch_id          || '-',
         batch_status:    batch.status            || null,   // 'repairing' = still waiting to be split
         sub_prod_no:     batch.sub_prod_no       || null,
         batch_kg:        batch.kg                ?? null,
-        machine_id:      batch.machine_id        || null,
-        batch_route:     batch.process_route     || [],
-        machine:         batch.machines?.name    || '-',
+        machine_id:      (waiting && !assigned) ? null : (batch.machine_id || null),
+        batch_route:     route,
+        machine:         (waiting && !assigned) ? '-' : (batch.machines?.name || '-'),
         order_number:    order.order_number      || '-',
         party:           order.party             || '-',
         sub_party:       order.sub_party         || '-',

@@ -141,8 +141,8 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(rows) || !rows.length) {
       return NextResponse.json({ ok: false, stale: true, error: "This batch is no longer waiting in repair. Refresh the page." }, { status: 409 })
     }
-    await sb("/repairing_orders", { method: "PATCH", params: { id: `eq.${ro.id}`, status: "eq.pending" },
-      body: JSON.stringify({ status: "In Repair" }), headers: { "Prefer": "return=minimal" } })
+    await sb("/repairing_orders", { method: "PATCH", params: { id: `eq.${ro.id}`, status: 'in.(pending,"In Repair")' },
+      body: JSON.stringify({ status: "In Repair", process_route: route }), headers: { "Prefer": "return=minimal" } })
     return NextResponse.json({ ok: true })
   }
   return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 })
