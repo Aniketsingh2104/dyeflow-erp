@@ -200,7 +200,8 @@ export default function FmsProcessPage() {
         const order   = orderMap[b.order_id] || {}
         const sup     = order.supervisors?.name || '-'
         const mach    = b.machines?.name || '-'
-        const route: string[] = order.process_route || []
+        // the batch's own route (a repair batch has its own), else the order's
+        const route: string[] = (b.process_route?.length ? b.process_route : order.process_route) || []
 
         // Planned date from batch_date_plans for THIS process
         const dp = dpMap[b.id] || {}

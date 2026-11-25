@@ -117,6 +117,16 @@ export default function SplittedOrdersPage() {
         b.status !== 'repairing' && !repairPendingUUIDs.has(b.id)
       )
 
+      // Batches of one order stay together (newest order first); inside an order
+      // in batch order — B1, B2, B2 (Reprocessed), B2-R, B2-R-S1 … so a repair
+      // batch always sits right under the batch it came from.
+      const nat = (x: any, y: any) => String(x ?? '').localeCompare(String(y ?? ''), undefined, { numeric: true })
+      splitBatches.sort((a: any, b: any) => {
+        const oa = oMap[a.order_id] || {}, ob = oMap[b.order_id] || {}
+        return nat(ob.created_at, oa.created_at) || nat(ob.order_number, oa.order_number)
+          || nat(a.order_id, b.order_id) || nat(a.batch_id, b.batch_id)
+      })
+
       setRows(splitBatches.map(b => {
         const o = oMap[b.order_id] || {}
         return {
