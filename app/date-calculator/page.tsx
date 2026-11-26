@@ -4,7 +4,7 @@ import { SubProdCell } from '@/components/SubProd'
 import { machineLines, machineText } from '@/lib/machineMap'
 import { canonicalCode } from '@/lib/processCodes'
 import { buildHolidaySet, sundayOffFrom } from '@/lib/workdays'
-import { todayIST } from '@/lib/istDate'
+import { todayIST, ymdIST } from '@/lib/istDate'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchProcessList } from '@/lib/processMap'
 import { isBatchFinished } from '@/lib/batchStatus'
@@ -29,7 +29,16 @@ interface BatchRow {
   dcGeneratedOnce: boolean
   dcRegenerate:    boolean
   pushed:          boolean
+  // where the dates start when there is no machine date (see runEngine)
+  orderDate:   string          // the day the order came in (orders.created_at, India date)
+  repairStart: string          // repair batch: the day it came out of Repairing (Split / Full Split); '' = not a repair batch
 }
+
+// Repair batch delivery rule (Process Days box → settings key 'dateRules'):
+// Dispatch = the day it came out of Repairing + N working days,
+// N = with a machine process in its route / without one
+interface DateRules { repairMachineDays: number; repairNoMachineDays: number }
+const DEFAULT_RULES: DateRules = { repairMachineDays: 5, repairNoMachineDays: 3 }
 
 interface ProcessDuration { code: string; name: string; days: number; capacity?: number }
 
@@ -107,8 +116,9 @@ function runEngine(
   dayMap: Record<string, number>,
   capMap: Record<string, number>,
   holidaySet: Set<string>,
-  todayYMD: string
-): { generated: number; pushed: number; skipped: number; generatedIds: string[] } {
+  todayYMD: string,
+  rules: DateRules = DEFAULT_RULES,
+): { generated: number; pushed: number; skipped: number; generatedIds: string[]; provisional: number } {
   // loadMap: proc → { YYYY-MM-DD → kg } — tracks committed capacity
   const loadMap: Record<string, Record<string, number>> = {}
 
@@ -148,12 +158,10 @@ function runEngine(
 
   // QA is planned only when the batch's route has it (some articles skip QA)
   const TAIL = ['Packing', 'Dispatch', 'FinalDispatch']
-  let generated = 0, pushed = 0, skipped = 0
+  let generated = 0, pushed = 0, skipped = 0, provisional = 0
   const generatedIds: string[] = []
 
   for (const row of rows) {
-    if (row.dcGeneratedOnce && !row.dcRegenerate) { skipped++; continue }
-
     const qty = row.kg || 0
     const workSeq = [...new Set(row.route)]
       .map(c => ALL_PROCS.find(p => p.toLowerCase() === c.toLowerCase()) || c)
@@ -166,7 +174,60 @@ function runEngine(
     for (const c of workSeq) {
       if (row.anchors[c]) anchorsInRoute[c] = row.anchors[c]
     }
-    if (!Object.keys(anchorsInRoute).length) { skipped++; continue }
+
+    // A repair batch numbered on its machine later is re-planned on its own
+    // once its machine date differs from the planned one
+    const repairAnchorMoved = !!row.repairStart && Object.entries(anchorsInRoute)
+      .some(([c, ymd]) => ymd >= row.repairStart && row.dates[c] !== ymd)
+    if (row.dcGeneratedOnce && !row.dcRegenerate && !repairAnchorMoved) { skipped++; continue }
+
+    // ── RULE 3: repair batch — Dispatch = day it came out of Repairing + 5 / 3 working days
+    if (row.repairStart) {
+      planRepair(row, workSeq, anchorsInRoute, dayMap, holidaySet, rules)
+      row.pushed = false
+      row.dcGeneratedOnce = true
+      row.dcRegenerate    = false
+      generated++
+      generatedIds.push(row.batchUUID)
+      continue
+    }
+
+    // ── RULE 2: no machine date — start from the day the order came in.
+    //   Route without a machine process (C/F, F, H/F): these ARE its dates (kept
+    //   even when already past — shown red as overdue, never pushed).
+    //   Route with a machine process but not numbered yet: the same dates as a
+    //   PROVISIONAL plan — not marked generated, so the next Generate after
+    //   machine numbering plans it from the machine date (RULE 1).
+    if (!Object.keys(anchorsInRoute).length) {
+      if (!row.orderDate) { skipped++; continue }
+      const planned: Record<string, string> = {}
+      let fwd = ymdToDate(row.orderDate)!
+      for (let i = 0; i < workSeq.length; i++) {
+        const c = workSeq[i]
+        fwd = addPD(fwd, i === 0 ? (dayMap[c]||1) : (dayMap[workSeq[i-1]]||1), holidaySet, true)
+        planned[c] = fitDate(c, dateToYMD(fwd), qty)
+        fwd = ymdToDate(planned[c]) || fwd
+      }
+      const lower = workSeq.map(x => x.toLowerCase())
+      let endDate = ymdToDate(planned[workSeq[workSeq.length-1]])!
+      for (const c of TAIL) {
+        if (lower.includes(c.toLowerCase())) continue
+        endDate = addPD(endDate, dayMap[c]||1, holidaySet, true)
+        planned[c] = fitDate(c, dateToYMD(endDate), qty)
+        endDate = ymdToDate(planned[c]) || endDate
+      }
+      row.dates = { ...row.dates, ...planned }
+      const isProvisional = workSeq.some(c => ANCHOR_PROCS.includes(c))
+      row.pushed = false
+      row.dcGeneratedOnce = !isProvisional
+      row.dcRegenerate    = false
+      if (isProvisional) provisional++
+      generated++
+      generatedIds.push(row.batchUUID)
+      continue
+    }
+
+    // ── RULE 1: machine date (numbering on the machine sheet) — as before
 
     // STEP 1: Pick anchor = LATEST date among anchors in route
     let anchorProc = '', anchorYMD = ''
@@ -262,7 +323,58 @@ function runEngine(
     generatedIds.push(row.batchUUID)
   }
 
-  return { generated, pushed, skipped, generatedIds }
+  return { generated, pushed, skipped, generatedIds, provisional }
+}
+
+/** full route incl. the tail the engine adds (QA only when in the route) */
+const withTail = (workSeq: string[]) => {
+  const lower = workSeq.map(x => x.toLowerCase())
+  return [...workSeq, ...['Packing', 'Dispatch', 'FinalDispatch'].filter(c => !lower.includes(c.toLowerCase()))]
+}
+
+/** Repair delivery date: the day it came out of Repairing + 5 (machine) / 3 (no machine) working days */
+function repairDue(route: string[], start: string, holidaySet: Set<string>, rules: DateRules): string {
+  const hasMachine = route.some(c => ANCHOR_PROCS.some(a => a.toLowerCase() === String(c).toLowerCase()))
+  const n = Math.max(1, hasMachine ? rules.repairMachineDays : rules.repairNoMachineDays)
+  const d = ymdToDate(start)
+  return d ? dateToYMD(addPD(d, n, holidaySet, true)) : ''
+}
+
+// RULE 3 — repair batch. Dispatch = repairDue; the processes before it are
+// counted BACK from Dispatch with their process days (never before the day it
+// came out of Repairing); Final Dispatch after it. A machine date (numbering)
+// fills in its machine process; if that is later than planned, the dates after
+// it move later too (the batch is then late — shown red).
+function planRepair(row: BatchRow, workSeq: string[], anchors: Record<string, string>,
+                    dayMap: Record<string, number>, holidaySet: Set<string>, rules: DateRules) {
+  const full = withTail(workSeq)
+  const start = row.repairStart
+  const due = repairDue(workSeq, start, holidaySet, rules)
+  const di = full.findIndex(c => c.toLowerCase() === 'dispatch')
+  const planned: Record<string, string> = {}
+  planned[full[di]] = due
+  let back = ymdToDate(due)!
+  for (let i = di - 1; i >= 0; i--) {
+    back = addPD(back, dayMap[full[i]] || 1, holidaySet, false)
+    const ymd = dateToYMD(back)
+    planned[full[i]] = ymd < start ? start : ymd
+  }
+  let fwd = ymdToDate(due)!
+  for (let i = di + 1; i < full.length; i++) {
+    fwd = addPD(fwd, dayMap[full[i-1]] || 1, holidaySet, true)
+    planned[full[i]] = dateToYMD(fwd)
+  }
+  // machine dates (only ones on/after the repair start — older ones belong to the original batch)
+  for (let i = 0; i < full.length; i++) {
+    const a = anchors[full[i]]
+    if (!a || a < start) continue
+    planned[full[i]] = a
+    for (let j = i + 1; j < full.length; j++) {
+      const min = dateToYMD(addPD(ymdToDate(planned[full[j-1]])!, dayMap[full[j-1]] || 1, holidaySet, true))
+      if (planned[full[j]] < min) planned[full[j]] = min
+    }
+  }
+  row.dates = { ...row.dates, ...planned }
 }
 
 // ── Page Component ────────────────────────────────────────────────────────────
@@ -270,6 +382,8 @@ export default function DateCalculatorPage() {
   const [rows,            setRows]            = useState<BatchRow[]>([])
   const [processDurations,setProcessDurations]= useState<ProcessDuration[]>([])
   const [holidays,        setHolidays]        = useState<any[]>([])
+  const [dateRules,       setDateRules]       = useState<DateRules>(DEFAULT_RULES)
+  const [tempRules,       setTempRules]       = useState<DateRules>(DEFAULT_RULES)
   const [sundayOff,       setSundayOff]       = useState(true)
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set())
   const [showPDModal,     setShowPDModal]     = useState(false)
@@ -310,6 +424,20 @@ export default function DateCalculatorPage() {
         fetch('/api/setup/settings?key=factory', { cache:'no-store' }).then(r=>r.json()).catch(()=>({value:null})),
         fetch('/api/machines', { cache:'no-store' }).then(r=>r.json()).catch(()=>({data:[]})),
       ])
+      const rulesRes = await fetch('/api/setup/settings?key=dateRules', { cache:'no-store' }).then(r=>r.json()).catch(()=>({value:null}))
+      const rv = rulesRes?.value || {}
+      setDateRules({
+        repairMachineDays:   Number(rv.repairMachineDays)   > 0 ? Number(rv.repairMachineDays)   : DEFAULT_RULES.repairMachineDays,
+        repairNoMachineDays: Number(rv.repairNoMachineDays) > 0 ? Number(rv.repairNoMachineDays) : DEFAULT_RULES.repairNoMachineDays,
+      })
+      // repair batches: the day each came out of Repairing (its repair order was completed by Split / Full Split)
+      const repairRes = await fetch('/api/repairing-orders', { cache: 'no-store' })
+        .then(r => r.json()).catch(() => ({ data: [] }))
+      const splitAt: Record<string, string> = {}
+      for (const r of (repairRes.data || []) as any[]) {
+        if (r.status !== 'completed' || !r.batch_id || !r.updated_at) continue
+        if (!splitAt[r.batch_id] || r.updated_at > splitAt[r.batch_id]) splitAt[r.batch_id] = r.updated_at
+      }
       setSundayOff(sundayOffFrom(factoryRes?.value))
 
       procList.forEach((p: any) => { _procNameCache[p.code] = p.name })
@@ -330,6 +458,13 @@ export default function DateCalculatorPage() {
 
       const machName: Record<string, string> = {}
       for (const m of (machRes?.data || []) as any[]) machName[m.id] = m.name
+      const idByName: Record<string, string> = {}
+      for (const b of batches) idByName[b.batch_id] = b.id
+      // a split part (B2-R-S1) came out of Repairing with its repair batch (B2-R)
+      const repairStartOf = (b: any): string => {
+        const ts = splitAt[b.id] || splitAt[idByName[String(b.batch_id || '').replace(/-S\d+$/, '')] || '']
+        return ts ? ymdIST(ts) : ''
+      }
       const batchRows: BatchRow[] = []
       for (const b of batches) {
         const o = orderMap[b.order_id] || {}
@@ -375,12 +510,12 @@ export default function DateCalculatorPage() {
           dcGeneratedOnce: dp.dc_generated_once || false,
           dcRegenerate:    dp.dc_regenerate     || false,
           pushed:          dp.pushed            || false,
+          orderDate:       o.created_at ? ymdIST(o.created_at) : '',
+          repairStart:     repairStartOf(b),
         })
       }
 
       // Build set of batch UUIDs in repairing_orders with status='pending' (not yet split)
-      const repairRes = await fetch('/api/repairing-orders', { cache: 'no-store' })
-        .then(r => r.json()).catch(() => ({ data: [] }))
       const repairPendingUUIDs = new Set(
         ((repairRes.data || []) as any[])
           .filter((r: any) => r.status === 'pending')
@@ -474,11 +609,11 @@ export default function DateCalculatorPage() {
       ...r, dates: { ...r.dates }, anchors: { ...r.anchors }
     }))
 
-    const result = runEngine(workRows, dayMap, capMap, holidaySet, todayYMD)
+    const result = runEngine(workRows, dayMap, capMap, holidaySet, todayYMD, dateRules)
     const genSet = new Set(result.generatedIds)
     const toSave = workRows.filter(r => genSet.has(r.batchUUID))
     if (!toSave.length) {
-      alert(`Nothing to generate.\nSkipped: ${result.skipped} (already generated — tick RE-GEN to redo — or no machine anchor date yet)`)
+      alert(`Nothing to generate.\nSkipped: ${result.skipped} (already generated — tick RE-GEN to redo)`)
       return
     }
 
@@ -504,6 +639,7 @@ export default function DateCalculatorPage() {
       setTimeout(() => setSaveStatus('idle'), 3000)
       alert(`✓ Generated and saved: ${result.generated} batch(es)` +
         (result.pushed ? ` (${result.pushed} pushed forward from today)` : '') +
+        (result.provisional ? `\n${result.provisional} provisional (from the order date — machine not numbered yet)` : '') +
         `\nSkipped: ${result.skipped}` +
         (ord.error ? `\n\n⚠ Orders' planned dates not saved: ${ord.error}` : `\nOrders updated: ${ord.updated}`))
     } finally {
@@ -604,7 +740,7 @@ export default function DateCalculatorPage() {
     ALL_PROCS.forEach(c => {
       temp[c] = { days: byCode[c]?.days ?? 1, capacity: byCode[c]?.capacity?.toString() || '' }
     })
-    setTempDurations(temp); setShowPDModal(true)
+    setTempDurations(temp); setTempRules(dateRules); setShowPDModal(true)
   }
 
   const saveProcessDays = async () => {
@@ -619,11 +755,23 @@ export default function DateCalculatorPage() {
     }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
     if (!res.ok) { alert('Process days NOT saved: ' + (res.error || 'Unknown error')); return }
     setProcessDurations(newDurations)
+    const rules: DateRules = {
+      repairMachineDays:   Math.max(1, Math.round(tempRules.repairMachineDays)   || DEFAULT_RULES.repairMachineDays),
+      repairNoMachineDays: Math.max(1, Math.round(tempRules.repairNoMachineDays) || DEFAULT_RULES.repairNoMachineDays),
+    }
+    const rr = await fetch('/api/setup/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ key:'dateRules', value: rules })
+    }).then(r => r.json()).catch(() => ({ ok: false, error: 'Network error' }))
+    if (!rr.ok) { alert('Process days saved, but the repair delivery days were NOT saved: ' + (rr.error || 'Unknown error')); return }
+    setDateRules(rules)
     setShowPDModal(false)
     alert('✓ Process days saved!')
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const holidaySetNow = buildHolidaySet(holidays, sundayOff)
+  const todayNow = todayIST()
   if (loadStatus === 'loading') return (
     <div className="content" style={{ textAlign:'center', padding:80 }}>
       <div style={{ fontSize:32, marginBottom:12 }}>📅</div>
@@ -671,7 +819,7 @@ export default function DateCalculatorPage() {
         </div>
 
         <div style={{ fontSize:11, color:'var(--text-tertiary)', padding:'3px 16px', flexShrink:0, background:'var(--bg-secondary)' }}>
-          Anchor dates (S/D) come from machine sheet · Generate Dates calculates all process dates · Save pushes to orders · Click a row's dates to edit them (dd/mm/yyyy) · Finished batches are hidden
+          Machine batches: from the machine date · No machine (C/F, F, H/F): from the order date · Repair batches: Dispatch = out of Repairing + {dateRules.repairMachineDays} days (machine) / {dateRules.repairNoMachineDays} days (no machine) · Red Dispatch = late · Save pushes to orders · Click a row's dates to edit them (dd/mm/yyyy) · Finished batches are hidden
         </div>
         {saveError && (
           <div style={{ fontSize:12, color:'#991B1B', background:'#FEE2E2', padding:'6px 16px', flexShrink:0, display:'flex', justifyContent:'space-between' }}>
@@ -718,6 +866,16 @@ export default function DateCalculatorPage() {
                     .filter(([,v]) => v)
                     .map(([k,v]) => `${k}:${toDisplay(v)}`)
                     .join(' / ')
+                  const routeHas = (list: string[]) => row.route.some(c => list.some(a => a.toLowerCase() === String(c).toLowerCase()))
+                  const hasAnchor = row.route.some(c => Object.entries(row.anchors).some(([k, v]) => v && k.toLowerCase() === String(c).toLowerCase()))
+                  const ruleDue = row.repairStart ? repairDue(row.route, row.repairStart, holidaySetNow, dateRules) : ''
+                  const basis = row.repairStart
+                    ? { t: `🔁 Repair · ${routeHas(ANCHOR_PROCS) ? dateRules.repairMachineDays : dateRules.repairNoMachineDays}d from ${toDisplay(row.repairStart)}`, c: '#B45309' }
+                    : hasAnchor ? null
+                    : routeHas(ANCHOR_PROCS) ? { t: 'Provisional · order date (not numbered yet)', c: '#6B7280' }
+                    : { t: `Order date ${toDisplay(row.orderDate)}`, c: '#0F766E' }
+                  const dispatch = row.dates['Dispatch'] || ''
+                  const late = !!dispatch && (dispatch < todayNow || (!!ruleDue && dispatch > ruleDue))
 
                   return (
                     <tr key={row.batchId} style={{ borderBottom:'1px solid #E5E7EB', background: row.pushed?'#FFFBEB':'' }}>
@@ -727,7 +885,9 @@ export default function DateCalculatorPage() {
                           style={{ cursor:'pointer' }} />
                       </td>
                       <td style={TD}>{row.color||'-'}</td>
-                      <td style={{ ...TD, fontWeight:700, color:'#2563EB' }}>{row.batchId}</td>
+                      <td style={{ ...TD, fontWeight:700, color:'#2563EB' }}>{row.batchId}
+                        {basis && <div style={{ fontSize:10, fontWeight:600, color: basis.c, marginTop:1 }}>{basis.t}</div>}
+                      </td>
                       <td style={TD}><SubProdCell value={row.subProd} /></td>
                       <td style={{ ...TD, fontWeight:700 }}>{row.kg||'-'}</td>
                       <td style={{ ...TD, color:'#2563EB', fontWeight:600, fontSize:11 }}>{routeDisplay||'-'}</td>
@@ -745,8 +905,10 @@ export default function DateCalculatorPage() {
                         const editing = editingId === row.batchUUID
                         const draft = drafts[`${row.batchUUID}|${pc}`]
                         return (
-                          <td key={pc} style={{ padding:0, borderRight:'1px solid #E5E7EB',
-                            background: draft !== undefined ? '#FEE2E2' : display ? (isAnchorProc?'#DBEAFE':'#F0FDF4') : '' }}
+                          <td key={pc} title={pc === 'Dispatch' && late ? (dispatch < todayNow ? 'Overdue' : `Late — repair rule date ${toDisplay(ruleDue)}`) : undefined}
+                            style={{ padding:0, borderRight:'1px solid #E5E7EB',
+                            color: pc === 'Dispatch' && late ? '#991B1B' : undefined, fontWeight: pc === 'Dispatch' && late ? 700 : undefined,
+                            background: draft !== undefined ? '#FEE2E2' : pc === 'Dispatch' && late ? '#FECACA' : display ? (isAnchorProc?'#DBEAFE':'#F0FDF4') : '' }}
                             onClick={editing || !canEdit ? undefined : () => setEditingId(row.batchUUID)}>
                             {editing ? (
                               <input type="text" value={draft ?? display} placeholder="dd/mm/yyyy"
@@ -764,6 +926,7 @@ export default function DateCalculatorPage() {
                       <td style={{ ...TD, textAlign:'center' }}>
                         {row.pushed ? <span style={{ fontSize:10, background:'#FEF9C3', color:'#854D0E', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>📅 Pushed</span>
                           : row.dcGeneratedOnce ? <span style={{ fontSize:10, background:'#DCFCE7', color:'#166534', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>✓ Done</span>
+                          : Object.values(row.dates).some(Boolean) ? <span style={{ fontSize:10, background:'#F3F4F6', color:'#4B5563', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>Provisional</span>
                           : <span style={{ fontSize:10, background:'#FEE2E2', color:'#991B1B', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>Pending</span>}
                       </td>
                       <td style={{ ...TD, textAlign:'center' }}>
@@ -793,6 +956,20 @@ export default function DateCalculatorPage() {
             <div style={{ padding:'10px 14px', background:'#EFF6FF', borderRadius:8, fontSize:12, color:'#1D4ED8', marginBottom:16 }}>
               💡 <strong>Days</strong> = how long this process takes before the next starts.<br/>
               <strong>Capacity</strong> = max kg/day. Leave blank = no limit.
+            </div>
+            <div style={{ padding:'10px 14px', border:'1px solid #FCD34D', background:'#FFFBEB', borderRadius:8, fontSize:12, marginBottom:16 }}>
+              <div style={{ fontWeight:700, color:'#92400E', marginBottom:6 }}>🔁 Repair batch delivery (after Faulty / FOB)</div>
+              <div style={{ color:'#78350F', marginBottom:8 }}>Dispatch = the day it comes out of Repairing (Split / Full Split) + these working days.</div>
+              <div style={{ display:'flex', gap:18, flexWrap:'wrap' }}>
+                <label style={{ display:'flex', alignItems:'center', gap:6 }}>Route uses a machine
+                  <input type="number" min="1" step="1" value={tempRules.repairMachineDays}
+                    onChange={e => setTempRules(p => ({ ...p, repairMachineDays: parseInt(e.target.value) || 1 }))}
+                    style={{ width:60, padding:'4px 6px', border:'1px solid #D1D5DB', borderRadius:4 }} /> days</label>
+                <label style={{ display:'flex', alignItems:'center', gap:6 }}>No machine
+                  <input type="number" min="1" step="1" value={tempRules.repairNoMachineDays}
+                    onChange={e => setTempRules(p => ({ ...p, repairNoMachineDays: parseInt(e.target.value) || 1 }))}
+                    style={{ width:60, padding:'4px 6px', border:'1px solid #D1D5DB', borderRadius:4 }} /> days</label>
+              </div>
             </div>
             <div style={{ maxHeight:'55vh', overflow:'auto', marginBottom:16 }}>
               <table style={{ width:'100%', borderCollapse:'collapse' }}>

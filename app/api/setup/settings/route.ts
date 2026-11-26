@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   // Settings are admin only, except the process durations the Date
   // Calculator page saves (Edit on /date-calculator) — POLICY in lib/access.ts
-  { const g = await guard(req, 'settings', key === 'processDurations' ? 'processDurations' : 'POST'); if (g.deny) return g.deny }
+  { const g = await guard(req, 'settings', (key === 'processDurations' || key === 'dateRules') ? 'processDurations' : 'POST'); if (g.deny) return g.deny }
 
   const { error } = await dbUpsert('settings', {
     key, value, updated_at: new Date().toISOString(),
