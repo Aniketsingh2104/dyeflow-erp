@@ -52,6 +52,7 @@ export default function MobileSplittedOrders({ rows, total, canEdit, onSubProd, 
               <div onClick={() => setOpen(isOpen ? null : r.id)} style={{ display: 'flex', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.batch_id}</div>
+                  {r.repair_of && <div style={{ fontSize: 11, fontWeight: 600, color: '#B45309' }}>🔁 Repair of {r.repair_of}</div>}
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.order_number} · {r.party}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.article} · <strong>{r.color}</strong></div>
                 </div>

@@ -73,6 +73,11 @@ export default function SplittedOrdersPage() {
   const [showCols,   setShowCols]   = useState(false)
   const [colFilters, setColFilters] = useState<Record<string,string>>({})
   const [resizing,   setResizing]   = useState<{id:string;startX:number;startW:number}|null>(null)
+  // the stopped original of a full reprocess (its fabric lives on as the -R batch) —
+  // hidden here by default so the order's qty isn't shown twice
+  const [showReproc, setShowReproc] = useState(false)
+  useEffect(() => { try { setShowReproc(localStorage.getItem('splitted.showReprocessed') === '1') } catch {} }, [])
+  const toggleReproc = (v: boolean) => { setShowReproc(v); try { localStorage.setItem('splitted.showReprocessed', v ? '1' : '0') } catch {} }
   // Sub Prod No. can be changed by whoever may split (lib/access.ts set_sub_prod)
   const spPerm = usePermission(['/orders', '/supervisor', '/split-order', '/splitted-orders'])
   const isMobile = useIsMobile()
@@ -117,20 +122,40 @@ export default function SplittedOrdersPage() {
         b.status !== 'repairing' && !repairPendingUUIDs.has(b.id)
       )
 
-      // Batches of one order stay together (newest order first); inside an order
-      // in batch order — B1, B2, B2 (Reprocessed), B2-R, B2-R-S1 … so a repair
-      // batch always sits right under the batch it came from.
+      // A repair batch is a NEW batch on this sheet: its timestamp is when it came
+      // out of Repairing (Split / Full Split = the repair order was completed),
+      // and it is sorted by that, newest first — not tucked under its original.
+      const splitAt: Record<string, string> = {}      // batch uuid → time its repair was split
+      for (const r of repairs) {
+        if (r.status !== 'completed' || !r.batch_id || !r.updated_at) continue
+        if (!splitAt[r.batch_id] || r.updated_at > splitAt[r.batch_id]) splitAt[r.batch_id] = r.updated_at
+      }
+      const byName: Record<string, any> = {}
+      for (const b of batches) byName[b.batch_id] = b
+      const originalOf: Record<string, string> = {}   // B2-R → B2 (new-style full reprocess)
+      for (const b of batches) if (b.status === 'reprocessed' && b.reprocessed_to) originalOf[b.reprocessed_to] = b.batch_id
+      // "Repair of B2" — the batch this repair fabric came from
+      const repairOf = (b: any): string | null => {
+        const name = String(b.batch_id || '')
+        const parent = byName[name.replace(/-S\d+$/, '')] || b       // split parts (B2-R-S1) belong to B2-R
+        if (originalOf[parent.batch_id]) return originalOf[parent.batch_id]
+        if (splitAt[parent.id]) {                                     // older -R batches: name without -R
+          const base = String(parent.batch_id).replace(/-R\d*$/, '').replace(/-R+$/, '')
+          return base !== parent.batch_id ? base : null
+        }
+        return null
+      }
+      const tsOf = (b: any) => splitAt[b.id] || b.created_at || ''
       const nat = (x: any, y: any) => String(x ?? '').localeCompare(String(y ?? ''), undefined, { numeric: true })
-      splitBatches.sort((a: any, b: any) => {
-        const oa = oMap[a.order_id] || {}, ob = oMap[b.order_id] || {}
-        return nat(ob.created_at, oa.created_at) || nat(ob.order_number, oa.order_number)
-          || nat(a.order_id, b.order_id) || nat(a.batch_id, b.batch_id)
-      })
+      splitBatches.sort((a: any, b: any) => nat(tsOf(b), tsOf(a)) || nat(a.batch_id, b.batch_id))
 
       setRows(splitBatches.map(b => {
         const o = oMap[b.order_id] || {}
         return {
           ...b,
+          batch_created_at: b.created_at,
+          created_at:      tsOf(b),            // TIMESTAMP column: repair batches = when split out of Repairing
+          repair_of:       repairOf(b),
           order_number:    o.order_number     || '-',
           party:           o.party            || '-',
           sub_party:       o.sub_party        || '-',
@@ -188,15 +213,17 @@ export default function SplittedOrdersPage() {
   }, [resizing])
 
   // ── Column filters ─────────────────────────────────────────────────────────
+  const reprocCount = useMemo(() => rows.filter(r => r.status === 'reprocessed').length, [rows])
+  const baseRows = useMemo(() => showReproc ? rows : rows.filter(r => r.status !== 'reprocessed'), [rows, showReproc])
   const filtered = useMemo(() => {
-    return rows.filter(row =>
+    return baseRows.filter(row =>
       Object.entries(colFilters).every(([key, val]) => {
         if (!val.trim()) return true
         const cellVal = key === 'machine' ? (row.machine_lines || []).map((l: any) => l.code + ' ' + l.names.join(' ')).join(' ').toLowerCase() : String(row[key] ?? '').toLowerCase()
         return cellVal.includes(val.toLowerCase())
       })
     )
-  }, [rows, colFilters])
+  }, [baseRows, colFilters])
 
   // ── Delete batch ───────────────────────────────────────────────────────────
   const handleDelete = async (row: any) => {
@@ -284,7 +311,13 @@ export default function SplittedOrdersPage() {
           </div>
         )) : '-'
       case 'batch_id':
-        return <strong style={{color:'var(--accent)'}}>{row.batch_id}</strong>
+        return <>
+          <strong style={{color:'var(--accent)'}}>{row.batch_id}</strong>
+          {row.repair_of && (
+            <span title={`Repair batch — the fabric of ${row.repair_of}, reprocessed`}
+              style={{display:'block',fontSize:10,fontWeight:600,marginTop:2,color:'#B45309'}}>🔁 Repair of {row.repair_of}</span>
+          )}
+        </>
       case 'sub_prod_no':
         return <SubProdEdit batchId={row.id} value={row.sub_prod_no} canEdit={spPerm.canEdit}
           onSaved={v => { setRows(p => p.map(r => r.id === row.id ? { ...r, sub_prod_no: v } : r)); showToast(`✓ ${row.batch_id}: Sub Prod No. ${v || 'cleared'}`) }} />
@@ -352,7 +385,7 @@ export default function SplittedOrdersPage() {
 
   // ── Phone: card layout (components/MobileSplittedOrders.tsx)
   if (isMobile) {
-    return <MobileSplittedOrders rows={filtered} total={rows.length} canEdit={spPerm.canEdit} toast={toast}
+    return <MobileSplittedOrders rows={filtered} total={baseRows.length} canEdit={spPerm.canEdit} toast={toast}
       onSubProd={(row, v) => { setRows(p => p.map(r => r.id === row.id ? { ...r, sub_prod_no: v } : r)); showToast(`✓ ${row.batch_id}: Sub Prod No. ${v || 'cleared'}`) }}
       onDone={handleDone} onDelete={handleDelete} onRefresh={load} />
   }
@@ -365,7 +398,7 @@ export default function SplittedOrdersPage() {
         <div>
           <span style={{fontSize:15,fontWeight:700}}>Splitted Orders</span>
           <span style={{fontSize:12,color:'var(--text-tertiary)',marginLeft:10}}>
-            {filtered.length}{filtered.length !== rows.length ? ` of ${rows.length}` : ''} batch{rows.length!==1?'es':''}
+            {filtered.length}{filtered.length !== baseRows.length ? ` of ${baseRows.length}` : ''} batch{baseRows.length!==1?'es':''}
           </span>
           {hasFilter && (
             <button onClick={() => setColFilters({})}
@@ -374,7 +407,14 @@ export default function SplittedOrdersPage() {
             </button>
           )}
         </div>
-        <div style={{display:'flex',gap:8}}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          {reprocCount > 0 && (
+            <label title="Batches stopped by a full reprocess — their fabric continues as the -R batch"
+              style={{display:'flex',alignItems:'center',gap:4,fontSize:11,color:'var(--text-secondary)',cursor:'pointer',whiteSpace:'nowrap'}}>
+              <input type="checkbox" checked={showReproc} onChange={e => toggleReproc(e.target.checked)} style={{width:'auto',margin:0}} />
+              Show reprocessed ({reprocCount})
+            </label>
+          )}
           <button className="small" onClick={() => setShowCols(v => !v)}>
             ⚙ Columns ({visible.length}/{cols.length})
           </button>
@@ -462,6 +502,7 @@ export default function SplittedOrdersPage() {
               </tr>
             ) : filtered.map((row,i) => (
               <tr key={row.id||i} style={{
+                opacity: row.status === 'reprocessed' ? 0.55 : 1,
                 background: row.status==='done'||row.is_done ? 'var(--success-light)'
                           : i%2===0 ? 'var(--bg-primary)' : 'var(--bg-secondary)',
                 borderBottom:'1px solid var(--border-light)'}}>
