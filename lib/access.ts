@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbSelect } from '@/lib/supabase'
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/session'
 import { sameCode } from '@/lib/processCodes'
+import { coverFor, mergePages, type CoveringEntry } from '@/lib/leaveCover'
 
 export type Level = 'view' | 'edit' | 'delete'
 
@@ -31,6 +32,9 @@ export interface AccessUser {
   isAdmin: boolean
   isParty: boolean
   pages: Record<string, { view?: boolean; edit?: boolean; delete?: boolean }>
+  /** the user's own pages (pages = own + pages held as cover for someone on leave today) */
+  ownPages: Record<string, { view?: boolean; edit?: boolean; delete?: boolean }>
+  covering: CoveringEntry[]
   allowedSheets: string[]
   sessionVersion: number
 }
@@ -50,6 +54,9 @@ const PLAN_PAGES  = ['/date-calculator', '/machines', '/first-process-batch']
 const ORDER_EDIT  = ['/orders', '/pending-approvals', '/supervisor', '/ai-assistant']
 
 export const POLICY: Record<string, Record<string, Rule>> = {
+  // Leave Requests: every staff login may ask / cancel its own; approving is
+  // checked in the route (admin or Edit on '/leave/approve')
+  leave: { GET: 'staff', POST: 'staff' },
   orders: {
     GET: 'staff',
     create: { edit: ['/orders', '/pending-approvals', '/import'] },
@@ -169,8 +176,15 @@ export async function getAccessUser(req: NextRequest): Promise<{ user: AccessUse
     isAdmin: row.role === 'admin',
     isParty: row.role === 'party',
     pages: perms.pages || {},
+    ownPages: perms.pages || {},
+    covering: [],
     allowedSheets: Array.isArray(perms.allowedSheets) ? perms.allowedSheets.map(String) : [],
     sessionVersion: row.session_version || 0,
+  }
+  // covering for someone on approved leave today → their chosen pages on top (lib/leaveCover.ts)
+  if (!user.isAdmin && !user.isParty) {
+    const cov = await coverFor(user.id)
+    if (cov.covering.length) { user.pages = mergePages(user.ownPages, cov.pages); user.covering = cov.covering }
   }
   return { user, deny: null }
 }

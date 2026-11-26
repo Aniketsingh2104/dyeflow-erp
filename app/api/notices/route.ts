@@ -2,14 +2,16 @@
 // need attention, worked out from the database (the bell used to read an old
 // browser copy that is no longer filled, so it always said "All clear").
 import { NextRequest, NextResponse } from 'next/server'
-import { guard } from '@/lib/access'
+import { guard, hasPage } from '@/lib/access'
+import { LEAVE_APPROVE_PAGE } from '@/lib/leaveCover'
 import { dbSelect, dbSelectAll } from '@/lib/supabase'
 import { todayIST } from '@/lib/istDate'
 
 interface Notice { id: string; type: string; title: string; body: string; link: string; urgent: boolean }
 
 export async function GET(req: NextRequest) {
-  { const g = await guard(req, 'notices', 'GET'); if (g.deny) return g.deny }
+  const g = await guard(req, 'notices', 'GET'); if (g.deny) return g.deny
+  const me = g.user
   const [oRes, bRes, mRes, fRes, rRes] = await Promise.all([
     dbSelectAll<any>('orders', { status: 'neq.done', order: 'created_at.asc' },
       'id,order_number,status,planned_dates,delivery_date,supervisor_id,supervisors(name)'),
@@ -74,6 +76,24 @@ export async function GET(req: NextRequest) {
   const repairs = rRes.data || []
   if (repairs.length) notes.push({ id: 'repair', type: 'repair', urgent: false,
     title: `${repairs.length} Repairing Order${repairs.length > 1 ? 's' : ''} Pending`, body: 'Waiting to be split / assigned', link: '/repairing-order' })
+
+  // ⑦ Leave Requests: covering today · waiting for approval · my request decided (last 2 days)
+  if (me && !me.isParty) {
+    for (const c of me.covering || []) notes.push({ id: `cover-${c.leave_id}`, type: 'leave', urgent: false,
+      title: `You are covering ${c.username} (till ${c.to_date.split('-').reverse().join('/')})`,
+      body: `${c.pages.length} page${c.pages.length === 1 ? '' : 's'} added to your menu for these days`, link: '/leave' })
+    if (me.isAdmin || hasPage({ ...me, pages: me.ownPages }, [LEAVE_APPROVE_PAGE], 'edit')) {
+      const { data: pend } = await dbSelect<any>('leave_requests', { status: 'eq.pending', limit: '100' }, 'id,username')
+      if (pend?.length) notes.push({ id: 'leave-pending', type: 'leave', urgent: false,
+        title: `${pend.length} Leave Request${pend.length > 1 ? 's' : ''} to approve`, body: list(pend.map((r: any) => r.username)), link: '/leave' })
+    }
+    const since = new Date(Date.now() - 2 * 86400_000).toISOString()
+    const { data: mine } = await dbSelect<any>('leave_requests',
+      { user_id: `eq.${me.id}`, status: 'in.(approved,rejected)', decided_at: `gte.${since}`, limit: '5' }, 'id,status,from_date,to_date,cover_username')
+    for (const r of mine || []) notes.push({ id: `leave-${r.id}-${r.status}`, type: 'leave', urgent: r.status === 'rejected',
+      title: `Your leave ${r.from_date.split('-').reverse().join('/')} – ${r.to_date.split('-').reverse().join('/')} was ${r.status}`,
+      body: r.status === 'approved' ? `Cover: ${r.cover_username}` : 'See the note on Leave Requests', link: '/leave' })
+  }
 
   return NextResponse.json({ ok: true, data: notes })
 }

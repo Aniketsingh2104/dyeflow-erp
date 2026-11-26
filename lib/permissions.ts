@@ -39,6 +39,9 @@ export interface DyeflowUser {
   notes?: string
   createdAt?: string
   permissions?: UserPermissions
+  /** own pages while covering for someone on leave (permissions.pages then includes the cover pages) */
+  ownPages?: Record<string, PagePerm> | null
+  covering?: { leave_id: string; username: string; from_date: string; to_date: string; pages: string[] }[]
 }
 
 export const EMPTY_PERM: PagePerm = { view: false, edit: false, delete: false }
@@ -105,6 +108,7 @@ export const STATIC_PAGES: PageDef[] = [
   { path: '/setup/shade-master',          label: 'Shade Master',            group: 'Setup' },
   { path: '/setup/holiday-master',        label: 'Holiday Master',          group: 'Setup' },
   { path: '/mobile',                      label: 'Mobile / Floor View',     group: 'Other' },
+  { path: '/leave/approve',               label: 'Approve Leave Requests',  group: 'Other' },
 ]
 
 export function buildPageList(): PageDef[] {
@@ -212,6 +216,8 @@ export function getActiveUserRecord(): DyeflowUser | null {
       scopeMode:   session.scopeMode || 'all',
       unit:        session.unit || '',
       party:       session.party || '',
+      ownPages:    session.ownPages || null,
+      covering:    Array.isArray(session.covering) ? session.covering : [],
     }
     return user
   } catch { return null }

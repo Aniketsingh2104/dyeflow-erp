@@ -18,7 +18,7 @@ function canViewPath(item: NavItem, userPerms: Record<string, any> | null, admin
   return pageAccess(userPerms, item.aliases?.length ? item.aliases : [item.path], false).view
 }
 
-interface NavItem  { name: string; path: string; adminOnly?: boolean; aliases?: string[]; header?: boolean }
+interface NavItem  { name: string; path: string; adminOnly?: boolean; aliases?: string[]; header?: boolean; open?: boolean }
 interface NavSection { label: string; items: NavItem[] }
 
 export default function Navigation() {
@@ -37,12 +37,19 @@ export default function Navigation() {
   const [userPerms,       setUserPerms]       = useState<Record<string, any> | null>(null)
   const [userIsAdmin,     setUserIsAdmin]     = useState(false)
   const [loggedInUser,    setLoggedInUser]    = useState('')
+  // covering for someone on leave today: own pages + who each extra page is from
+  const [ownPerms,        setOwnPerms]        = useState<Record<string, any> | null>(null)
+  const [covering,        setCovering]        = useState<{ username: string; pages: string[] }[]>([])
+  const [isParty,         setIsParty]         = useState(false)
 
   const loadUserPerms = useCallback(() => {
     const user  = getActiveUserRecord()
     const admin = isAdminUser(user)
     setUserIsAdmin(admin)
     setUserPerms(admin ? null : (user?.permissions?.pages || {}))
+    setOwnPerms(user?.ownPages || null)
+    setCovering(admin ? [] : (user?.covering || []))
+    setIsParty(user?.role === 'party')
     try {
       const s = localStorage.getItem('dyeflow_session')
       if (s) setLoggedInUser(JSON.parse(s)?.username || '')
@@ -163,8 +170,17 @@ export default function Navigation() {
     router.replace('/login')
   }
 
+  // a page the user has only as cover → "· covering A"
+  const coverTag = (item: NavItem): string => {
+    if (!covering.length || !ownPerms || item.header || item.open) return ''
+    const paths = item.aliases?.length ? item.aliases : [item.path]
+    if (pageAccess(ownPerms, paths, false).view) return ''
+    const who = covering.filter(c => pageAccess(Object.fromEntries(c.pages.map(p => [p, { view: true, edit: false, delete: false }])), paths, false).view).map(c => c.username)
+    return who.length ? ` · covering ${who.join(', ')}` : ''
+  }
   const filterItems = (items: NavItem[]): NavItem[] => {
-    const kept = userIsAdmin ? items : items.filter(item => item.header || canViewPath(item, userPerms, userIsAdmin))
+    const kept0 = userIsAdmin ? items : items.filter(item => item.header || (item.open ? !isParty : canViewPath(item, userPerms, userIsAdmin)))
+    const kept = kept0.map(item => { const t = userIsAdmin ? '' : coverTag(item); return t ? { ...item, name: item.name + t } : item })
     // a section heading with nothing under it is dropped
     return kept.filter((item, i) => !item.header || (kept[i + 1] && !kept[i + 1].header))
   }
@@ -185,6 +201,7 @@ export default function Navigation() {
         { name: '🚚 Delivery Tracker', path: '/delivery' },
         { name: 'Import Orders (Excel)', path: '/import' },
         { name: 'Repairing Order', path: '/repairing-order' },
+        { name: '🏖 Leave Requests', path: '/leave', open: true },
       ]
     },
     {

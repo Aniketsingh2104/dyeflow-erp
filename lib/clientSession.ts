@@ -19,6 +19,8 @@ export function saveUiSession(u: any) {
       scopeMode:   u.scope_mode  || 'all',
       unit:        u.unit        || null,
       party:       u.party       || null,
+      ownPages:    u.own_pages   || null,   // set only while covering for someone on leave
+      covering:    u.covering    || [],
       loginAt:     new Date().toISOString(),
     }))
   } catch {}

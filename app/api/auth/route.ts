@@ -11,6 +11,7 @@
  * an old plain-text password still works once and is hashed on that login.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { coverFor, mergePages } from '@/lib/leaveCover'
 import { dbSelect, dbUpdate } from '@/lib/supabase'
 import { hashPassword, isHashed, verifyPassword } from '@/lib/password'
 import {
@@ -53,7 +54,18 @@ export async function GET(req: NextRequest) {
     // inactive, deleted, or signed out / changed since this cookie was issued
     return clearCookie(NextResponse.json({ ok: false, error: 'Please sign in again' }, { status: 401 }), req)
   }
-  return NextResponse.json({ ok: true, user: publicUser(user) })
+  const pub: any = publicUser(user)
+  // covering for someone on leave today → their pages show in the menu too (lib/leaveCover.ts)
+  if (user.role !== 'admin' && user.role !== 'party') {
+    const cov = await coverFor(user.id)
+    if (cov.covering.length) {
+      const own = pub.permissions?.pages || {}
+      pub.permissions = { ...(pub.permissions || {}), pages: mergePages(own, cov.pages) }
+      pub.own_pages = own
+      pub.covering = cov.covering
+    }
+  }
+  return NextResponse.json({ ok: true, user: pub })
 }
 
 export async function POST(req: NextRequest) {
